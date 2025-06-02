@@ -1,10 +1,10 @@
 from datetime import datetime
 import re
 
-from flask import jsonify, hashlib
+from flask import jsonify
 
 from validator import Validator, ValidationError
-from db_utils import insert_document, insert_vector, get_mark, EMBEDDING_MODEL_ID
+from db_utils import insert_document, insert_vector, get_mark, createUniqueKey, EMBEDDING_MODEL_ID
 
 
 MAX_SOURCE_EACH = 300  # Max length for each source text
@@ -20,33 +20,6 @@ def canonicalize_email(email):
     return f"{local}@{domain}"
 
 
-
-
-# Normalize text for identity key
-def normalize(text):
-    if not text:
-        return ""
-    
-    text = text.strip().lower()
-    text = re.sub(r"\s+", " ", text)         # Collapse multiple spaces
-    text = re.sub(r"[^a-z0-9@._\- ]", "", text)  # Remove emojis, weird punctuation
-    return text
-
-
-
-# use a Deterministic Compound ID
-# Create a SHA1 hash
-# different scrapers referencing the same person (even partially) hash to the same ID
-def createUniqueKey( name, email, linkedin_url) :
-
-    normalized_name = normalize( name )
-    normalized_email = normalize( email )
-    
-    identity_key = f"{normalized_name}|{normalized_email}|{linkedin_url}"
-
-    mark_id = hashlib.sha1(identity_key.encode()).hexdigest()
-
-    return mark_id
 
 
 
@@ -153,10 +126,10 @@ def create_mark(request):
     linkedin_url = validator.get("linkedin")
     
     # GET UNIQUE ID
-    mark_id = createUniqueKey( mark_name, mark_email, linkedin_url )
+    unique_id = createUniqueKey( mark_name, mark_email, linkedin_url )
 
     # CHECK FOR EXISTING ENTITY
-    existing_doc = get_mark(mark_id)
+    existing_doc = get_mark(unique_id)
     
     if existing_doc and existing_doc.exists:
         doc = merge_marks(existing_doc, validator.to_dict())
@@ -185,7 +158,7 @@ def create_mark(request):
     #
     # INSERT INTO VECTOR DB
     #
-    embed_result = insert_vector(doc, source_text)
+    embed_result = insert_vector(unique_id, doc, source_text)
 
     # Record the embedding source only if embedded
     if embed_result.get("status") == "embedded":
@@ -194,11 +167,11 @@ def create_mark(request):
     #
     # INSERT INTO SCHEMA DB
     #
-    result = insert_document("entities", mark_id, doc)
+    result = insert_document("entities", unique_id, doc)
 
     return jsonify({
         "success": True,
-        "id": mark_id,
+        "id": unique_id,
         "db_result": result,
         "embedding_status": embed_result
     }), 200
