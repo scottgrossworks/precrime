@@ -1,24 +1,19 @@
 import re
 import hashlib
 
-from google.cloud import firestore        # (for schema DB)
+from google.cloud import firestore
 from google.cloud.aiplatform_v1 import PredictionServiceClient
-from google.cloud.aiplatform_v1beta1.services.match_service import MatchServiceClient
+from google.cloud.aiplatform_v1.services.index_service import IndexServiceClient
 
 
 PROJECT_ID = "the-leedz"
 LOCATION = "us-west2"
 
-# For embedding
 EMBEDDING_MODEL_ID = "gemini-embedding-001"
 EMBEDDING_ENDPOINT = f"projects/{PROJECT_ID}/locations/{LOCATION}/publishers/google/models/{EMBEDDING_MODEL_ID}"
 
-# For Matching Engine
-VECTOR_ENDPOINT_ID = "2119559351189372928"
-
-
-
-
+# This is the Index ID, not Index Endpoint
+VECTOR_INDEX_ID = "336872770564521984"
 
 
 # Normalize text for identity key
@@ -61,18 +56,17 @@ def embed_text(text):
 
 
 def save_embedding(vector_id: str, embedding: list):
-    client = MatchServiceClient()
-
-    index_endpoint = f"projects/{PROJECT_ID}/locations/{LOCATION}/indexEndpoints/{VECTOR_ENDPOINT_ID}"
+    client = IndexServiceClient()
+    index_path = f"projects/{PROJECT_ID}/locations/{LOCATION}/indexes/{VECTOR_INDEX_ID}"
     request = {
-        "index_endpoint": index_endpoint,
-        "deployed_index_id": "default",
-        "datapoints": [{
-            "datapoint_id": vector_id,
-            "feature_vector": embedding
-        }]
+        "index": index_path,
+        "datapoints": [
+            {
+                "datapoint_id": vector_id,
+                "feature_vector": embedding
+            }
+        ]
     }
-
     response = client.upsert_datapoints(request=request)
     return {"status": "upserted", "count": len(response.upserted_datapoint_ids)}
 
