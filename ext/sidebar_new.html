@@ -1,0 +1,101 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>The Leedz</title>
+
+  <link rel="stylesheet" href="css/globals.css" />
+  <link rel="stylesheet" href="css/leedz_layout.css" />
+ 
+  <!-- Load parser scripts first -->
+  <script src="js/parser.js"></script>
+  <script src="js/linkedin_parser.js"></script>
+  
+  <!-- Then load the main sidebar script -->
+  <script src="js/http_utils.js"></script>
+  <script src="js/sidebar.js"></script>
+
+
+</head>
+
+
+<body class="leedz-sidebar">
+
+  <header class="leedz-header">
+  </header>
+
+
+  <div class="buttons-container">
+    <button id="reloadBtn" class="reload-button" title="Reload the parser">
+      <span>
+        <img src="icons/arrows_white.png" class="button-icon" alt="reload parser"/>
+      </span>
+    </button>
+
+    <button id="clearBtn" class="clear-button" title="Clear all fields">
+      <span>✕</span>
+    </button>
+  </div>
+
+
+
+
+
+  <main class="leedz-form-section">
+    
+    <label for="name">Name</label>
+    <input type="text" class="sidebar-input" id="name"/>
+
+
+
+    <label for="email">Email</label> 
+    <div class="input-wrapper">
+      <input type="email" class="sidebar-input" id="email" />
+      
+    </div>
+
+    <!-- FIXME FIXME FIXME
+    update placeholder with names of keys for reference  
+    -->
+
+    <label for="notes">Notes</label>
+    <div class="input-wrapper">
+      <textarea id="notes" class="sidebar-input"></textarea>
+      
+    </div>
+
+
+
+    <!-- BUTTONS -->
+    <div class="button-wrapper">
+
+      <button id="hasRepliedBtn" class="sidebar-button">
+        <img src="icons/check.svg" id="check-icon" alt="✓"/>
+      </button>
+     
+
+      <button id="outreachBtn" class="sidebar-button">
+        <span class="outreach-count">0</span>
+      </button>
+
+
+      <button id="saveBtn" class="sidebar-button"> Save </button>
+    </div>
+
+  </main>
+
+  <footer class="leedz-footer">
+    
+    <div id="debug-output" style="z-index:999;font-family: Arial; font-size: 11px; color: white; padding: 6px; overflow-y: auto; height: 100px;"></div>
+    <!--
+    <ul class="leedz-footer-links">
+      <li><a href="/about">About the Leedz</a></li>
+      <li><a href="/contact">Contact Us</a></li>
+    </ul>
+    -->
+
+  </footer>
+
+</body>
+</html>
