@@ -11,7 +11,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   console.log("[LeedzEx] content.js received message:", message);
   try {
     if (message.action === "toggleSidebar") {
-      console.log("[LeedzEx] toggleSidebar message received");
+
       toggleSidebar();
       sendResponse({ ok: true });
       return true; // keep channel (harmless even if sync)

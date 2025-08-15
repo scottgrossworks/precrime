@@ -123,8 +123,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
 //
 */
 document.addEventListener('DOMContentLoaded', () => {
-  log('DOMContentLoaded fired, initializing LeedzEx sidebar...');
-
+  // log('DOMContentLoaded fired, initializing LeedzEx sidebar...');
 
   initButtons();
 

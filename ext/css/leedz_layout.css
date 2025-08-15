@@ -96,8 +96,10 @@ html, body {
 
 .leedz-form-section textarea {
   resize: vertical;
-  min-height: 240px;
+  height:100%;
 }
+
+
 #notes {
   font-family: inherit; /* Use the same font as parent elements */
   /* OR specify the exact font you want: */
