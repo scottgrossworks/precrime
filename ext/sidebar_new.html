@@ -38,49 +38,73 @@
     </button>
   </div>
 
-
-
-
+  <!-- Tab Navigation -->
+  <div id="tabs">
+    <div id="me_tab" class="tab behind">Me</div>
+    <div id="them_tab" class="tab active">Them</div>
+    <div id="why_tab" class="tab behind">Why</div>
+  </div>
 
   <main class="leedz-form-section">
     
-    <label for="name">Name</label>
-    <input type="text" class="sidebar-input" id="name"/>
+    <!-- Me Tab - About Me Info -->
+    <div id="me_tab_content" class="tab-content">
+      <label for="me_notes">About Me</label>
+      <div class="input-wrapper">
+        <textarea id="me_notes" class="sidebar-input" placeholder="Information about yourself..." spellcheck="false"></textarea>
+      </div>
 
+      <label>Resume Upload</label>
+      <div class="file-upload-wrapper">
+        <button class="file-upload-button">Choose .pdf File</button>
+        <input type="file" class="file-upload-input" id="resume_upload" accept=".pdf">
+      </div>
+      <div id="file-status"></div>
 
-
-    <label for="email">Email</label> 
-    <div class="input-wrapper">
-      <input type="email" class="sidebar-input" id="email" />
-      
+      <div class="button-wrapper">
+        <button id="saveMeBtn" class="sidebar-button"> Save </button>
+      </div>
     </div>
 
-    <!-- FIXME FIXME FIXME
-    update placeholder with names of keys for reference  
-    -->
+    <!-- Them Tab - Contact Ingestion -->
+    <div id="them_tab_content" class="tab-content active">
+      <label for="name">Name</label>
+      <input type="text" class="sidebar-input" id="name"/>
 
-    <label for="notes">Notes</label>
-    <div class="input-wrapper">
-      <textarea id="notes" class="sidebar-input"></textarea>
-      
+      <label for="email">Email</label> 
+      <div class="input-wrapper">
+        <input type="email" class="sidebar-input" id="email" />
+      </div>
+
+      <label for="notes">Notes</label>
+      <div class="input-wrapper">
+        <textarea id="notes" class="sidebar-input" spellcheck="false"></textarea>
+      </div>
+
+      <!-- BUTTONS -->
+      <div class="button-wrapper">
+        <button id="hasRepliedBtn" class="sidebar-button">
+          <img src="icons/check.svg" id="check-icon" alt="✓"/>
+        </button>
+       
+        <button id="outreachBtn" class="sidebar-button">
+          <span class="outreach-count">0</span>
+        </button>
+
+        <button id="saveBtn" class="sidebar-button"> Save </button>
+      </div>
     </div>
 
+    <!-- Why Tab - Trigger Events -->
+    <div id="why_tab_content" class="tab-content">
+      <label for="trigger_notes">Trigger Event</label>
+      <div class="input-wrapper">
+        <textarea id="trigger_notes" class="sidebar-input" placeholder="Capture trigger events from websites, emails, or other sources..." spellcheck="false"></textarea>
+      </div>
 
-
-    <!-- BUTTONS -->
-    <div class="button-wrapper">
-
-      <button id="hasRepliedBtn" class="sidebar-button">
-        <img src="icons/check.svg" id="check-icon" alt="✓"/>
-      </button>
-     
-
-      <button id="outreachBtn" class="sidebar-button">
-        <span class="outreach-count">0</span>
-      </button>
-
-
-      <button id="saveBtn" class="sidebar-button"> Save </button>
+      <div class="button-wrapper">
+        <button id="saveWhyBtn" class="sidebar-button"> Save </button>
+      </div>
     </div>
 
   </main>

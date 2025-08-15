@@ -126,6 +126,7 @@ document.addEventListener('DOMContentLoaded', () => {
   // log('DOMContentLoaded fired, initializing LeedzEx sidebar...');
 
   initButtons();
+  initTabs();
 
   reloadParsers();
 
@@ -532,4 +533,166 @@ function hasReplied() {
       }
   }
   saveData();
+}
+
+// ===== TAB SYSTEM =====
+// Adapted from SGW tab system
+
+// Initialize tab functionality
+function initTabs() {
+  const meTab = document.getElementById('me_tab');
+  const themTab = document.getElementById('them_tab');
+  const whyTab = document.getElementById('why_tab');
+
+  if (meTab) {
+    meTab.addEventListener('click', (event) => {
+      event.stopPropagation();
+      if (bringToFront(meTab)) {
+        showTabContent('me_tab_content');
+      }
+    });
+  }
+
+  if (themTab) {
+    themTab.addEventListener('click', (event) => {
+      event.stopPropagation();
+      if (bringToFront(themTab)) {
+        showTabContent('them_tab_content');
+      }
+    });
+  }
+
+  if (whyTab) {
+    whyTab.addEventListener('click', (event) => {
+      event.stopPropagation();
+      if (bringToFront(whyTab)) {
+        showTabContent('why_tab_content');
+      }
+    });
+  }
+
+  // Initialize file upload functionality
+  initFileUpload();
+  
+  // Initialize additional save buttons
+  initAdditionalButtons();
+
+  // Set initial background color for default active tab (Them)
+  updateFormBackground('them_tab_content');
+}
+
+// Function to bring a tab to the front
+function bringToFront(theTab) {
+  if (theTab.classList.contains('active')) {
+    // already up front
+    return false;
+  }
+
+  // it is behind, bring it to the front
+  theTab.classList.remove('behind');
+  theTab.classList.add('active');
+
+  // push everyone else behind
+  for (let i = 0; i < theTab.parentElement.childElementCount; i++) {
+    let eachTab = theTab.parentElement.children[i];
+    
+    if (eachTab != theTab) {
+      eachTab.classList.remove('active');
+      eachTab.classList.add('behind');
+    }
+  }
+  return true;
+}
+
+// Function to show the corresponding tab content
+function showTabContent(contentId) {
+  // Hide all tab content
+  const allContent = document.querySelectorAll('.tab-content');
+  allContent.forEach(content => {
+    content.classList.remove('active');
+  });
+
+  // Show the selected tab content
+  const selectedContent = document.getElementById(contentId);
+  if (selectedContent) {
+    selectedContent.classList.add('active');
+  }
+
+  // Update form section background color to match active tab
+  updateFormBackground(contentId);
+}
+
+// Function to update form section background color
+function updateFormBackground(contentId) {
+  const formSection = document.querySelector('.leedz-form-section');
+  if (!formSection) return;
+
+  // Remove any existing background classes
+  formSection.classList.remove('me-bg', 'them-bg', 'why-bg');
+
+  // Add appropriate background class based on active tab
+  switch(contentId) {
+    case 'me_tab_content':
+      formSection.style.backgroundColor = 'rgba(255, 127, 80, 0.15)'; // coral
+      break;
+    case 'them_tab_content':
+      formSection.style.backgroundColor = 'rgba(100, 149, 237, 0.15)'; // cornflowerblue
+      break;
+    case 'why_tab_content':
+      formSection.style.backgroundColor = 'rgba(34, 139, 34, 0.15)'; // green
+      break;
+    default:
+      formSection.style.backgroundColor = 'rgba(100, 149, 237, 0.15)'; // default to them
+  }
+}
+
+// Initialize file upload functionality
+function initFileUpload() {
+  const fileInput = document.getElementById('resume_upload');
+  const fileButton = document.querySelector('.file-upload-button');
+  const fileStatus = document.getElementById('file-status');
+
+  if (fileInput && fileButton) {
+    fileInput.addEventListener('change', (event) => {
+      const file = event.target.files[0];
+      if (file) {
+        fileStatus.textContent = `Selected: ${file.name}`;
+        fileStatus.style.color = 'green';
+        log('File selected:', file.name);
+      } else {
+        fileStatus.textContent = '';
+      }
+    });
+
+    fileButton.addEventListener('click', () => {
+      fileInput.click();
+    });
+  }
+}
+
+// Initialize additional save buttons
+function initAdditionalButtons() {
+  // Me tab save button
+  const saveMeBtn = document.getElementById('saveMeBtn');
+  if (saveMeBtn) {
+    saveMeBtn.addEventListener('click', () => {
+      const meNotes = document.getElementById('me_notes').value;
+      const fileInput = document.getElementById('resume_upload');
+      const file = fileInput.files[0];
+      
+      log('Saving Me tab data:', { notes: meNotes, file: file ? file.name : 'none' });
+      // TODO: Implement actual save functionality for Me tab
+    });
+  }
+
+  // Why tab save button
+  const saveWhyBtn = document.getElementById('saveWhyBtn');
+  if (saveWhyBtn) {
+    saveWhyBtn.addEventListener('click', () => {
+      const triggerNotes = document.getElementById('trigger_notes').value;
+      
+      log('Saving Why tab data:', { trigger: triggerNotes });
+      // TODO: Implement actual save functionality for Why tab
+    });
+  }
 }

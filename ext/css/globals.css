@@ -14,6 +14,12 @@
   --FONT_2: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif,
   "Apple Color Emoji", "Segoe UI Emoji", "Segoe UI Symbol";
   --FONT_3: "Lato", -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+
+  /* Font Sizes */
+  --FONT_SIZE_INPUT: 15px;
+  --FONT_SIZE_LABEL: 16px;
+  --FONT_SIZE_TAB: 1.2em;
+  --FONT_SIZE_TAB_ACTIVE: 1.3em;
 }
 
 @font-face { 

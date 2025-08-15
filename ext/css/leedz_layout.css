@@ -66,10 +66,10 @@ html, body {
 .leedz-form-section label {
   display: block;
   margin-top: 20px;
-  font-size: 15px;
-  font-weight: 500;
-  color: darkgreen;
-  font-weight:600;
+  margin-bottom:2px;
+  font-size: var(--FONT_SIZE_LABEL);
+  font-weight: 600;
+  color: black;
 }
 
 
@@ -85,7 +85,7 @@ html, body {
   width: 100%;
   padding: 8px;
   padding-right: 32px; /* Space for the arrows */
-  font-size: 14px;
+  font-size: var(--FONT_SIZE_INPUT);
   margin-top: 2px;
   margin-bottom: 2px;
   border: 1px solid #ccc;
@@ -96,7 +96,6 @@ html, body {
 
 .leedz-form-section textarea {
   resize: vertical;
-  height:100%;
 }
 
 
@@ -104,6 +103,8 @@ html, body {
   font-family: inherit; /* Use the same font as parent elements */
   /* OR specify the exact font you want: */
   /* font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; */
+  min-height:300px;
+  height:45vh !important;
 }
 
 /* You can also target all textareas if you have more: */
@@ -317,12 +318,9 @@ input.invalid {
   gap: 6px;
 }
 
-
 .sidebar-button:active {
   transform: scale(0.8);
 }
-
-
 
 #saveBtn {
     background-color: var(--LEEDZ_DARKGREEN);
@@ -503,4 +501,156 @@ input.invalid {
 .invalid-input {
   border: 2px solid red !important;
   background-color: rgba(255, 0, 0, 0.05) !important;
+}
+
+/* ===== TAB SYSTEM ===== */
+/* Adapted from SGW tab system */
+
+#tabs {
+  display: flex;
+  position: relative;
+  margin: 10px 0px 0px 0px;
+  padding: 0px;
+}
+
+.tab {
+  position: relative;
+  margin: 0px 2px 0px 0px;
+  padding: 4px 10px 6px 10px;
+  border-radius: 5px 5px 0px 0px;
+  min-width: 60px;
+  height: 20px;
+  font-family: inherit;
+  font-size: var(--FONT_SIZE_TAB);
+  font-weight: 500;
+  color: white;
+  cursor: pointer;
+  transition: all 0.1s ease;
+  text-align: center;
+  user-select: none;
+}
+
+.tab:hover {
+  color:white;
+}
+
+div.tab.behind {
+  color: #AAA;
+  transform: translate(0px, 2px);
+  border-bottom: 2px solid #e0e0e0;
+}
+
+div.tab.active {
+  color: black;
+  transform: translateY(2px);
+  box-shadow: 0 -2px 4px rgba(0,0,0,0.2);
+  font-weight: 600;
+  font-size: var(--FONT_SIZE_TAB_ACTIVE);
+  border-bottom: none; /* Remove any bottom border */
+  margin-bottom: 0; /* Ensure no bottom margin */
+}
+
+/* Specific tab colors */
+#me_tab.active {
+  color:black;
+  background-color: rgba(255, 127, 80, 0.3); /* coral with 0.35 opacity */
+}
+
+#them_tab.active {
+  color:black;
+  background-color: rgba(100, 149, 237, 0.3); /* cornflowerblue with 0.35 opacity */
+}
+
+#why_tab.active {
+  color:black;
+  background-color: rgba(34, 139, 34, 0.3); /* LEEDZ_GREEN with 0.35 opacity */
+}
+
+/* Form section background colors to match active tabs */
+.leedz-form-section {
+  padding-top:25px;
+  transition: background-color 0.1s ease;
+}
+
+/* Default background when Them tab is active */
+.leedz-form-section {
+  background-color: cornflowerblue;
+}
+
+/* Me tab active - coral background */
+#me_tab.active ~ main.leedz-form-section,
+body:has(#me_tab.active) .leedz-form-section {
+  background-color: coral;
+}
+
+/* Them tab active - cornflowerblue background */
+#them_tab.active ~ main.leedz-form-section,
+body:has(#them_tab.active) .leedz-form-section {
+  background-color: cornflowerblue;
+}
+
+/* Why tab active - green background */
+#why_tab.active ~ main.leedz-form-section,
+body:has(#why_tab.active) .leedz-form-section {
+  background-color: var(--LEEDZ_GREEN);
+}
+
+/* Tab content areas */
+.tab-content {
+  padding-top: 0px; /* Remove top padding to eliminate white border */
+  display: none;
+}
+
+.tab-content.active {
+  display: block;
+}
+
+/* File upload button styling */
+.file-upload-wrapper {
+  position: relative;
+  display: inline-block;
+  margin: 10px 0;
+}
+
+.file-upload-button {
+  background-color: var(--LEEDZ_GREEN);
+  color: white;
+  padding: 8px 16px;
+  border: none;
+  border-radius: 4px;
+  cursor: pointer;
+  font-size: var(--FONT_SIZE_INPUT);
+  font-weight: 500;
+}
+
+.file-upload-button:hover {
+  background-color: darkgreen;
+}
+
+/* Save button styling for Me and Why tabs - match green theme */
+#saveMeBtn,
+#saveWhyBtn {
+  background-color: var(--LEEDZ_GREEN);
+  color: white;
+  border: none;
+  border-radius: 4px;
+  padding: 8px 16px;
+  cursor: pointer;
+  font-size: var(--FONT_SIZE_INPUT);
+  font-weight: 500;
+}
+
+#saveMeBtn:hover,
+#saveWhyBtn:hover {
+  background-color: darkgreen;
+}
+
+.file-upload-input {
+  position: absolute;
+  left: 0;
+  top: 0;
+  opacity: 0;
+  width: 100%;
+  height: 100%;
+  cursor: pointer;
 }
