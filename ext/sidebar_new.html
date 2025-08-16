@@ -7,7 +7,10 @@
 
   <link rel="stylesheet" href="css/globals.css" />
   <link rel="stylesheet" href="css/leedz_layout.css" />
- 
+
+  <!-- load STATE -->
+  <script src="js/state.js"></script>
+
   <!-- Load parser scripts first -->
   <script src="js/parser.js"></script>
   <script src="js/linkedin_parser.js"></script>
@@ -21,6 +24,7 @@
 
 
 <body class="leedz-sidebar">
+
 
   <header class="leedz-header">
   </header>
@@ -56,13 +60,12 @@
 
       <label>Resume Upload</label>
       <div class="file-upload-wrapper">
-        <button class="file-upload-button">Choose .pdf File</button>
+        <button class="file-upload-button"> Choose .pdf </button>
         <input type="file" class="file-upload-input" id="resume_upload" accept=".pdf">
-      </div>
+     
       <div id="file-status"></div>
 
-      <div class="button-wrapper">
-        <button id="saveMeBtn" class="sidebar-button"> Save </button>
+          <button id="saveMeBtn" class="sidebar-button"> Save </button>
       </div>
     </div>
 
@@ -111,8 +114,9 @@
 
   <footer class="leedz-footer">
     
-    <div id="debug-output" style="z-index:999;font-family: Arial; font-size: 11px; color: white; padding: 6px; overflow-y: auto; height: 100px;"></div>
-    <!--
+    <div id="debug-output"></div> 
+    
+        <!--
     <ul class="leedz-footer-links">
       <li><a href="/about">About the Leedz</a></li>
       <li><a href="/contact">Contact Us</a></li>

@@ -86,32 +86,3 @@ const RESERVED_PATHS = [
 
 
 
-
-
-
-function extractMatches(text, regex, label) {
-  const results = [];
-  let match;
-
-  while ((match = regex.exec(text)) !== null) {
-    const value = match[0];
-
-    if (value.length < 7) continue;
-
-    if (label === 'phone') {
-      const digits = value.replace(/\D/g, '');
-      if (digits.length === 10) results.push(digits);
-    } else {
-      results.push(value.trim());
-    }
-  }
-
-  return results;
-}
-
-function pruneShortLines(blob, minChars = 5) {
-  const lines = blob.split(/\r?\n/);
-  return lines.filter(line => line.trim().length >= minChars).join('\n');
-}
-
-

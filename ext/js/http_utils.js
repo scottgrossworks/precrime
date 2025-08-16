@@ -2,80 +2,37 @@
 // Handles local DB communication for querying existing marks and submitting new ones
 
 
-
-// FIXME FIXME FIXME
-// import this from config file
 const BASE_URL = "http://localhost:3000/marks";
 
 
 
 
 
-// Helper function to normalize a name for storage/searching
-function normalizeName(name) {
-  if (!name) return '';
-  return name
-    .toLowerCase()
-    .trim()
-    .replace(/\s+/g, ' ')  // Replace multiple spaces with single space
-    .replace(/\s/g, '#');  // Replace spaces with #
-}
-
-
-
-
-
-// Helper function to denormalize a name for display
-function denormalizeName(normalizedName) {
-  if (!normalizedName) return '';
-  
-  // Replace # with spaces
-  const nameWithSpaces = normalizedName.replace(/#/g, ' ');
-  
-  // Capitalize first letter of each word
-  return nameWithSpaces
-    .split(' ')
-    .map(word => word.charAt(0).toUpperCase() + word.slice(1))
-    .join(' ');
-}
-
-
-
-
 // Save or update data in the backend
 function saveData() {
+  
   if (!STATE.name || STATE.name.trim() === '') {
     logError('Error: Name field is required to save data.');
     return; 
   }
 
-  const data = {
-    // Normalize name for storage using our standardized format
-    name: normalizeName(STATE.name),
-    org: STATE.org,
-    title: STATE.title,
-    www: STATE.www,
-    location: STATE.lists.location[0],
-    phone: STATE.lists.phone[0],
-    email: STATE.lists.email[0],
-    linkedin: STATE.linkedin,
-    on_x: STATE.on_x,
-    notes: STATE.notes,
-    hasReplied: STATE.hasReplied,
-    outreachCount: STATE.outreachCount,
-    lastContact: STATE.lastContact
-  };  // Server handles both create and update through POST
-  
-  
-  // log('POSTing data to backend:', JSON.stringify(data, null, 2));
-  
- 
+  // set the created At to now()
+  STATE.createdAt = STATE.createdAt || new Date().toISOString();
+
+  // Create clean data object with only valid fields
+  const data = STATE;
+
+  const json_data = JSON.stringify(data, null, 2);
+
+  log('POSTing data to backend:', json_data);
+
+
   fetch(BASE_URL, {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json'
     },
-    body: JSON.stringify( data )
+    body: json_data
   })
   .then(response => {
     if (!response.ok) throw new Error('Network response was not ok');
@@ -96,7 +53,7 @@ function saveData() {
 
 // Find button functionality
 // 1. recover form data
-// 2. look for unique fields --- normalized name, linkedin, on_x
+// 2. look for unique fields --- name, linkedin, on_x
 // 3. SEARCH DB (curl http://localhost/marks?name=scott#gross)
 // 4. Return matching mark (if any) and fill-in form fields
 async function findData(searchParams) {
@@ -110,8 +67,8 @@ async function findData(searchParams) {
   
   // Handle each possible search parameter
   if (searchParams.name) {
-    params.append('name', normalizeName(searchParams.name));
-    log('Normalized name being searched:', normalizeName(searchParams.name));
+    params.append('name', searchParams.name);
+    log('Name being searched:', searchParams.name);
   }
   
   if (searchParams.linkedin) {
@@ -145,13 +102,10 @@ async function findData(searchParams) {
       // log('Record found:', data[0]);
       const mark = data[0];
 
-      // Copy the contents of the mark object from the DB into the STATE object
-      // Update the form fields
-      sidebar_update(mark);
-      
-
-      
+      // RETURN DB RECORD
       return mark;
+
+
     } else {
       log('No matching records found.');
       return null;
@@ -161,6 +115,7 @@ async function findData(searchParams) {
     return null;
   }
 }
+
 
 
 

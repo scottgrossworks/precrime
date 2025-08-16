@@ -1,38 +1,6 @@
 // sidebar.js — LeedzEx Sidebar Control Logic (Simplified for Debugging)
 
 
-
-
-// Debug check to confirm script execution
-// console.log('sidebar.js executing. Checking environment...');
-// console.log('Document body:', document.body ? 'Present' : 'Missing');
-// console.log('Chrome API available:', typeof chrome !== 'undefined' ? 'Yes' : 'No');
-
-const STATE = {
-  id: null,
-  name: null,
-  title: null,
-  org: null,
-  www: null,
-  location: null,
-  email: null,        // ← Single value instead of array
-  phone: null,        // ← Single value instead of array
-
-  linkedin: null,
-  on_x: null,
-  outreachCount: 0,
-  createdAt: null,
-  lastContact: null,
-  notes: null,
-  hasReplied: false,
-  activeField: null,
-  lastSelection: null,
-
-};
-
-
-
-
 // Enhanced logging function to output to both console and UI
 function log(...args) {
   console.log(...args); // This will call the overridden version which already calls updateDebugOutput
@@ -42,6 +10,8 @@ function log(...args) {
 function logError(...args) {
   console.error(...args); // This will call the overridden version which already calls updateDebugOutput
 }
+
+
 
 // Helper function to update the debug output element
 function updateDebugOutput(...args) {
@@ -73,6 +43,10 @@ function updateDebugOutput(...args) {
     console.error('UI log failed', e);
   }
 }
+
+
+
+
 
 
 // Override console methods to display logs in the footer
@@ -114,6 +88,18 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
 
 
 
+/**
+ * 
+ * @param {*} record 
+ */
+function refresh(record) {
+  copyFromRecord(record);
+  updateOutreachCount();
+  updateFormFromState();
+}
+
+
+
 
 
 
@@ -123,11 +109,8 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
 //
 */
 document.addEventListener('DOMContentLoaded', () => {
-  // log('DOMContentLoaded fired, initializing LeedzEx sidebar...');
 
-  initButtons();
-  initTabs();
-
+  initButtons();  
   reloadParsers();
 
 });  // CLOSED the DOMContentLoaded listener
@@ -140,100 +123,15 @@ document.addEventListener('DOMContentLoaded', () => {
 // i.e. LinkedIn, X, etc
 */
 async function reloadParsers() {
+  
   try {
-    const isLinkedin = await checkForLinkedin();
-    if (!isLinkedin) {
-      log('No matching parsers found - showing empty form');
-    }
-
+    await checkForLinkedin();
   } catch (error) {
     logError('Error in reloadParsers:', error);
   }
 
-  _updateFormFromState(); // show current state (empty form is fine)
+  updateFormFromState();
 }
-
-
-function clearState() {
-  STATE.id = null;
-  STATE.name = null;
-  STATE.title = null;
-  STATE.org = null;
-  STATE.www = null;
-  STATE.location = null;
-  STATE.email = null;        // ← Simple value, not array
-  STATE.phone = null;        // ← Simple value, not array
-  STATE.linkedin = null;
-  STATE.on_x = null;
-  STATE.outreachCount = 0;
-  STATE.hasReplied = false;
-  STATE.createdAt = null;
-  STATE.lastContact = null;
-  STATE.notes = null;
-  STATE.activeField = null;
-  STATE.lastSelection = null;
-}
-
-
-
-
-/**
- * GRAND UPDATE FUNCTION
- * @param {*} record 
- */
-function sidebar_update( record ) {
-      _copyFromRecord(record);
-      _updateFormFromState();
-}
-
-
-/**
- * Copy data from a record object into the STATE
- * @param {Object} record 
- */
-function _copyFromRecord(record) {
-  STATE.id = record.id;
-  STATE.name = denormalizeName(record.name);
-  STATE.org = record.org || null; 
-  STATE.location = record.location || null;
-  STATE.title = record.title || null;
-  STATE.www = record.www || null;
-  STATE.email = record.email || null;         // ← Simple assignment
-  STATE.phone = record.phone || null;         // ← Simple assignment
-  STATE.outreachCount = record.outreachCount || 0;
-  STATE.lastContact = record.lastContact || null;
-  STATE.notes = record.notes || null;
-  STATE.linkedin = record.linkedin || null;
-  STATE.on_x = record.on_x || null;
-  STATE.hasReplied = record.hasReplied || false;
-}
-
-
-// Populate form fields from a database record  
-function _populateFromRecord(record) {
-  _copyFromRecord(record);
-  _updateOutreachCount();
-  _updateFormFromState();
-}
-
-
-
-
-
-// Add function to update outreach count display
-function _updateOutreachCount() {
-  const outreachBtn = document.getElementById('outreachBtn');
-  if (outreachBtn) {
-    const countSpan = outreachBtn.querySelector('.outreach-count');
-    if (countSpan) {
-      countSpan.textContent = STATE.outreachCount || '0';
-    }
-  }
-}
-
-
-
-
 
 
 
@@ -293,8 +191,9 @@ async function parseLinkedin( url, tabId ) {
     // 2. If found, use it to populate the form
     if (existingRecord) {
       log('Found existing record for: ' + linkedinProfile);
-      _populateFromRecord(existingRecord);
+      refresh(existingRecord);
     }
+
 
     // 3. Send message to content script to parse LinkedIn page
     // log('Requesting LinkedIn page parsing from content script');
@@ -303,7 +202,7 @@ async function parseLinkedin( url, tabId ) {
       if (resp?.ok) {
         // log('Received parsed LinkedIn data');
         // Merge data from parser with existing STATE
-        _mergePageData( resp.data );
+        mergePageData( resp.data );
   
       } else {
         logError('Failed to parse LinkedIn page:', resp?.error || 'Unknown error');
@@ -314,102 +213,159 @@ async function parseLinkedin( url, tabId ) {
 
 
 
-//
-// Merge data: Only update fields that are empty in the current STATE
-//
-function _mergePageData(parsedData) {
-      
-if (!STATE.name && parsedData.name) STATE.name = parsedData.name;
-  if (!STATE.org && parsedData.org) STATE.org = parsedData.org;
-  if (!STATE.title && parsedData.title) STATE.title = parsedData.title;
-  if (!STATE.linkedin && parsedData.linkedin) STATE.linkedin = parsedData.linkedin;
-  if (!STATE.on_x && parsedData.on_x) STATE.on_x = parsedData.on_x; 
-  if (!STATE.www && parsedData.www) STATE.www = parsedData.www;
-  if (!STATE.location && parsedData.location) STATE.location = parsedData.location;
-  if (!STATE.email && parsedData.email) STATE.email = parsedData.email;     // ← Simplified
-  if (!STATE.phone && parsedData.phone) STATE.phone = parsedData.phone;     // ← Simplified
 
-  _updateFormFromState();
+
+
+// Add function to update outreach count display
+function updateOutreachCount() {
+  const outreachBtn = document.getElementById('outreachBtn');
+  if (outreachBtn) {
+    const countSpan = outreachBtn.querySelector('.outreach-count');
+    if (countSpan) {
+      countSpan.textContent = STATE.outreachCount || '0';
+    }
+  }
 }
 
 
 
 
 
-// Initialize buttons and their event listeners
-//
-function initButtons() {
 
-  // Setup hasReplied button
-  const hasRepliedBtn = document.getElementById('hasRepliedBtn');
-  if (hasRepliedBtn) {
-    hasRepliedBtn.addEventListener('click', () => {
-      //log('Has Replied button clicked');
-      hasReplied();
-    });
-  } else {
-    log('Error: Has Replied button not found');
-  }
-
-
-  initOutreachButton();
-
-  // Setup save button
-  const saveBtn = document.getElementById('saveBtn');
-  if (saveBtn) {
-    saveBtn.addEventListener('click', () => {
-      // log('Save button clicked');
-      saveData();
-    });
-  } else {
-    log('Error: Save button not found');
-  }
-
-
+// Initialize everything when DOM is loaded
+document.addEventListener('DOMContentLoaded', () => {
+  console.log('DOMContentLoaded fired, initializing sidebar...');
   
+  // Initialize tabs first
+  initTabs();
+  
+  initButtons();
+  
+  log('Sidebar initialized');
+});
 
 
 
-  // Setup clear button
-  const clearBtn = document.getElementById('clearBtn');
-  if (clearBtn) {
-    clearBtn.addEventListener('click', () => {
-      // log('Clear button clicked');
-      clearForm();
+
+// Function to read form values into STATE before saving
+function readFormIntoState() {
+  // Read the basic fields
+  STATE.name = document.getElementById('name').value || null;
+  STATE.email = document.getElementById('email').value || null;
+  
+  // Read notes field and parse key=value pairs
+  const notesValue = document.getElementById('notes').value || '';
+  
+  // Clear existing parsed fields first
+  STATE.title = null;
+  STATE.org = null;
+  STATE.www = null;
+  STATE.location = null;
+  STATE.phone = null;
+  STATE.linkedin = null;
+  STATE.on_x = null;
+  
+  // Parse key=value pairs from notes to populate other STATE fields
+  if (notesValue) {
+    // Split by spaces, but be more careful about parsing
+    const parts = notesValue.split(/\s+/);
+    let cleanNotes = '';
+    
+    parts.forEach(part => {
+      if (part.includes('=')) {
+        const equalIndex = part.indexOf('=');
+        const key = part.substring(0, equalIndex);
+        const value = part.substring(equalIndex + 1);
+        
+        if (key && value && STATE.hasOwnProperty(key)) {
+          // Clean the value - remove newlines and extra whitespace
+          const cleanValue = value.replace(/\n/g, ' ').replace(/\r/g, '').trim();
+          
+          // Convert string values to appropriate types
+          if (key === 'outreachCount') {
+            STATE[key] = parseInt(cleanValue) || 0;
+          } else if (key === 'hasReplied') {
+            STATE[key] = cleanValue === 'true';
+          } else if (key === 'notes') {
+            // Handle notes specially - don't overwrite, append
+            cleanNotes += (cleanNotes ? ' ' : '') + cleanValue;
+          } else {
+            STATE[key] = cleanValue;
+          }
+        }
+      } else if (part && !part.includes('=')) {
+        // This is loose text that should go in notes
+        cleanNotes += (cleanNotes ? ' ' : '') + part;
+      }
     });
+    
+    // Set the clean notes
+    STATE.notes = cleanNotes || null;
   } else {
-    log('Error: Clear button not found');
+    STATE.notes = null;
   }
-
-  // Setup reload button
-  const reloadBtn = document.getElementById('reloadBtn');
-  if (reloadBtn) {
-    reloadBtn.addEventListener('click', () => {
-      // log('Reload button clicked');
-      clearForm();
-      reloadParsers();
-    });
-  } else {
-    log('Error: Reload button not found');
+  
+  // Additional cleanup for specific fields
+  if (STATE.linkedin) {
+    // Clean up linkedin URLs - remove protocol, www, and any trailing junk
+    STATE.linkedin = STATE.linkedin
+      .replace(/^https?:\/\/(www\.)?/, '')
+      .replace(/\/$/, '') // Remove trailing slash
+      .split(/[\s\n\r]/)[0] //
+      .trim()
+      .replace(/\s+/g, ' ')
+      .replace(/\s/g, '#');
   }
-
 }
 
 
 
+// Function to format STATE data as key=value pairs for notes field
+function formatStateAsKeyValuePairs() {
+  const pairs = [];
+  
+  // Add all non-null/non-empty values as key=value pairs
+  if (STATE.title) pairs.push(`title=${STATE.title}`);
+  if (STATE.org) pairs.push(`org=${STATE.org}`);
+  if (STATE.www) pairs.push(`www=${STATE.www}`);
+  if (STATE.location) pairs.push(`location=${STATE.location}`);
+  if (STATE.phone) pairs.push(`phone=${STATE.phone}`);
+  if (STATE.linkedin) pairs.push(`linkedin=${STATE.linkedin}`);
+  if (STATE.on_x) pairs.push(`on_x=${STATE.on_x}`);
+  if (STATE.outreachCount > 0) pairs.push(`outreachCount=${STATE.outreachCount}`);
+  if (STATE.lastContact) pairs.push(`lastContact=${STATE.lastContact}`);
+  if (STATE.hasReplied) pairs.push(`hasReplied=${STATE.hasReplied}`);
+  
+  // Add existing notes if any
+  if (STATE.notes && !STATE.notes.includes('=')) {
+    pairs.push(`notes=${STATE.notes}`);
+  }
+  
+  return pairs.join(' ');
+}
 
 
-
+//
+// convert 'scott#gross' into 'Scott Gross'
+function deNormalizeName(rawName) {
+  return rawName.replace(/#/g, ' ').replace(/\b\w/g, char => char.toUpperCase());
+}
 
 
 
 // Function to update form inputs from STATE
-function _updateFormFromState() {
-  document.getElementById('name').value = STATE.name || '';
-  document.getElementById('email').value = STATE.email || '';  // ← No more [0]
+function updateFormFromState() {
+  // Fill name and email in their labeled form boxes
+
+  const displayName = deNormalizeName(STATE.name);
+
+  document.getElementById('name').value = displayName;
+  document.getElementById('email').value = STATE.email || '';
   
-  _createNotes();
+  // Format everything else as key=value pairs in notes
+  document.getElementById('notes').value = formatStateAsKeyValuePairs();
   
+  // Update hasReplied button if it exists
   const hasRepliedBtn = document.getElementById('hasRepliedBtn');
   if (hasRepliedBtn) {
     if (STATE.hasReplied) {
@@ -421,46 +377,6 @@ function _updateFormFromState() {
 }
 
 
-  
-
-//  create the Notes section -- the key to the embedding context
-//  excludes name and email while including
-//  all the relevant data fields in a clean format.
-function _createNotes() {
-  const notes = [];
-  
-  if (STATE.org) notes.push(`org=${STATE.org}`);
-  if (STATE.title) notes.push(`title=${STATE.title}`);
-  if (STATE.www) notes.push(`www=${STATE.www}`);
-  if (STATE.linkedin) notes.push(`linkedin=${STATE.linkedin}`);
-  if (STATE.on_x) notes.push(`on_x=${STATE.on_x}`);
-  if (STATE.location) notes.push(`location=${STATE.location}`);
-  if (STATE.phone) notes.push(`phone=${STATE.phone}`);  // ← Simple value
-  
-  if (STATE.outreachCount > 0) notes.push(`outreachCount=${STATE.outreachCount}`);
-  if (STATE.hasReplied) notes.push(`hasReplied=${STATE.hasReplied}`);
-
-
-  // Format lastContact to be more readable
-  if (STATE.lastContact) {
-    const date = new Date(STATE.lastContact);
-
-  // For format like "Aug 15, 2025 4:30 AM"
-  const readable = date.toLocaleDateString('en-US', { 
-      month: 'short', 
-      day: 'numeric', 
-      year: 'numeric' 
-    }) + ' ' + date.toLocaleTimeString('en-US', { 
-      hour: 'numeric', 
-      minute: '2-digit',
-      hour12: true 
-    });
-    notes.push(`lastContact=${readable}`);
-  }
-  
-  document.getElementById('notes').value = notes.join('\n');
-}
-
 
 
 
@@ -470,50 +386,29 @@ function _createNotes() {
 
 // Function to clear all form fields and reset state
 function clearForm() {
-  clearState();
+  // log('Clearing all form fields');
   
-  // Only clear fields that exist in your simplified UI
+  clearState();
+  // Clear all input fields
   document.getElementById('name').value = '';
-  document.getElementById('email').value = '';
+
   document.getElementById('notes').value = '';
 
+  document.getElementById('email').value = '';
+
+  // Clear the hasReplied button
   const hasReplied = document.getElementById('hasRepliedBtn');
   if (hasReplied) hasReplied.classList.remove('hasReplied');
 
+  // Clear the outreach count
   const outreachBtn = document.getElementById('outreachBtn');
-  if (outreachBtn) {
-    const countSpan = outreachBtn.querySelector('.outreach-count');
-    if (countSpan) countSpan.textContent = '0';
-  }
+  const countSpan = outreachBtn.querySelector('.outreach-count');
+  countSpan.textContent = '0';
+  // log('Form cleared successfully');
 }
 
 
 
-
-
-
-function initOutreachButton() {
-  const outreachBtn = document.getElementById('outreachBtn');
-  if (outreachBtn) {
-    outreachBtn.addEventListener('click', () => {
-      STATE.outreachCount++;
-      STATE.lastContact = new Date().toISOString();
-      
-      // Find the count span fresh each time (in case DOM changed)
-      const countSpan = outreachBtn.querySelector('.outreach-count');
-      if (countSpan) {
-        countSpan.textContent = STATE.outreachCount;
-      } else {
-        log('Warning: outreach-count span not found');
-      }
-      
-      saveData();
-    });
-    
-    // Initialize the display
-    _updateOutreachCount();
-  }
-}
 
 
 
@@ -532,117 +427,176 @@ function hasReplied() {
           hasRepliedBtn.classList.remove('hasReplied');
       }
   }
+  readFormIntoState();
   saveData();
 }
 
-// ===== TAB SYSTEM =====
-// Adapted from SGW tab system
-
-// Initialize tab functionality
+// Tab system functionality
 function initTabs() {
   const meTab = document.getElementById('me_tab');
-  const themTab = document.getElementById('them_tab');
+  const themTab = document.getElementById('them_tab'); 
   const whyTab = document.getElementById('why_tab');
 
   if (meTab) {
     meTab.addEventListener('click', (event) => {
-      event.stopPropagation();
-      if (bringToFront(meTab)) {
-        showTabContent('me_tab_content');
-      }
+      event.preventDefault();
+      switchToTab('me_tab');
     });
   }
 
   if (themTab) {
     themTab.addEventListener('click', (event) => {
-      event.stopPropagation();
-      if (bringToFront(themTab)) {
-        showTabContent('them_tab_content');
-      }
+      event.preventDefault();
+      switchToTab('them_tab');
     });
   }
 
   if (whyTab) {
     whyTab.addEventListener('click', (event) => {
-      event.stopPropagation();
-      if (bringToFront(whyTab)) {
-        showTabContent('why_tab_content');
-      }
+      event.preventDefault();
+      switchToTab('why_tab');
     });
   }
 
-  // Initialize file upload functionality
-  initFileUpload();
-  
-  // Initialize additional save buttons
-  initAdditionalButtons();
-
-  // Set initial background color for default active tab (Them)
-  updateFormBackground('them_tab_content');
+  // Set default active tab
+  switchToTab('them_tab');
 }
 
-// Function to bring a tab to the front
-function bringToFront(theTab) {
-  if (theTab.classList.contains('active')) {
-    // already up front
-    return false;
-  }
-
-  // it is behind, bring it to the front
-  theTab.classList.remove('behind');
-  theTab.classList.add('active');
-
-  // push everyone else behind
-  for (let i = 0; i < theTab.parentElement.childElementCount; i++) {
-    let eachTab = theTab.parentElement.children[i];
-    
-    if (eachTab != theTab) {
-      eachTab.classList.remove('active');
-      eachTab.classList.add('behind');
-    }
-  }
-  return true;
-}
-
-// Function to show the corresponding tab content
-function showTabContent(contentId) {
-  // Hide all tab content
+function switchToTab(activeTabId) {
+  // Remove active class from all tabs and add 'behind'
+  const allTabs = document.querySelectorAll('.tab');
   const allContent = document.querySelectorAll('.tab-content');
+  const formSection = document.querySelector('.leedz-form-section');
+  
+  allTabs.forEach(tab => {
+    tab.classList.remove('active');
+    tab.classList.add('behind');
+  });
+  
   allContent.forEach(content => {
     content.classList.remove('active');
   });
 
-  // Show the selected tab content
-  const selectedContent = document.getElementById(contentId);
-  if (selectedContent) {
-    selectedContent.classList.add('active');
+  // Add active class to selected tab and content
+  const activeTab = document.getElementById(activeTabId);
+  const activeContent = document.getElementById(activeTabId + '_content');
+  
+  if (activeTab) {
+    activeTab.classList.add('active');
+    activeTab.classList.remove('behind');
+  }
+  
+  if (activeContent) {
+    activeContent.classList.add('active');
   }
 
-  // Update form section background color to match active tab
-  updateFormBackground(contentId);
+  // Change form background based on active tab - pastel versions with 0.25 opacity
+  if (formSection) {
+    switch(activeTabId) {
+      case 'me_tab':
+        formSection.style.backgroundColor = 'rgba(255, 127, 80, 0.25)'; // coral with 0.25 opacity
+        break;
+      case 'them_tab':
+        formSection.style.backgroundColor = 'rgba(100, 149, 237, 0.25)'; // cornflowerblue with 0.25 opacity
+        break;
+      case 'why_tab':
+        formSection.style.backgroundColor = 'rgba(34, 139, 34, 0.25)'; // LEEDZ_GREEN with 0.25 opacity
+        break;
+    }
+  }
+
+  // console.log(`Switched to ${activeTabId}`);
 }
 
-// Function to update form section background color
-function updateFormBackground(contentId) {
-  const formSection = document.querySelector('.leedz-form-section');
-  if (!formSection) return;
 
-  // Remove any existing background classes
-  formSection.classList.remove('me-bg', 'them-bg', 'why-bg');
 
-  // Add appropriate background class based on active tab
-  switch(contentId) {
-    case 'me_tab_content':
-      formSection.style.backgroundColor = 'rgba(255, 127, 80, 0.15)'; // coral
-      break;
-    case 'them_tab_content':
-      formSection.style.backgroundColor = 'rgba(100, 149, 237, 0.15)'; // cornflowerblue
-      break;
-    case 'why_tab_content':
-      formSection.style.backgroundColor = 'rgba(34, 139, 34, 0.15)'; // green
-      break;
-    default:
-      formSection.style.backgroundColor = 'rgba(100, 149, 237, 0.15)'; // default to them
+
+// Initialize buttons and their event listeners
+//
+function initButtons() {
+  initHasRepliedButton();
+  initOutreachButton();
+  initSaveButton();
+  initClearButton();
+  initReloadButton();
+  initFileUpload();
+  initAdditionalButtons();
+}
+
+
+
+
+
+// Initialize button functions
+function initSaveButton() {
+  const saveBtn = document.getElementById('saveBtn');
+  if (saveBtn) {
+    saveBtn.addEventListener('click', () => {
+      // log('Save button clicked');
+      readFormIntoState();
+      saveData();
+    });
+  } else {
+    log('Error: Save button not found');
+  }
+}
+
+function initClearButton() {
+  const clearBtn = document.getElementById('clearBtn');
+  if (clearBtn) {
+    clearBtn.addEventListener('click', () => {
+      // log('Clear button clicked');
+      clearForm();
+    });
+  } else {
+    log('Error: Clear button not found');
+  }
+}
+
+function initReloadButton() {
+  const reloadBtn = document.getElementById('reloadBtn');
+  if (reloadBtn) {
+    reloadBtn.addEventListener('click', () => {
+      // log('Reload button clicked');
+      clearForm();
+      reloadParsers();
+    });
+  } else {
+    log('Error: Reload button not found');
+  }
+}
+
+function initHasRepliedButton() {
+  const hasRepliedBtn = document.getElementById('hasRepliedBtn');
+  if (hasRepliedBtn) {
+    hasRepliedBtn.addEventListener('click', () => {
+      //log('Has Replied button clicked');
+      hasReplied();
+    });
+  } else {
+    log('Error: Has Replied button not found');
+  }
+}
+
+function initOutreachButton() {
+  const outreachBtn = document.getElementById('outreachBtn');
+  if (outreachBtn) {
+    const countSpan = outreachBtn.querySelector('.outreach-count');
+    if (countSpan) countSpan.textContent = '0';
+    
+    outreachBtn.addEventListener('click', () => {
+      STATE.outreachCount++;
+      STATE.lastContact = new Date().toISOString();
+      
+      // Find the count span fresh each time
+      const countSpan = outreachBtn.querySelector('.outreach-count');
+      if (countSpan) {
+        countSpan.textContent = STATE.outreachCount;
+      }
+      
+      readFormIntoState();
+      saveData();
+    });
   }
 }
 
