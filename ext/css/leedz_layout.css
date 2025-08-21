@@ -35,7 +35,7 @@ html, body {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: 10px 6px;
+  padding: 12px 6px;
   background-color: white;
   border-top: 4px solid var(--LEEDZ_GREEN);
   margin-bottom: 12px;
@@ -74,6 +74,12 @@ html, body {
   color: black;
 }
 
+
+label[for="resume_upload"] {
+  color:white;
+}
+
+
 /* Reduce gap for file upload label specifically */
 .file-upload-wrapper + button {
   margin-top: 5px;
@@ -82,7 +88,7 @@ html, body {
   display: inline-flex;
   justify-content: center;
   align-items: flex-start;
-  gap: 5px; /* Add consistent spacing between label and button */
+  gap: 8px; /* Add consistent spacing between label and button */
   margin: 0; /* Remove unnecessary margin */
 }
 
@@ -96,7 +102,7 @@ html, body {
   margin-top: 2px;
   margin-bottom: 2px;
   border: 1px solid #ccc;
-  border-radius: 4px;
+  border-radius: 5px;
   box-sizing: border-box;
   position: relative; /* For arrow positioning */
 }
@@ -251,24 +257,6 @@ textarea.sidebar-input {
   opacity: 1;
 }
 
-/* Styling for the rotating arrow icon */
-.input-arrow {
-  position: absolute;
-  right: 8px;
-  top: 50%;
-  transform: translateY(-50%);
-  width: 16px;
-  height: 16px;
-  cursor: pointer;
-  opacity: 0.7;
-  transition: opacity 0.2s;
-  display: none; /* Hidden by default */
-}
-
-.input-arrow:hover {
-  opacity: 1;
-}
-
 /* Show arrows only when there are multiple items */
 .input-container[data-has-multiple="true"] .input-arrow {
   display: block;
@@ -403,7 +391,7 @@ input.invalid {
 /* Unified notes textarea styling - fills available space */
 .notes-textarea {
   min-height: 45vh !important;
-  max-height: 45vh !important;
+  max-height: 50vh !important;
   height: 45vh !important;
   resize: vertical;
   font-family: inherit;
@@ -415,6 +403,36 @@ input.invalid {
 .notes-textarea:focus {
   outline: 2px solid var(--LEEDZ_GREEN);
   outline-offset: -2px;
+}
+
+/* Specific textarea targeting with higher specificity */
+.leedz-form-section textarea#me-notes.notes-textarea {
+  background-color: red;
+  min-height: 50vh !important;
+  max-height: 55vh !important;
+  height: 55vh !important;
+}
+
+.leedz-form-section textarea#trigger-notes.notes-textarea {
+  background-color: blue;
+  min-height: 50vh !important;
+  max-height: 55vh !important;
+  height: 55vh !important;
+}
+
+
+#me_tab_content textarea {
+
+  min-height: 50vh !important;
+  max-height: 60vh !important;
+  height: 60vh !important;
+}
+
+#why_tab_content textarea {
+
+  min-height: 50vh !important;
+  max-height: 60vh !important;
+  height: 60vh !important;
 }
 
 /* ===== TAB SYSTEM ===== */
@@ -631,10 +649,8 @@ div.tab.active {
 
 
 
-
-
 .file-upload-button {
-  background-color: var(--LEEDZ_GREEN);
+  background-color: cornflowerblue;
   color: white;
   padding: 10px 20px;
   border: none;
@@ -647,7 +663,7 @@ div.tab.active {
 }
 
 .file-upload-button:hover {
-  background-color: darkgreen;
+  background-color: royalblue;
 }
 
 /* Me tab file upload styling - consolidated */

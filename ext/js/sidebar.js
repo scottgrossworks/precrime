@@ -364,7 +364,7 @@ function updateFormFromState() {
   document.getElementById('email').value = STATE.email || '';
   
   // Format everything else as key=value pairs in notes
-  document.getElementById('notes').value = formatStateAsKeyValuePairs();
+  document.getElementById('contact_notes').value = formatStateAsKeyValuePairs();
   
   // Update hasReplied button if it exists
   const hasRepliedBtn = document.getElementById('hasRepliedBtn');
