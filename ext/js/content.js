@@ -62,34 +62,43 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   }
 });
 
-function toggleSidebar() {
 
-  // Check if sidebar already exists
-  const existingSidebar = document.getElementById("leedz-ex-sidebar");
-  if (existingSidebar) {
-    existingSidebar.remove();
-    console.log("[LeedzEx] Sidebar removed");
-    return;
+
+function toggleSidebar () {
+  const pane = document.getElementById('leedz-sidebar-container');
+
+  if (pane) {
+    // If sidebar exists, close it
+    requestAnimationFrame(() => {
+      pane.style.transform = 'translateX(100%)';
+    });
+    pane.addEventListener('transitionend', () => pane.remove(), { once: true });
+  } else {
+    // Create a completely isolated iframe
+    const iframe = document.createElement('iframe');
+    iframe.id = "leedz-sidebar-container";
+    iframe.src = chrome.runtime.getURL("sidebar_new.html");
+    
+    // Style the iframe to be positioned as a sidebar
+    Object.assign(iframe.style, {
+      position: "fixed",
+      top: "0",
+      right: "0",
+      width: "400px",
+      height: "100vh",
+      zIndex: "2147483647",
+      border: "none",
+      transform: "translateX(100%)",
+      transition: "transform 0.4s ease",
+      boxShadow: "-6px 0 18px rgba(0,0,0,0.2)"
+    });
+    
+    // Append directly to body
+    document.body.appendChild(iframe);
+    
+    // Animate it in
+    requestAnimationFrame(() => {
+      iframe.style.transform = "translateX(0)";
+    });
   }
-
-  // Create iframe sidebar
-  const iframe = document.createElement("iframe");
-  iframe.id = "leedz-ex-sidebar";
-  iframe.src = chrome.runtime.getURL("sidebar_new.html");
-  // console.log("[LeedzEx] Iframe created:", iframe);
-
-  iframe.style.cssText = `
-    position: fixed !important;
-    top: 0 !important;
-    right: 0 !important;
-    width: 420px !important;
-    height: 100vh !important;
-    z-index: 2147483647 !important;
-    border: none !important;
-    background: white !important;
-    box-shadow: -6px 0 18px rgba(0,0,0,0.2) !important;
-  `;
-
-  document.body.appendChild(iframe);
-  console.log("[LeedzEx] Sidebar appended to DOM");
 }

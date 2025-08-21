@@ -25,12 +25,13 @@
 
 <body class="leedz-sidebar">
 
-
+<!-- Header -->
   <header class="leedz-header">
-  </header>
 
+    <img src="icons/logo_black.png" alt="The Leedz" class="leedz-logo"/>
 
   <div class="buttons-container">
+
     <button id="reloadBtn" class="reload-button" title="Reload the parser">
       <span>
         <img src="icons/arrows_white.png" class="button-icon" alt="reload parser"/>
@@ -41,6 +42,9 @@
       <span>✕</span>
     </button>
   </div>
+  </header>
+
+
 
   <!-- Tab Navigation -->
   <div id="tabs">
@@ -55,18 +59,16 @@
     <div id="me_tab_content" class="tab-content">
       <label for="me_notes">About Me</label>
       <div class="input-wrapper">
-        <textarea id="me_notes" class="sidebar-input notes-textarea" placeholder="Information about yourself..." spellcheck="false"></textarea>
+        <textarea id="me_notes" class="sidebar-input notes-textarea" placeholder="Capture information about yourself..." spellcheck="false"></textarea>
       </div>
 
       <label>Resume Upload</label>
       <div class="file-upload-wrapper">
-        <button class="file-upload-button"> Choose .pdf </button>
+        <button class="file-upload-button">Choose .pdf</button>
         <input type="file" class="file-upload-input" id="resume_upload" accept=".pdf">
-     
-      <div id="file-status"></div>
-
-          <button id="saveMeBtn" class="sidebar-button"> Save </button>
       </div>
+
+      <button id="saveMeBtn" class="sidebar-button">Save</button>
     </div>
 
     <!-- Them Tab - Contact Ingestion -->
@@ -81,7 +83,8 @@
 
       <label for="notes">Notes</label>
       <div class="input-wrapper">
-        <textarea id="notes" class="sidebar-input notes-textarea" spellcheck="false"></textarea>
+        <textarea id="notes" class="sidebar-input notes-textarea" spellcheck="false"
+        placeholder="Capture notes about this contact and their interests..."></textarea>
       </div>
 
       <!-- BUTTONS -->
@@ -114,7 +117,10 @@
 
   <footer class="leedz-footer">
     
-    <div id="debug-output"></div> 
+ <footer class="leedz-footer">
+    <img src="icons/grass.png" alt="grass" class="leedz-grass"/>
+
+    <div id="debug-output" style="z-index:999;font-family: Arial; font-size: 11px; color: white; padding: 6px; overflow-y: auto; height: 80px;"></div>
     
         <!--
     <ul class="leedz-footer-links">

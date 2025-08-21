@@ -348,6 +348,7 @@ function formatStateAsKeyValuePairs() {
 //
 // convert 'scott#gross' into 'Scott Gross'
 function deNormalizeName(rawName) {
+  if (!rawName) return '';
   return rawName.replace(/#/g, ' ').replace(/\b\w/g, char => char.toUpperCase());
 }
 
@@ -490,22 +491,21 @@ function switchToTab(activeTabId) {
     activeContent.classList.add('active');
   }
 
+
   // Change form background based on active tab - pastel versions with 0.25 opacity
   if (formSection) {
     switch(activeTabId) {
       case 'me_tab':
-        formSection.style.backgroundColor = 'rgba(255, 127, 80, 0.25)'; // coral with 0.25 opacity
+        formSection.style.backgroundColor = 'rgba(120,120,120, 0.3)'; // 
         break;
       case 'them_tab':
-        formSection.style.backgroundColor = 'rgba(100, 149, 237, 0.25)'; // cornflowerblue with 0.25 opacity
+        formSection.style.backgroundColor = 'rgba(100, 149, 237, 0.3)'; // 
         break;
       case 'why_tab':
-        formSection.style.backgroundColor = 'rgba(34, 139, 34, 0.25)'; // LEEDZ_GREEN with 0.25 opacity
+        formSection.style.backgroundColor = 'rgba(34, 139, 34, 0.3)'; // 
         break;
     }
   }
-
-  // console.log(`Switched to ${activeTabId}`);
 }
 
 

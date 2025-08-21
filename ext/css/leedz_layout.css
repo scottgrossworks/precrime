@@ -35,13 +35,15 @@ html, body {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: 10px;
+  padding: 10px 6px;
   background-color: white;
   border-top: 4px solid var(--LEEDZ_GREEN);
+  margin-bottom: 12px;
 }
 
 .leedz-logo {
-  height: 40px;
+  margin-left:10px;
+  height: 35px;
 }
 
 .leedz-hamburger {
@@ -65,8 +67,8 @@ html, body {
 
 .leedz-form-section label {
   display: block;
-  margin-top: 20px;
-  margin-bottom:2px;
+  margin: 20px 0 2px 2px;
+
   font-size: var(--FONT_SIZE_LABEL);
   font-weight: 600;
   color: black;
@@ -152,12 +154,23 @@ textarea.sidebar-input {
   bottom: 0;
   left: 0;
   width: 100%;
-  background:darkgreen;
-  min-height: 80px !important;
+  background: var(--LEEDZ_GREEN);
+  min-height: 20px;
   z-index: 10;
   display: flex;
   flex-direction: column;
   justify-content: flex-end;
+}
+
+
+.leedz-grass {
+  position: absolute;
+  top: -50px;
+  left: 0;
+  width: 100%;
+  height: auto;
+  z-index: 4;
+  display: block;
 }
 
 #debug-output {
@@ -167,7 +180,7 @@ textarea.sidebar-input {
     color: white;
     padding: 6px;
     overflow-y: auto;
-    max-height: 120px !important;
+    max-height: 80px !important;
     height: auto;
 } 
 
@@ -365,7 +378,7 @@ input.invalid {
   justify-content: flex-end;
   align-items: center;
   gap: 10px;
-  margin: 20px 20px;
+  margin: 0 15px 15px 15px;
 }
 
 
@@ -380,8 +393,8 @@ input.invalid {
   cursor: pointer;
   font-size: var(--FONT_SIZE_LABEL);
   font-weight: 600;
-  width: 120px; /* Remove conflicting width declarations */
-  margin: 10px 0;
+  width:40%;
+  max-width: 200px !important; /* Remove conflicting width declarations */
 }
 
 #saveMeBtn:hover,
@@ -395,7 +408,8 @@ input.invalid {
   top: 0;
   opacity: 0;
   width: 100%;
-  height: 100%;
+  height: 1px;
+  background-color: red;
   cursor: pointer;
 }
 
@@ -414,4 +428,249 @@ input.invalid {
 .notes-textarea:focus {
   outline: 2px solid var(--LEEDZ_GREEN);
   outline-offset: -2px;
+}
+
+/* ===== TAB SYSTEM ===== */
+/* Adapted from SGW tab system */
+
+#tabs {
+  display: flex;
+  position: relative;
+  margin: 0px 0px 0px 0px;
+  padding: 0px;
+}
+
+.tab {
+  position: relative;
+  margin: 0px 2px 0px 0px;
+  padding: 4px 10px 6px 10px;
+  border-radius: 5px 5px 0px 0px;
+  min-width: 60px;
+  height: 20px;
+  font-family: inherit;
+  font-size: var(--FONT_SIZE_TAB);
+  font-weight: 500;
+  color: white;
+  cursor: pointer;
+  transition: all 0.1s ease;
+  text-align: center;
+  user-select: none;
+}
+
+.tab:hover {
+  color: white;
+}
+
+div.tab.behind {
+  color: #AAA;
+  transform: translate(0px, 2px);
+  border-bottom: 2px solid #e0e0e0;
+}
+
+div.tab.active {
+  color: black;
+  transform: translateY(2px);
+  font-weight: 600;
+  font-size: var(--FONT_SIZE_TAB_ACTIVE);
+  border-bottom: none;
+  margin-bottom: 0;
+}
+
+/* Specific tab colors */
+#me_tab.active {
+  color: black;
+  background-color: rgba(120, 120, 120, 0.25); 
+}
+
+#them_tab.active {
+  color: black;
+  background-color: rgba(100, 149, 237, 0.25); /* cornflowerblue with 0.25 opacity */
+}
+
+#why_tab.active {
+  color: black;
+  background-color: rgba(34, 139, 34, 0.25); /* LEEDZ_GREEN with 0.25 opacity */
+}
+
+/* Form section background colors to match active tabs */
+.leedz-form-section {
+  padding-top: 25px;
+  transition: background-color 0.1s ease;
+  background-color: rgba(100, 149, 237, 0.25); /* Default background - cornflowerblue*/
+  border-top: none; /* Remove any top border that might interfere */
+}
+
+/* Tab-specific background colors for form sections */
+.leedz-form-section.me-active {
+  background-color: rgba(120, 120, 120, 0.25) !important; 
+}
+
+.leedz-form-section.them-active {
+  background-color: rgba(100, 149, 237, 0.25); /* cornflowerblue  */
+}
+
+.leedz-form-section.why-active {
+  background-color: rgba(34, 139, 34, 0.25); /* LEEDZ_GREEN  */
+}
+
+/* Tab content areas */
+.tab-content {
+  padding-top: 0px;
+  display: none;
+}
+
+.tab-content.active {
+  display: block;
+}
+
+/* Has Replied Button */
+#hasRepliedBtn.sidebar-button {
+  background-color: lightgray;
+  width: 36px !important;
+  height: 36px !important;
+  border-radius: 50% !important;
+  border: none;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  opacity: 0.5;
+  padding: 0 !important;
+  margin: 0 6px !important;
+  flex: 0 0 auto !important; /* Prevent flex stretching */
+  box-shadow: 0 2px 4px rgba(0, 0, 0, 0.2);
+}
+
+#hasRepliedBtn #check-icon {
+  width: 22px;
+  height: 22px;
+  padding: 0;
+}
+
+/* Hover state */
+#hasRepliedBtn:hover {
+  opacity: 0.9;
+}
+
+/* Active/clicked state */
+#hasRepliedBtn:active {
+  transform: scale(0.8);
+  opacity: 1.0;
+}
+
+#hasRepliedBtn.hasReplied {
+  opacity: 1.0 !important;
+  background-color: lawngreen !important;
+}
+
+#hasRepliedBtn.hasReplied #check-icon {
+  opacity: 1.0 !important;
+}
+
+/* Clear button styling */
+.clear-button {
+  width: 30px;
+  height: 30px;
+  border-radius: 50%;
+  background-color: cornflowerblue;
+  color: white;
+  border: none;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  font-size: 12px;
+  font-weight: bold;
+  padding: 0;
+  box-shadow: 0 2px 4px rgba(0, 0, 0, 0.2);
+}
+
+.clear-button span {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 100%;
+  height: 100%;
+  line-height: 1;
+}
+
+.clear-button:hover {
+  background-color: blue;
+}
+
+.clear-button:active {
+  transform: scale(0.8);
+}
+
+/* Button icon styling to fit within the button */
+.button-icon {
+  width: 20px;
+  height: 20px;
+  object-fit: contain;
+}
+
+.reload-button {
+  width: 30px;
+  height: 30px;
+  border-radius: 50%;
+  background-color: var(--LEEDZ_GREEN);
+  color: white;
+  border: none;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  font-weight: bold;
+  padding: 0;
+  box-shadow: 0 2px 4px rgba(0, 0, 0, 0.2);
+}
+
+.reload-button span {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 100%;
+  height: 100%;
+}
+
+.reload-button:hover {
+  background-color: darkgreen;
+}
+
+.reload-button:active {
+  transform: scale(0.8);
+}
+
+/* File upload button styling */
+.file-upload-wrapper {
+  position: relative;
+  display: inline-block;
+  margin: 0;
+}
+
+.file-upload-button {
+  background-color: var(--LEEDZ_GREEN);
+  color: white;
+  padding: 8px 16px;
+  border: none;
+  border-radius: 4px;
+  cursor: pointer;
+  font-size: var(--FONT_SIZE_INPUT);
+  font-weight: 500;
+  margin: 0;
+}
+
+.file-upload-button:hover {
+  background-color: darkgreen;
+}
+
+/* Ensure hidden file input takes no space */
+.file-upload-input {
+  position: absolute;
+  left: 0;
+  top: 0;
+  opacity: 0;
+  width: 100%;
+  height: 100%;
+  cursor: pointer;
 }
