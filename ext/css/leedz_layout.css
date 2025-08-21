@@ -67,19 +67,24 @@ html, body {
 
 .leedz-form-section label {
   display: block;
-  margin: 20px 0 2px 2px;
+  margin: 8px 0 2px 2px;
 
   font-size: var(--FONT_SIZE_LABEL);
   font-weight: 600;
   color: black;
 }
 
-
-/* Remove top margin from first label */
-.leedz-form-section label:first-of-type {
-  margin-top: 0;
+/* Reduce gap for file upload label specifically */
+.file-upload-wrapper + button {
+  margin-top: 5px;
 }
-
+.file-upload-wrapper {
+  display: inline-flex;
+  justify-content: center;
+  align-items: flex-start;
+  gap: 5px; /* Add consistent spacing between label and button */
+  margin: 0; /* Remove unnecessary margin */
+}
 
 
 .leedz-form-section input,
@@ -162,7 +167,6 @@ textarea.sidebar-input {
   justify-content: flex-end;
 }
 
-
 .leedz-grass {
   position: absolute;
   top: -50px;
@@ -184,16 +188,6 @@ textarea.sidebar-input {
     height: auto;
 } 
 
-
-.leedz-grass {
-  position: absolute;
-  top: -50px;
-  left: 0;
-  width: 100%;
-  height: auto;
-  z-index: 4;
-  display: block;
-}
 
 .leedz-footer-links {
   position: relative;
@@ -238,7 +232,8 @@ textarea.sidebar-input {
   box-sizing: border-box;
 }
 
-.input-wrapper .input-arrow {
+.input-wrapper .input-arrow,
+.input-arrow {
   position: absolute;
   right: 8px;
   top: 50%;
@@ -251,7 +246,8 @@ textarea.sidebar-input {
   display: none; /* Hidden by default */
 }
 
-.input-wrapper .input-arrow:hover {
+.input-wrapper .input-arrow:hover,
+.input-arrow:hover {
   opacity: 1;
 }
 
@@ -393,8 +389,8 @@ input.invalid {
   cursor: pointer;
   font-size: var(--FONT_SIZE_LABEL);
   font-weight: 600;
-  width:40%;
-  max-width: 200px !important; /* Remove conflicting width declarations */
+  width: 40%;
+  max-width: 200px;
 }
 
 #saveMeBtn:hover,
@@ -402,16 +398,7 @@ input.invalid {
   background-color: darkgreen;
 }
 
-.file-upload-input {
-  position: absolute;
-  left: 0;
-  top: 0;
-  opacity: 0;
-  width: 100%;
-  height: 1px;
-  background-color: red;
-  cursor: pointer;
-}
+
 
 /* Unified notes textarea styling - fills available space */
 .notes-textarea {
@@ -641,22 +628,21 @@ div.tab.active {
   transform: scale(0.8);
 }
 
-/* File upload button styling */
-.file-upload-wrapper {
-  position: relative;
-  display: inline-block;
-  margin: 0;
-}
+
+
+
+
 
 .file-upload-button {
   background-color: var(--LEEDZ_GREEN);
   color: white;
-  padding: 8px 16px;
+  padding: 10px 20px;
   border: none;
   border-radius: 4px;
   cursor: pointer;
-  font-size: var(--FONT_SIZE_INPUT);
-  font-weight: 500;
+  font-size: 16px;
+  font-weight: 600;
+  text-align: center;
   margin: 0;
 }
 
@@ -664,13 +650,21 @@ div.tab.active {
   background-color: darkgreen;
 }
 
-/* Ensure hidden file input takes no space */
-.file-upload-input {
+/* Me tab file upload styling - consolidated */
+#me_tab_content .file-upload-wrapper {
+  position: relative;
+  display: inline-block;
+}
+
+#me_tab_content .file-upload-input {
   position: absolute;
-  left: 0;
-  top: 0;
-  opacity: 0;
-  width: 100%;
-  height: 100%;
-  cursor: pointer;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  clip-path: inset(50%);
+  white-space: nowrap;
+  border: 0;
 }

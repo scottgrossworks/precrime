@@ -37,7 +37,7 @@
         <img src="icons/arrows_white.png" class="button-icon" alt="reload parser"/>
       </span>
     </button>
-
+    &nbsp;
     <button id="clearBtn" class="clear-button" title="Clear all fields">
       <span>✕</span>
     </button>
@@ -56,20 +56,36 @@
   <main class="leedz-form-section">
     
     <!-- Me Tab - About Me Info -->
+
+      <!-- BUTTONS 
+      <div class="button-wrapper">
+        <label for="resume_upload" class="file-upload-label">Resume Upload</label>
+        <input type="file" class="file-upload-input" id="resume_upload" accept=".pdf" />
+
+        <button id="saveMeBtn" class="sidebar-button">Save</button>
+      </div>
+      </div>
+      -->
+
     <div id="me_tab_content" class="tab-content">
       <label for="me_notes">About Me</label>
       <div class="input-wrapper">
         <textarea id="me_notes" class="sidebar-input notes-textarea" placeholder="Capture information about yourself..." spellcheck="false"></textarea>
       </div>
 
-      <label>Resume Upload</label>
-      <div class="file-upload-wrapper">
-        <button class="file-upload-button">Choose .pdf</button>
-        <input type="file" class="file-upload-input" id="resume_upload" accept=".pdf">
-      </div>
+      <!-- BUTTONS (Me) -->
+      <div class="button-wrapper">
+        <div class="file-upload-wrapper">
+          <label for="resume_upload" class="sidebar-button file-upload-button">Choose .pdf</label>
+          <input type="file" class="file-upload-input" id="resume_upload" accept=".pdf,application/pdf" />
+        </div>
 
-      <button id="saveMeBtn" class="sidebar-button">Save</button>
+        <button id="saveMeBtn" class="sidebar-button">Save</button>
+      </div>
+    
     </div>
+
+
 
     <!-- Them Tab - Contact Ingestion -->
     <div id="them_tab_content" class="tab-content active">
