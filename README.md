@@ -10,7 +10,7 @@
 
 Pre-Crime is a deployment framework for agentic, contextual sales outreach. You give it a database of contacts. It enriches every record — scraping the web, Facebook, and RSS feeds for intelligence — then composes personalized outreach drafts tailored to each person based on what it finds.
 
-It is not a mass-emailer. It is not a template engine. It is an intelligence-first pipeline where every draft is earned by the data in the dossier.
+The Goal: Send the right email to the right person at the right time to make the sale.
 
 **The pipeline:**
 ```
