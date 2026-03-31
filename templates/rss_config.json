@@ -1,0 +1,62 @@
+{
+  "server": {
+    "port": 3001,
+    "logFile": "../logs/rss_server.log"
+  },
+  "processing": {
+    "checkInterval": "*/55 * * * *",
+    "maxItemsPerFeed": 20,
+    "relevanceThreshold": 15,
+    "matchThreshold": 0.5,
+    "earlyExitEnabled": true,
+    "earlyExitCount": 4,
+    "earlyExitMinScore": 80,
+    "maxArticlesPerFeed": 2,
+    "contentCharLimit": 400
+  },
+  "scoring": {
+    "globalKeywordWeight": 1,
+    "feedKeywordWeight": 3,
+    "maxKeywordMatches": 10,
+    "multiplier": 2,
+    "recencyBonus": 5,
+    "fullContentBonus": 2
+  },
+  "keywords": {
+    "global": [
+      "announcement",
+      "trend",
+      "study",
+      "research",
+      "report",
+      "policy",
+      "funding",
+      "hiring",
+      "shortage",
+      "mandate",
+      "deadline",
+      "survey",
+      "data",
+      "growth",
+      "decline"
+    ]
+  },
+  "blacklist": [
+    "sports scores",
+    "college rankings",
+    "SAT prep",
+    "test prep",
+    "homecoming",
+    "prom",
+    "graduation ceremony",
+    "alumni newsletter"
+  ],
+  "feeds": [
+    {
+      "url": "https://www.reddit.com/r/news/.rss",
+      "name": "Reddit News (baseline)",
+      "category": "general",
+      "keywords": ["policy", "funding", "regulation", "industry", "business", "announcement"]
+    }
+  ]
+}

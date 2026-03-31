@@ -1,0 +1,42 @@
+# Dependencies
+node_modules/
+DEV/marks/venv/
+DEV/marks/__pycache__/
+
+# Separate git repos — not tracked here
+TMP/DEV/
+TMP/LOCAL/
+TMP/SCRAPERS/
+
+# Environment / secrets
+.env
+*.env.*
+the-leedz-bf438f44eef5.json
+
+# Databases (live data, not source)
+*.sqlite
+*.sqlite.backup
+# Keep the empty schema template
+!data/template.sqlite
+
+# Logs
+*.log
+logs/
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+
+# Claude Code local settings
+.claude/
+
+# Binary installers
+*.exe
+*.msi
+*.dmg
+*.pkg
+
+# OS
+.DS_Store
+Thumbs.db

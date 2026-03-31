@@ -1,0 +1,14 @@
+{
+  "name": "precrime-engine",
+  "version": "1.0.0",
+  "description": "Pre-Crime: Generic agentic sales enrichment deployment engine",
+  "main": "deploy.js",
+  "scripts": {
+    "deploy": "node deploy.js"
+  },
+  "dependencies": {},
+  "engines": {
+    "node": ">=18.0.0"
+  },
+  "notes": "No npm dependencies required for deploy.js — uses Node.js built-ins only. The deployed workspace's MCP server requires @prisma/client, installed via the server/ directory."
+}

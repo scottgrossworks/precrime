@@ -1,0 +1,142 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>The Leedz</title>
+
+  <link rel="stylesheet" href="css/globals.css" />
+  <link rel="stylesheet" href="css/leedz_layout.css" />
+
+  <!-- load STATE -->
+  <script src="js/state.js"></script>
+
+  <!-- Load parser scripts first -->
+  <script src="js/parser.js"></script>
+  <script src="js/linkedin_parser.js"></script>
+  
+  <!-- Then load the main sidebar script -->
+  <script src="js/http_utils.js"></script>
+  <script src="js/sidebar.js"></script>
+
+
+</head>
+
+
+<body class="leedz-sidebar">
+
+<!-- Header -->
+  <header class="leedz-header">
+
+    <img src="icons/logo_black.png" alt="The Leedz" class="leedz-logo"/>
+
+  <div class="buttons-container">
+
+    <button id="reloadBtn" class="reload-button" title="Reload the parser">
+      <span>
+        <img src="icons/arrows_white.png" class="button-icon" alt="reload parser"/>
+      </span>
+    </button>
+    &nbsp;
+    <button id="clearBtn" class="clear-button" title="Clear all fields">
+      <span>✕</span>
+    </button>
+  </div>
+  </header>
+
+
+
+  <!-- Tab Navigation -->
+  <div id="tabs">
+    <div id="me_tab" class="tab behind">Me</div>
+    <div id="them_tab" class="tab active">Them</div>
+    <div id="why_tab" class="tab behind">Why</div>
+  </div>
+
+  <main class="leedz-form-section">
+    
+    <!-- Me Tab - About Me Info -->
+
+
+    <div id="me_tab_content" class="tab-content">
+      <label for="me_notes">About Me</label>
+      <div class="input-wrapper">
+        <textarea id="me_notes" class="sidebar-input notes-textarea" placeholder="Capture information about yourself..." spellcheck="false"></textarea>
+      </div>
+
+      <!-- BUTTONS (Me) -->
+      <div class="button-wrapper">
+        <div class="file-upload-wrapper">
+          <label for="resume_upload" class="sidebar-button file-upload-button">Choose .pdf</label>
+          <input type="file" class="file-upload-input" id="resume_upload" accept=".pdf,application/pdf" />
+        </div>
+
+        <button id="saveMeBtn" class="sidebar-button">Save</button>
+      </div>
+    
+    </div>
+
+
+
+    <!-- Them Tab - Contact Ingestion -->
+    <div id="them_tab_content" class="tab-content active">
+      <label for="name">Name</label>
+      <input type="text" class="sidebar-input" id="name"/>
+
+      <label for="email">Email</label> 
+      <div class="input-wrapper">
+        <input type="email" class="sidebar-input" id="email" />
+      </div>
+
+      <label for="notes">Notes</label>
+      <div class="input-wrapper">
+        <textarea id="contact_notes" class="sidebar-input notes-textarea" spellcheck="false"
+        placeholder="Capture notes about this contact and their interests..."></textarea>
+      </div>
+
+      <!-- BUTTONS -->
+      <div class="button-wrapper">
+        <button id="hasRepliedBtn" class="sidebar-button">
+          <img src="icons/check.svg" id="check-icon" alt="✓"/>
+        </button>
+       
+        <button id="outreachBtn" class="sidebar-button">
+          <span class="outreach-count">0</span>
+        </button>
+
+        <button id="saveBtn" class="sidebar-button"> Save </button>
+      </div>
+    </div>
+
+    <!-- Why Tab - Trigger Events -->
+    <div id="why_tab_content" class="tab-content">
+      <label for="trigger_notes">Trigger Event</label>
+      <div class="input-wrapper">
+        <textarea id="trigger_notes" class="sidebar-input notes-textarea" placeholder="Capture trigger events from websites, emails, or other sources..." spellcheck="false"></textarea>
+      </div>
+
+      <div class="button-wrapper">
+        <button id="saveWhyBtn" class="sidebar-button"> Save </button>
+      </div>
+    </div>
+
+  </main>
+
+  <footer class="leedz-footer">
+    
+ <footer class="leedz-footer">
+    <img src="icons/grass.png" alt="grass" class="leedz-grass"/>
+
+    <div id="debug-output" style="z-index:999;font-family: Arial; font-size: 11px; color: white; padding: 6px; overflow-y: auto; height: 80px;"></div>
+    
+        <!--
+    <ul class="leedz-footer-links">
+      <li><a href="/about">About the Leedz</a></li>
+      <li><a href="/contact">Contact Us</a></li>
+    </ul>
+    -->
+
+  </footer>
+
+</body>
+</html>

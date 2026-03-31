@@ -1,0 +1,229 @@
+{
+  "_comment": "Pre-Crime Deployment Manifest — copy this file, fill it in, then run: node deploy.js --manifest your-manifest.json",
+
+  "deployment": {
+    "name": "MyProject",
+    "version": "1.0",
+    "rootDir": "C:\\Users\\Scott\\Desktop\\WKG\\MYPROJECT",
+    "dbFile": "data/myproject.sqlite"
+  },
+
+  "seller": {
+    "name": "Your Name",
+    "company": "Your Company Name",
+    "email": "you@yourcompany.com",
+    "website": "https://yourwebsite.com",
+    "phone": ""
+  },
+
+  "product": {
+    "name": "Name of what you are selling",
+    "description": "2-3 sentence description of the product or service. What it does. Who it's for. Why it's valuable.",
+    "differentiators": [
+      "What makes you different from competitors — be specific",
+      "A second differentiator",
+      "A third differentiator (optional)"
+    ],
+    "geography": "Cities/regions you serve — e.g., 'Los Angeles metro area'",
+    "pricing": "e.g., '$175/hour, one-hour deposit to hold date'"
+  },
+
+  "audience": {
+    "segments": [
+      {
+        "id": "segment_one",
+        "label": "Human-readable segment name",
+        "targetRoles": [
+          "Job title of the decision-maker",
+          "Another decision-maker title"
+        ],
+        "events": [
+          "What occasion or need creates a purchase decision",
+          "Another trigger event"
+        ],
+        "seasonalWindows": [
+          {
+            "name": "Season or buying period name",
+            "months": [1, 2, 3],
+            "event_months": [4, 5],
+            "lead_weeks": 8
+          }
+        ]
+      },
+      {
+        "id": "segment_two",
+        "label": "Second segment (delete if not needed)",
+        "targetRoles": ["Role title"],
+        "events": ["trigger event"],
+        "seasonalWindows": []
+      }
+    ]
+  },
+
+  "relevanceSignals": {
+    "high": [
+      "phrase or keyword that strongly signals buying intent",
+      "another high-signal phrase",
+      "e.g. 'looking for entertainment' or 'prom' or 'holiday party'"
+    ],
+    "medium": [
+      "phrase that signals relevance but not urgency",
+      "e.g. 'event planning' or 'team building'"
+    ],
+    "timing": [
+      "phrase that signals an event is being planned",
+      "e.g. 'save the date' or 'mark your calendars' or 'annual'"
+    ],
+    "not": [
+      "Topic or content type that is NOT relevant",
+      "e.g. 'college admissions' or 'sports scores'"
+    ]
+  },
+
+  "factletTopics": [
+    "Broad industry or audience topic worth tracking in RSS feeds",
+    "e.g. 'corporate event planning trends' or 'student mental health policy'"
+  ],
+
+  "factletNotTopics": [
+    "Topics that are NOT worth factleting",
+    "e.g. 'individual school sports results' or 'college admissions'"
+  ],
+
+  "warmthScoring": {
+    "categories": [
+      {
+        "name": "Contact Quality",
+        "max": 2,
+        "criteria": {
+          "0": "No contact found or no email",
+          "1": "Generic inbox (info@, office@) or role unclear",
+          "2": "Named decision-maker with direct personal email"
+        }
+      },
+      {
+        "name": "Buying Signal",
+        "max": 2,
+        "criteria": {
+          "0": "No evidence of buying need",
+          "1": "Historical evidence (past event, past purchase pattern)",
+          "2": "Active buying signal (job posting, announcement, stated need)"
+        }
+      },
+      {
+        "name": "Pain / Need Signal",
+        "max": 2,
+        "criteria": {
+          "0": "No pain signals found",
+          "1": "Indirect/inferred pain (sector pressure, typical challenges for this org type)",
+          "2": "Direct/observed pain (stated problem, visible gap, complaint, urgent deadline)"
+        }
+      },
+      {
+        "name": "Intel Depth",
+        "max": 1,
+        "criteria": {
+          "0": "No usable intel found (no website, no social, no news)",
+          "1": "Scraped something useful (org profile, recent activity, decision-maker context)"
+        }
+      },
+      {
+        "name": "Specificity",
+        "max": 1,
+        "criteria": {
+          "0": "Only generic info (org name, address) — no differentiating facts",
+          "1": "At least one fact unique to THIS client (named event, specific statement, recent news)"
+        }
+      },
+      {
+        "name": "Draft Hook Available",
+        "max": 1,
+        "criteria": {
+          "0": "Nothing specific enough to open an email with",
+          "1": "Clear, specific hook exists (event, pain point, quote, timing)"
+        }
+      },
+      {
+        "name": "Additional Source",
+        "max": 1,
+        "criteria": {
+          "0": "Only one source scraped",
+          "1": "At least two independent sources (website + social, website + news, etc.)"
+        }
+      }
+    ],
+    "hardGates": [
+      "No email at all → warmthScore = 0, draftStatus = brewing, do not compose",
+      "Client outside service geography → warmthScore = 0, mark brewing, note as OUT_OF_GEOGRAPHY",
+      "Score < 5 → draftStatus = brewing always"
+    ]
+  },
+
+  "evaluatorCriteria": [
+    {
+      "name": "Specificity",
+      "description": "Does the draft reference something specific to THIS client — not 'organizations like yours'?",
+      "passExample": "References a named event, stated problem, specific initiative, or recent action unique to them",
+      "failExample": "'Companies like yours often face...' / 'As a [role type], you probably deal with...'"
+    },
+    {
+      "name": "Recency",
+      "description": "Does the draft reference something from the past 2 years?",
+      "passExample": "References a data point from 2024 or later — post, job listing, news, announcement",
+      "failExample": "Only references static permanent facts with no timely hook"
+    },
+    {
+      "name": "Pain-to-Product Bridge",
+      "description": "Does the draft connect THEIR situation to the product in one clear sentence?",
+      "passExample": "One sentence that links their specific pain to a specific product capability",
+      "failExample": "Lists product features without connecting to their situation OR describes their pain without the bridge"
+    },
+    {
+      "name": "Brevity",
+      "description": "Under the word limit. Every sentence earns its place.",
+      "passExample": "Tight, punchy, nothing wasted",
+      "failExample": "Over limit, or contains any filler phrase from the forbidden list"
+    },
+    {
+      "name": "Reply Test",
+      "description": "Would a busy decision-maker reply to this?",
+      "passExample": "Earns 5 more seconds. They might forward it to a colleague.",
+      "failExample": "Finger on delete by sentence two"
+    }
+  ],
+
+  "outreachRules": {
+    "maxWords": 150,
+    "tone": "confident, direct, human — sounds like a person who did their homework",
+    "openWith": "Lead with THEIR world — their event, their problem, their situation. Never with your name or product name.",
+    "closeWith": "Close with a command, not a hope. 'Let's set up a call' not 'I hope to hear from you'",
+    "forbidden": [
+      "I hope this finds you well",
+      "I'm reaching out because",
+      "I would love the opportunity",
+      "Please don't hesitate",
+      "At your earliest convenience",
+      "My name is [as opening sentence]"
+    ]
+  },
+
+  "rssConfig": {
+    "additionalKeywords": [
+      "keyword relevant to your audience",
+      "another keyword"
+    ],
+    "feeds": [
+      {
+        "url": "https://example-feed.com/rss",
+        "name": "Feed Display Name",
+        "category": "category_label",
+        "keywords": ["keyword1", "keyword2", "keyword3"]
+      }
+    ]
+  },
+
+  "fbSources": [
+    "https://www.facebook.com/YourFirstPage/",
+    "https://www.facebook.com/YourSecondPage/"
+  ]
+}

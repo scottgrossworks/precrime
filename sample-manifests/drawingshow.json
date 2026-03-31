@@ -1,0 +1,268 @@
+{
+  "_comment": "Pre-Crime manifest for That Drawing Show with Scott Gross — caricature artist, Los Angeles",
+
+  "deployment": {
+    "name": "DrawingShow",
+    "version": "1.0",
+    "rootDir": "C:\\Users\\Scott\\Desktop\\WKG\\DRAWINGSHOW",
+    "dbFile": "data/drawingshow.sqlite"
+  },
+
+  "seller": {
+    "name": "Scott Gross",
+    "company": "That Drawing Show",
+    "email": "scott@scottgross.works",
+    "website": "https://scottgross.works/drawingshow",
+    "phone": ""
+  },
+
+  "product": {
+    "name": "Party Caricatures & Coloring Party Entertainment",
+    "description": "Live caricature and coloring party entertainment for LA-area events. Former Warner Bros./DC Comics artist. $175/hour caricatures (12-15 faces/hour), $200/hour coloring parties. Full setup provided — chair, lighting, supplies. Custom-branded event paper available.",
+    "differentiators": [
+      "Former Warner Bros. / DC Comics artist — a legitimate pro credential that guests recognize",
+      "12-15 faces per hour — high-throughput quality work, no long guest lines",
+      "Complete self-contained setup — zero burden on event host, no rider requirements",
+      "Custom paper with event branding — guests take home a named keepsake, not a generic party favor",
+      "Accepts all payment types (cash, card, Venmo, PayPal, Zelle)"
+    ],
+    "geography": "Los Angeles metro — San Fernando Valley, Inland Empire, Pasadena, Burbank, Glendale, Long Beach, Santa Monica, Torrance",
+    "pricing": "$175/hour caricatures, $200/hour coloring parties. One-hour deposit to hold date. Full payment on completion."
+  },
+
+  "audience": {
+    "segments": [
+      {
+        "id": "schools",
+        "label": "K-12 Schools",
+        "targetRoles": ["ASB Advisor", "Student Activities Director", "Principal", "PTA President", "Activities Coordinator"],
+        "events": ["prom", "spring formal", "homecoming", "fall carnival", "Halloween fair", "spring fair", "graduation party", "field day"],
+        "seasonalWindows": [
+          { "name": "Prom Season", "months": [1,2,3,4], "event_months": [4,5,6], "lead_weeks": 8 },
+          { "name": "Halloween Carnival", "months": [8,9,10], "event_months": [10], "lead_weeks": 6 },
+          { "name": "Spring Fair", "months": [2,3,4], "event_months": [4,5], "lead_weeks": 6 }
+        ]
+      },
+      {
+        "id": "corporate",
+        "label": "Corporate Events",
+        "targetRoles": ["HR Manager", "Office Manager", "Event Coordinator", "Marketing Manager", "Executive Assistant"],
+        "events": ["holiday party", "team building", "company milestone", "product launch party", "annual gala"],
+        "seasonalWindows": [
+          { "name": "Holiday Season", "months": [10,11], "event_months": [11,12], "lead_weeks": 8 }
+        ]
+      },
+      {
+        "id": "community",
+        "label": "Community Organizations",
+        "targetRoles": ["Event Chair", "Community Manager", "HOA President", "Recreation Director", "Volunteer Coordinator"],
+        "events": ["community fair", "block party", "charity gala", "4th of July", "summer picnic"],
+        "seasonalWindows": [
+          { "name": "Summer Events", "months": [4,5,6], "event_months": [6,7,8], "lead_weeks": 6 }
+        ]
+      },
+      {
+        "id": "religious",
+        "label": "Religious Organizations",
+        "targetRoles": ["Event Chair", "Youth Director", "Religious School Director", "Executive Director"],
+        "events": ["holiday party", "Purim carnival", "Chanukah party", "Easter egg hunt", "Cinco de Mayo festival"],
+        "seasonalWindows": [
+          { "name": "Fall Holidays", "months": [9,10,11], "event_months": [10,11,12], "lead_weeks": 4 }
+        ]
+      }
+    ]
+  },
+
+  "relevanceSignals": {
+    "high": [
+      "prom", "spring formal", "homecoming", "fall carnival", "Halloween party",
+      "holiday party", "office party", "company party", "end of year celebration",
+      "caricature", "live artist", "entertainment for guests", "looking for entertainment",
+      "booking entertainment", "save the date", "community fair", "school carnival"
+    ],
+    "medium": [
+      "event planning", "party planning", "team building", "looking for vendors",
+      "activities for guests", "fun for all ages", "interactive entertainment",
+      "annual event", "block party", "community celebration"
+    ],
+    "timing": [
+      "save the date", "mark your calendars", "coming up", "planning our",
+      "next month's", "annual", "this spring", "this fall", "this December",
+      "event registration open", "tickets available"
+    ],
+    "not": [
+      "college admissions", "sports scores", "academic performance",
+      "curriculum", "test scores", "individual student achievements",
+      "political news unrelated to events", "weather unless affecting events"
+    ]
+  },
+
+  "factletTopics": [
+    "Corporate event planning trends (return-to-office, in-person events)",
+    "School event funding (budget cuts affecting ASB/activities)",
+    "Entertainment industry trends in LA",
+    "Experiential marketing and live event trends",
+    "Post-pandemic in-person event demand statistics"
+  ],
+
+  "factletNotTopics": [
+    "Individual school academic results",
+    "Sports results",
+    "General business news unrelated to events or entertainment",
+    "Political content unless directly affecting event budgets"
+  ],
+
+  "warmthScoring": {
+    "categories": [
+      {
+        "name": "Contact Quality",
+        "max": 2,
+        "criteria": {
+          "0": "No contact found or no email",
+          "1": "Generic inbox (info@, events@) or role unclear",
+          "2": "Named event decision-maker (ASB advisor, HR manager, event chair) with direct email"
+        }
+      },
+      {
+        "name": "Timing Signal",
+        "max": 2,
+        "criteria": {
+          "0": "Off-season, no event signals",
+          "1": "Planning season is active (within 8-week lead window for their segment)",
+          "2": "Specific upcoming event identified with date OR event explicitly announced publicly"
+        }
+      },
+      {
+        "name": "Event Signal",
+        "max": 2,
+        "criteria": {
+          "0": "No evidence they run events",
+          "1": "Historical event evidence (past year recap, past Eventbrite, venue relationship)",
+          "2": "Active planning signal (job posting for event help, announcement, registration open)"
+        }
+      },
+      {
+        "name": "Facebook / Social",
+        "max": 1,
+        "criteria": {
+          "0": "Page not found or no content",
+          "1": "Found and scraped — recent activity visible"
+        }
+      },
+      {
+        "name": "Website Intel",
+        "max": 1,
+        "criteria": {
+          "0": "No usable web presence found",
+          "1": "Scraped something useful (staff, events page, mission, venue capacity)"
+        }
+      },
+      {
+        "name": "Org-Specific Fact",
+        "max": 1,
+        "criteria": {
+          "0": "Only generic info (org name, address)",
+          "1": "At least one specific fact (event name, date, attendance, past entertainment)"
+        }
+      },
+      {
+        "name": "Draft Hook",
+        "max": 1,
+        "criteria": {
+          "0": "Nothing specific enough to open an email with",
+          "1": "Clear season-specific or event-specific opener available"
+        }
+      }
+    ],
+    "hardGates": [
+      "No email at all → warmthScore = 0, draftStatus = brewing, do not compose",
+      "Client outside LA metro service area → warmthScore = 0, note as OUT_OF_GEOGRAPHY",
+      "Score < 5 → draftStatus = brewing always"
+    ]
+  },
+
+  "evaluatorCriteria": [
+    {
+      "name": "Specificity",
+      "description": "Does the draft reference their actual event or organization — not 'events like yours'?",
+      "passExample": "'Your spring carnival is coming up in April...' or 'I saw you're planning your annual holiday party...'",
+      "failExample": "'Many schools love having caricature artists at their events...'"
+    },
+    {
+      "name": "Timing",
+      "description": "Does the draft land during an active planning window? Is there booking urgency?",
+      "passExample": "'Prom season books fast — most weekend dates in April and May are already claimed.'",
+      "failExample": "Email sent in July about prom. Email with no timing signal at all."
+    },
+    {
+      "name": "Value Bridge",
+      "description": "Does the draft connect their event need to Scott's specific offer in one sentence?",
+      "passExample": "'12-15 faces an hour, full setup, custom paper with your school crest — guests take home something.'",
+      "failExample": "'I'm a professional caricature artist available for hire.'"
+    },
+    {
+      "name": "Brevity",
+      "description": "Under 100 words. Every sentence earns its place. Tighter than a SaaS cold email.",
+      "passExample": "Reads in 8 seconds. Nothing wasted.",
+      "failExample": "Over 100 words. Or contains any forbidden phrase."
+    },
+    {
+      "name": "Reply Test",
+      "description": "Would a busy event planner forward this to their principal or boss?",
+      "passExample": "Earns a calendar check. They might forward it with 'thoughts?'",
+      "failExample": "Finger on delete by sentence two."
+    }
+  ],
+
+  "outreachRules": {
+    "maxWords": 100,
+    "tone": "casual, confident, concrete — sounds like a working professional, not a vendor",
+    "openWith": "Their event name or season. Never Scott's name or credential as the first sentence.",
+    "closeWith": "Booking urgency — 'Dates in [month] go fast — happy to hold one for you.'",
+    "forbidden": [
+      "I hope this finds you well",
+      "I'm reaching out because",
+      "I would love the opportunity",
+      "Please don't hesitate",
+      "At your earliest convenience",
+      "My name is [as opening sentence]",
+      "I am a caricature artist [as opening sentence]"
+    ]
+  },
+
+  "rssConfig": {
+    "additionalKeywords": [
+      "caricature", "event entertainment", "party entertainment", "live artist",
+      "prom", "homecoming", "spring formal", "school carnival", "Halloween event",
+      "holiday party", "office party", "corporate event", "team building",
+      "community fair", "block party", "entertainment vendor", "ASB",
+      "student activities", "event coordinator", "event planner"
+    ],
+    "feeds": [
+      {
+        "url": "https://www.bizbash.com/feed",
+        "name": "BizBash Event Industry",
+        "category": "events",
+        "keywords": ["corporate event", "party entertainment", "event planning", "Los Angeles", "live artist", "experiential"]
+      },
+      {
+        "url": "https://www.reddit.com/r/LosAngeles/.rss",
+        "name": "Reddit r/LosAngeles",
+        "category": "community",
+        "keywords": ["event", "party", "entertainment", "carnival", "community event", "block party", "fun"]
+      },
+      {
+        "url": "https://www.lausd.org/site/RSS.aspx?DomainID=4&ModuleInstanceID=4466&PageID=1&PMIID=32975",
+        "name": "LAUSD Newsroom",
+        "category": "schools",
+        "keywords": ["event", "carnival", "prom", "school celebration", "student activities", "ASB"]
+      }
+    ]
+  },
+
+  "fbSources": [
+    "https://www.facebook.com/LAUSD/",
+    "https://www.facebook.com/BizBash/",
+    "https://www.facebook.com/SpecialEventsMedia/"
+  ]
+}

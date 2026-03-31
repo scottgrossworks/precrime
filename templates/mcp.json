@@ -1,0 +1,19 @@
+{
+  "mcpServers": {
+    "leedz-mcp": {
+      "command": "node",
+      "args": ["server/mcp/mcp_server.js"],
+      "env": {}
+    },
+    "bloomleedz-rss": {
+      "command": "node",
+      "args": ["rss/rss-scorer-mcp/index.js"],
+      "env": {}
+    },
+    "gmail-sender": {
+      "command": "node",
+      "args": ["PATH_TO_GMAIL_SENDER_REPLACE_ME"],
+      "env": {}
+    }
+  }
+}

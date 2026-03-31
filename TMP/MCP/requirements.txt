@@ -1,0 +1,4 @@
+# Python dependencies for MCP example
+arxiv
+python-dotenv
+anthropic

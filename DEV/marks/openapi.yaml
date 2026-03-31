@@ -1,0 +1,60 @@
+swagger: '2.0'
+info:
+  title: Precrime API
+  description: Public API for mark creation and health checks.
+  version: 1.0.0
+
+schemes:
+  - https
+
+# This will be auto-filled by GCP during API Gateway deployment
+host: YOUR_GATEWAY_ID-HASH.REGION.gateway.dev
+
+x-google-backend:
+  address: https://REPLACE-ME.app
+  protocol: h2
+
+paths:
+  /create:
+    post:
+      summary: Create a mark entry
+      operationId: createMark
+      consumes:
+        - application/json
+      produces:
+        - application/json
+      parameters:
+        - in: body
+          name: body
+          required: true
+          schema:
+            type: object
+            properties:
+              name:
+                type: string
+              email:
+                type: string
+            required:
+              - name
+              - email
+      responses:
+        '200':
+          description: Mark created
+        '400':
+          description: Invalid input
+      security:
+        - api_key: []
+
+  /ping:
+    get:
+      summary: Health check
+      operationId: ping
+      responses:
+        '200':
+          description: Service is up
+
+securityDefinitions:
+  api_key:
+    type: "apiKey"
+    name: "x-api-key"
+    in: "header"

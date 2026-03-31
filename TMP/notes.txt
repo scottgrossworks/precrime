@@ -1,0 +1,85 @@
+ROLE:  You are a newspaper editor 
+TASK: (1) summarize this webpage contents in 2-4 fact-filled sentences and called a 'Story'.  (2) Generate a short 4-5 word 'Title' for this story like a newspaper headline.  (3) Using the template below, write a critial editorial 'Take' on the story, providing a point of view analyzing one or more aspects of the story in the context of current events, the economy, or the industry under discussion.  (4) Generalize a 'Category' for this story.  (5) DO NOT use 'three million dollars' use '$3M'.  Do not use '3 billion dollars' use '$3B'  (6) OUTPUT the results in JSON format following the correct examples below:
+
+{
+  "url": "https://medium.com/data-science-in-your-pocket/byte-latent-transformer-improved-transformer-architecture-for-llms-f1589e15dd21",
+  "title": "Token-Free AI",
+  "summary": "Meta researchers have introduced the Byte Latent Transformer (BLT), a new LLM architecture that eliminates tokenization. Instead of breaking text into fixed tokens, BLT processes raw bytes directly and groups them into dynamic *patches* based on entropy, the unpredictability of the next byte. This design cuts inference FLOPs by up to 50% and reduces training energy use by 20–30%.",
+  "category": "AI",
+  "take": "The emergence of new AI architectures like HRM, Byte-Latent Transformers, and open-source LLMs capable of 100B params will drive down costs and increase ROIC. Once edge AI like laptops and wearables are as capable as today’s data centers, we’ll see a 10–100x improvement in cost per token. That accessibility will unlock more use cases for entrepreneurs and small-businesses.",
+  "tags": ["Meta", "BLT", "AI", "HRM"]
+},
+
+{
+  "url": "https://nypost.com/2025/08/22/business/nvidia-halts-china-h20-chip-production-after-beijing-backlash/",
+  "title": "State Control For All",
+  "summary": "On August 22, 2025, Nvidia halted production of its H20 AI chip after Beijing urged Chinese firms to abandon U.S. hardware over alleged security risks. The chip, a scaled-down processor designed to bypass U.S. export bans, had already cost Nvidia a $5.5B write-off after earlier restrictions. Nvidia's China market was worth $17B last year.",
+  "category": "Markets",
+  "take": "25% of Nvidia's revenue comes from China, Intel (30%), Tesla (20-25%), and Apple (17-20%). Chinese buyers and corporate/government contracts are a strategic lever Beijing can pull against U.S. firms. Meanwhile, Trump is forcing chipmakers to remit 15% of China sales — and threatening to take a 10% equity stake in Intel. The China-risk is not just supply-side, and it's not just China.",
+  "tags": ["Trump", "Nvidia", "Intel", "China", "Tesla", "Apple"]
+},
+
+
+
+
+{
+  "url":"https://nypost.com/2025/08/22/world-news/ukraine-obliterates-critical-part-of-russias-druzhba-oil-pipeline/",
+  "title": "Euros Get Cold Feet",
+  "summary": "On August 22, 2025, Ukraine launched a HIMARS rocket and drone attack against Russia's Unecha oil pumping station, a critical node of the Druzhba oil pipeline, which carries crude to Hungary and Slovakia. The foreign ministers of both countries sent a letter to Europe's Executive Commission stating “without this pipeline, the safe supply of our countries is simply not possible.” Reciprocal attacks by Russia on Ukraine’s energy infrastructure continue, contributing to fuel shortages on both sides.",
+  "category": "Warfare",
+  "take": "Three years into the war, Hungary and Slovakia admit they haven't weaned themselves off Russian oil. Clearly, they never expected Ukraine to fight back. Hitting Druzhba shows that Kiev is ready and able to fight on. If Zelenski goes to the wall and *doesn't* make a deal, his people will back him. In 3 months Putin's one-time EU allies will lean into EU sanctions against him, once they are shivering.",
+  "tags": ["Ukraine", "Russia", "HIMARS", "drones", "oil"]
+},
+
+{
+  "title": "Euros Get Cold Feet",
+  "summary": "On August 22, 2025, Ukraine launched a HIMARS rocket and drone attack against Russia's Unecha oil pumping station, a critical node of the Druzhba oil pipeline, which carries crude to Hungary and Slovakia. The foreign ministers of both countries sent a letter to Europe's Executive Commission stating “without this pipeline, the safe supply of our countries is simply not possible.” Reciprocal attacks by Russia on Ukraine’s energy infrastructure continue, contributing to fuel shortages on both sides.",
+  "category": "Warfare",
+  "take": "Three years into the war, Hungary and Slovakia admit they haven't weaned themselves off Russian oil. Clearly, they never expected Ukraine to fight back. Hitting Druzhba shows that Kiev is ready and able to fight on. If Zelenski goes to the wall and *doesn't* make a deal, his people will back him. In 3 months Putin's one-time EU allies will lean into EU sanctions against him, once they are shivering.",
+  "tags": ["Ukraine", "Russia", "HIMARS", "drones", "oil"]
+}
+
+{
+  "url": "https://www.bloomberg.com/news/articles/2025-08-22/nvidia-falls-after-data-center-revenue-misses-estimate",
+  "title": "Data-Centers Dip Nvidia",
+  "summary": "Nvidia’s Q3 data-center revenue fell short of analysts’ estimates, prompting a sell-off. 
+  The company still projected third-quarter revenue of about $54B, while announcing a $60B expansion 
+  of its share-buyback program. Sales of H20 chips to Chinese customers were suspended in Q2, 
+  adding further pressure on growth.",
+  "category": "Markets",
+  "take": "AI compute is moving from the cloud to the edges, like traditional compute did when the PC was born. 
+  The data-center numbers signal this shift in demand as the industry awaits the next AI wave.  Most companies can't monetize AI yet, 
+  and must keep it *on prem* when they do.  The China headline obscures the fact that its firms have already switched to domestic silicon.",
+  "tags": ["Nvidia", "China", "H20", "Chips"]
+}
+
+
+{
+  "url": "",
+  "title": "",
+  "summary": "",
+  "category": "",
+  "take": "",
+  "tags": ["", ""]
+}
+
+{
+"url": "https://www.nber.org/system/files/chapters/c15309/c15309.pdf",
+"title": "AI Agents Trigger Coasean Shift",
+"summary": "AI will drive a *Coasean Singularity* reducing transaction costs to 0 in digital markets like jobs, real estate, and freelancing.  Agents will do the search, due diligence, price comparison and neogtiations for the user.  New markets may emerge for agent-to-agent transcations, boosting efficiency, but congestion, spam and fraud require regulation.",
+"category": "AI",
+"take": "Caveat Emptor. Much of the economy and all Web 2.0 platforms run on monetizing friction.  Ad revenue comes from on-site scrolling and shopping.  Automated real estate will gut commissions for 3M US realtors. 60% of grocery purchases are impulse buys. Agents promise to fast-track decisions and eliminate the journey, but that's where the money is.",
+"tags": ["AI Agents", "Coase", "Markets", "Platforms"]
+}
+
+
+URL: https://www.nber.org/system/files/chapters/c15309/c15309.pdf
+
+Story: AI will drive a *Coasean Singularity* reducing transaction costs to 0 in digital markets like jobs, real estate, and freelancing.  Agents will do the search, due diligence, price comparison and neogtiations for the user.  New markets may emerge for agent-to-agent transcations, boosting efficiency, but congestion, spam and fraud require regulation.
+
+Gekko's Take: Caveat Emptor. Much of the economy and all Web 2.0 platforms run on monetizing friction.  Ad revenue comes from on-site scrolling and shopping.  Automated real estate will gut commissions for 3M US realtors. 60% of grocery purchases are impulse buys. Agents promise to fast-track decisions and eliminate the journey, but that's where the money is.
+
+------------------@----^^^^^^----@------------------
+It's Gekko's Birthday!
+Get the news and insights to become a player.
+Subscribe to the free newsletter: scottgross.works/gekko
