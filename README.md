@@ -121,7 +121,7 @@ When you run `deploy.js`, it creates this workspace:
 │   └── {name}.sqlite            ← Your deployment's database (copy of template.sqlite)
 ├── server/
 │   └── mcp/
-│       ├── mcp_server.js        ← COPY FROM BLOOMLEEDZ — not generated
+│       ├── mcp_server.js        ← Copied from PRECRIME source by deploy.js
 │       └── mcp_server_config.json ← DB path (generated)
 ├── rss/
 │   └── rss-scorer-mcp/
@@ -188,7 +188,7 @@ The `template.sqlite` has three tables:
 
 ### Prerequisites
 
-1. **BloomLeedz installed** — the MCP server and RSS scorer are shared infrastructure. They live in the BloomLeedz workspace and are referenced (or copied) into each deployment.
+1. **BloomLeedz installed** — the RSS scorer is shared infrastructure. The MCP server source is included in PRECRIME and copied automatically by `deploy.js`.
 2. **Claude Code desktop app** — for the enrichment workflow and Chrome bridge (for Facebook scraping).
 3. **Node.js ≥ 18** — for running deploy.js.
 4. **A contact database** — a SQLite file with the correct schema (or use `template.sqlite` as the base).

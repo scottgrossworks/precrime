@@ -204,7 +204,17 @@ const dirs = [
 dirs.forEach(mkdir);
 console.log('Directories created.');
 
-// 2. Copy template.sqlite → data/{name}.sqlite
+// 2. Copy the built-in PRECRIME MCP server source into the generated workspace
+const mcpSrc = path.join(PRECRIME, 'server', 'mcp', 'mcp_server.js');
+const mcpDst = path.join(outputDir, 'server', 'mcp', 'mcp_server.js');
+if (fs.existsSync(mcpSrc)) {
+  copyFile(mcpSrc, mcpDst);
+} else {
+  console.warn(`  ⚠ MCP server source missing: ${mcpSrc}`);
+  console.warn('    Copy server/mcp/mcp_server.js into the generated workspace manually.');
+}
+
+// 3. Copy template.sqlite → data/{name}.sqlite
 const dbFile    = (manifest.deployment.dbFile || `data/${(manifest.deployment.name||'project').toLowerCase()}.sqlite`);
 const dbDest    = path.join(outputDir, dbFile);
 const tmplDb    = path.join(DATA, 'template.sqlite');

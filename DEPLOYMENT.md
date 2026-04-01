@@ -9,11 +9,11 @@ After running `node deploy.js --manifest <your-manifest.json>`, complete every s
 
 ### 1. Copy Server Infrastructure from BloomLeedz
 
-The MCP server and RSS scorer are shared — copy them into the new workspace:
+The MCP server source is included in PRECRIME and is copied automatically by `deploy.js` into the generated workspace.
+
+Copy the RSS scorer into the new workspace if you are reusing BloomLeedz infrastructure:
 
 ```
-copy "C:\Users\Scott\Desktop\WKG\BLOOMLEEDZ\server\mcp\mcp_server.js"       "{rootDir}\server\mcp\"
-xcopy /E "C:\Users\Scott\Desktop\WKG\BLOOMLEEDZ\server\node_modules"         "{rootDir}\server\node_modules\"
 copy "C:\Users\Scott\Desktop\WKG\BLOOMLEEDZ\rss\rss-scorer-mcp\index.js"    "{rootDir}\rss\rss-scorer-mcp\"
 xcopy /E "C:\Users\Scott\Desktop\WKG\BLOOMLEEDZ\rss\rss-scorer-mcp\node_modules" "{rootDir}\rss\rss-scorer-mcp\node_modules\"
 ```
