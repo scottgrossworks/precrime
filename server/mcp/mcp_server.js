@@ -1,8 +1,10 @@
 /**
- * BLOOMLEEDZ - MCP SERVER (Direct Prisma)
+ * PRE-CRIME — MCP SERVER (Direct Prisma)
  *
- * JSON-RPC server for Claude Desktop. Queries bloomleedz.sqlite
+ * JSON-RPC server for Claude Desktop. Queries deployment SQLite
  * directly via PrismaClient. No HTTP server required.
+ *
+ * 15 tools: 11 original (client/factlet/config) + 4 booking tools
  *
  * @author Scott Gross
  * @version 2.0.0
@@ -295,8 +297,99 @@ function handleToolsList(id) {
                             llmProvider: { type: 'string' },
                             llmBaseUrl: { type: 'string' },
                             llmAnthropicVersion: { type: 'string' },
-                            llmMaxTokens: { type: 'number' }
+                            llmMaxTokens: { type: 'number' },
+                            activeEntities: { type: 'string', description: 'JSON array: ["client"] or ["client", "booking"]' },
+                            defaultTrade: { type: 'string', description: 'Default trade name (e.g., "DJ")' },
+                            marketplaceEnabled: { type: 'boolean' },
+                            leadCaptureEnabled: { type: 'boolean' },
+                            leedzEmail: { type: 'string', description: 'The Leedz marketplace account email' },
+                            leedzSession: { type: 'string', description: 'Pre-generated HS256 JWT for createLeed calls' }
                         }
+                    }
+                },
+                {
+                    name: 'create_booking',
+                    description: 'Create a Booking for a Client. If trade + startDate + (location OR zip) are all present, status auto-sets to "leed_ready".',
+                    inputSchema: {
+                        type: 'object',
+                        properties: {
+                            clientId: { type: 'string', description: 'Client ID (required)' },
+                            title: { type: 'string' },
+                            description: { type: 'string' },
+                            notes: { type: 'string' },
+                            location: { type: 'string' },
+                            startDate: { type: 'string', description: 'ISO datetime' },
+                            endDate: { type: 'string', description: 'ISO datetime' },
+                            startTime: { type: 'string' },
+                            endTime: { type: 'string' },
+                            duration: { type: 'number' },
+                            hourlyRate: { type: 'number' },
+                            flatRate: { type: 'number' },
+                            totalAmount: { type: 'number' },
+                            status: { type: 'string', description: 'new | leed_ready | taken | shared | expired' },
+                            source: { type: 'string', description: 'e.g., "reddit:r/weddingplanning"' },
+                            sourceUrl: { type: 'string' },
+                            trade: { type: 'string', description: 'Leedz trade name (e.g., "DJ")' },
+                            zip: { type: 'string' },
+                            leedPrice: { type: 'number', description: 'Price in cents for marketplace listing' }
+                        },
+                        required: ['clientId']
+                    }
+                },
+                {
+                    name: 'update_booking',
+                    description: 'Update a Booking record by ID',
+                    inputSchema: {
+                        type: 'object',
+                        properties: {
+                            id: { type: 'string', description: 'Booking ID (required)' },
+                            title: { type: 'string' },
+                            description: { type: 'string' },
+                            notes: { type: 'string' },
+                            location: { type: 'string' },
+                            startDate: { type: 'string', description: 'ISO datetime' },
+                            endDate: { type: 'string', description: 'ISO datetime' },
+                            startTime: { type: 'string' },
+                            endTime: { type: 'string' },
+                            duration: { type: 'number' },
+                            hourlyRate: { type: 'number' },
+                            flatRate: { type: 'number' },
+                            totalAmount: { type: 'number' },
+                            status: { type: 'string', description: 'new | leed_ready | taken | shared | expired' },
+                            source: { type: 'string' },
+                            sourceUrl: { type: 'string' },
+                            trade: { type: 'string' },
+                            zip: { type: 'string' },
+                            shared: { type: 'boolean' },
+                            sharedAt: { type: 'number', description: 'Epoch ms' },
+                            leedPrice: { type: 'number' },
+                            squarePaymentUrl: { type: 'string' },
+                            leedId: { type: 'string', description: 'The Leedz marketplace ID after posting' }
+                        },
+                        required: ['id']
+                    }
+                },
+                {
+                    name: 'get_bookings',
+                    description: 'Get Bookings, optionally filtered by status and/or trade',
+                    inputSchema: {
+                        type: 'object',
+                        properties: {
+                            status: { type: 'string', description: 'Filter by status: new, leed_ready, taken, shared, expired' },
+                            trade: { type: 'string', description: 'Filter by trade name' },
+                            limit: { type: 'number', description: 'Max results (default 50)' }
+                        }
+                    }
+                },
+                {
+                    name: 'get_client_bookings',
+                    description: 'Get all Bookings for a specific Client',
+                    inputSchema: {
+                        type: 'object',
+                        properties: {
+                            clientId: { type: 'string', description: 'Client ID (required)' }
+                        },
+                        required: ['clientId']
                     }
                 }
             ]
@@ -417,3 +510,291 @@ async function handleGetNewFactlets(id, params) {
     });
     return createSuccessResponse(id, JSON.stringify(factlets, null, 2));
 }
+
+async function handleDeleteFactlet(id, params) {
+    const factletId = params.arguments?.id;
+    if (!factletId) return createErrorResponse(id, -32602, 'Missing factlet ID');
+
+    await prisma.factlet.delete({ where: { id: factletId } });
+    return createSuccessResponse(id, `Factlet ${factletId} deleted`);
+}
+
+// Atomic fetch-and-mark: finds oldest-touched client, stamps lastQueueCheck=now,
+// returns the record. The stamp happens BEFORE return so concurrent agents cannot
+// claim the same record. Claude's stateless memory is never trusted as the cursor —
+// the DB timestamp IS the bookmark.
+async function handleGetNextClient(id, params) {
+    const args = params.arguments || {};
+    const where = {};
+    if (args.company)     where.company     = { contains: args.company };
+    if (args.name)        where.name        = { contains: args.name };
+    if (args.draftStatus) where.draftStatus = args.draftStatus;
+
+    // NULL lastQueueCheck sorts first in SQLite ASC — never-touched records come first
+    const client = await prisma.client.findFirst({
+        where,
+        orderBy: { lastQueueCheck: 'asc' }
+    });
+
+    if (!client) return createSuccessResponse(id, JSON.stringify(null));
+
+    // Stamp before returning — this is what prevents re-processing
+    const stamped = await prisma.client.update({
+        where: { id: client.id },
+        data: { lastQueueCheck: new Date() }
+    });
+
+    return createSuccessResponse(id, JSON.stringify(stamped, null, 2));
+}
+
+async function handleGetConfig(id, params) {
+    const cfg = await prisma.config.findFirst({ orderBy: { createdAt: 'desc' } });
+    return createSuccessResponse(id, JSON.stringify(cfg, null, 2));
+}
+
+// Reference: prisma_sqlite_db.js upsertConfig() lines 594-622
+async function handleUpdateConfig(id, params) {
+    const args = params.arguments || {};
+    const existing = await prisma.config.findFirst({ orderBy: { createdAt: 'desc' } });
+
+    let cfg;
+    if (existing) {
+        cfg = await prisma.config.update({ where: { id: existing.id }, data: args });
+    } else {
+        cfg = await prisma.config.create({ data: args });
+    }
+    return createSuccessResponse(id, JSON.stringify(cfg, null, 2));
+}
+
+// ============================================================================
+// BOOKING TOOL HANDLERS
+// ============================================================================
+
+async function handleCreateBooking(id, params) {
+    const args = params.arguments || {};
+    if (!args.clientId) return createErrorResponse(id, -32602, 'Missing clientId');
+
+    const data = { clientId: args.clientId };
+    const fields = [
+        'title', 'description', 'notes', 'location', 'startTime', 'endTime',
+        'source', 'sourceUrl', 'trade', 'zip', 'sharedTo', 'squarePaymentUrl', 'leedId'
+    ];
+    for (const f of fields) { if (args[f] !== undefined) data[f] = args[f]; }
+
+    // Numeric fields
+    if (args.duration !== undefined)   data.duration   = parseFloat(args.duration);
+    if (args.hourlyRate !== undefined)  data.hourlyRate  = parseFloat(args.hourlyRate);
+    if (args.flatRate !== undefined)    data.flatRate    = parseFloat(args.flatRate);
+    if (args.totalAmount !== undefined) data.totalAmount = parseFloat(args.totalAmount);
+    if (args.leedPrice !== undefined)   data.leedPrice   = parseInt(args.leedPrice, 10);
+
+    // Date fields
+    if (args.startDate) data.startDate = new Date(args.startDate);
+    if (args.endDate)   data.endDate   = new Date(args.endDate);
+
+    // Boolean
+    if (args.shared !== undefined) data.shared = !!args.shared;
+
+    // Status defaults to 'new' via schema — check Booking Action Criterion
+    if (args.status) {
+        data.status = args.status;
+    } else if (data.trade && data.startDate && (data.location || data.zip)) {
+        data.status = 'leed_ready';
+    }
+
+    const booking = await prisma.booking.create({ data });
+    return createSuccessResponse(id, JSON.stringify(booking, null, 2));
+}
+
+async function handleUpdateBooking(id, params) {
+    const args = params.arguments || {};
+    if (!args.id) return createErrorResponse(id, -32602, 'Missing booking ID');
+
+    const allowedFields = [
+        'title', 'description', 'notes', 'location', 'startTime', 'endTime',
+        'status', 'source', 'sourceUrl', 'trade', 'zip', 'sharedTo',
+        'squarePaymentUrl', 'leedId'
+    ];
+    const data = {};
+    for (const f of allowedFields) { if (args[f] !== undefined) data[f] = args[f]; }
+
+    if (args.duration !== undefined)   data.duration   = parseFloat(args.duration);
+    if (args.hourlyRate !== undefined)  data.hourlyRate  = parseFloat(args.hourlyRate);
+    if (args.flatRate !== undefined)    data.flatRate    = parseFloat(args.flatRate);
+    if (args.totalAmount !== undefined) data.totalAmount = parseFloat(args.totalAmount);
+    if (args.leedPrice !== undefined)   data.leedPrice   = parseInt(args.leedPrice, 10);
+    if (args.startDate) data.startDate = new Date(args.startDate);
+    if (args.endDate)   data.endDate   = new Date(args.endDate);
+    if (args.shared !== undefined) data.shared = !!args.shared;
+    if (args.sharedAt !== undefined) data.sharedAt = BigInt(args.sharedAt);
+
+    const booking = await prisma.booking.update({ where: { id: args.id }, data });
+    return createSuccessResponse(id, JSON.stringify(booking, null, 2));
+}
+
+async function handleGetBookings(id, params) {
+    const args = params.arguments || {};
+    const where = {};
+    if (args.status) where.status = args.status;
+    if (args.trade)  where.trade  = args.trade;
+    const limit = args.limit || 50;
+
+    const bookings = await prisma.booking.findMany({
+        where,
+        orderBy: { createdAt: 'desc' },
+        take: limit,
+        include: { client: true }
+    });
+    return createSuccessResponse(id, JSON.stringify(bookings, null, 2));
+}
+
+async function handleGetClientBookings(id, params) {
+    const clientId = params.arguments?.clientId;
+    if (!clientId) return createErrorResponse(id, -32602, 'Missing clientId');
+
+    const bookings = await prisma.booking.findMany({
+        where: { clientId },
+        orderBy: { createdAt: 'desc' }
+    });
+    return createSuccessResponse(id, JSON.stringify(bookings, null, 2));
+}
+
+// ==============================================================================
+// TOOL CALL ROUTER
+// ==============================================================================
+
+async function handleToolCall(id, params) {
+    try {
+        switch (params.name) {
+            case 'get_client':          return await handleGetClient(id, params);
+            case 'search_clients':      return await handleSearchClients(id, params);
+            case 'update_client':       return await handleUpdateClient(id, params);
+            case 'get_ready_drafts':    return await handleGetReadyDrafts(id, params);
+            case 'get_stats':           return await handleGetStats(id, params);
+            case 'create_factlet':      return await handleCreateFactlet(id, params);
+            case 'get_new_factlets':    return await handleGetNewFactlets(id, params);
+            case 'delete_factlet':      return await handleDeleteFactlet(id, params);
+            case 'get_next_client':     return await handleGetNextClient(id, params);
+            case 'get_config':          return await handleGetConfig(id, params);
+            case 'update_config':       return await handleUpdateConfig(id, params);
+            case 'create_booking':      return await handleCreateBooking(id, params);
+            case 'update_booking':      return await handleUpdateBooking(id, params);
+            case 'get_bookings':        return await handleGetBookings(id, params);
+            case 'get_client_bookings': return await handleGetClientBookings(id, params);
+            default:
+                return createErrorResponse(id, -32601, `Unknown tool: ${params.name}`);
+        }
+    } catch (error) {
+        logError(`Tool call error: ${error.message}`);
+        return createErrorResponse(id, -32603, `Error: ${error.message}`);
+    }
+}
+
+// ==============================================================================
+// REQUEST PROCESSING
+// ==============================================================================
+
+function handlePromptsList(id) {
+    logInfo('Handling prompts/list request');
+    return {
+        jsonrpc: '2.0',
+        id: id,
+        result: { prompts: [] }
+    };
+}
+
+function handleResourcesList(id) {
+    logInfo('Handling resources/list request');
+    return {
+        jsonrpc: '2.0',
+        id: id,
+        result: { resources: [] }
+    };
+}
+
+async function processJsonRpcRequest(request) {
+    const { id, method, params } = request;
+
+    switch (method) {
+        case 'initialize':
+            return handleInitialize(id);
+        case 'tools/list':
+            return handleToolsList(id);
+        case 'tools/call':
+            return await handleToolCall(id, params);
+        case 'prompts/list':
+            return handlePromptsList(id);
+        case 'resources/list':
+            return handleResourcesList(id);
+        case 'notifications/initialized':
+            return null;
+        default:
+            logWarn(`Unknown method: ${method}`);
+            return createErrorResponse(id, -32601, 'Method not found');
+    }
+}
+
+function isJsonRpcLine(line) {
+    const trimmed = line.trim();
+    return trimmed && looksLikeJson(trimmed);
+}
+
+function shouldRespondToParseError(line) {
+    return line.includes('"jsonrpc"') || line.includes('"method"');
+}
+
+async function handleInputLine(line) {
+    if (!isJsonRpcLine(line)) {
+        logDebug(`Ignoring non-JSON input: ${line.substring(0, 50)}...`);
+        return;
+    }
+
+    try {
+        const request = JSON.parse(line.trim());
+        const response = await processJsonRpcRequest(request);
+        if (response) {
+            sendJsonRpcResponse(response);
+        }
+    } catch (error) {
+        if (error instanceof SyntaxError) {
+            logWarn(`Invalid JSON received: ${line.substring(0, 100)}...`);
+            if (shouldRespondToParseError(line)) {
+                sendJsonRpcResponse(createErrorResponse('error', -32700, 'Parse error'));
+            }
+        } else {
+            logError(`Request processing error: ${error.message}`);
+            sendJsonRpcResponse(createErrorResponse('error', -32603, 'Internal error'));
+        }
+    }
+}
+
+// ==============================================================================
+// SERVER LIFECYCLE
+// ==============================================================================
+
+function startMcpServer() {
+    console.error(`[MCP] Starting Pre-Crime MCP server...`);
+    console.error(`[MCP] Database: ${dbPath}`);
+
+    logInfo('Starting Pre-Crime MCP server...');
+    logInfo(`Database: ${dbPath}`);
+
+    const rl = readline.createInterface({
+        input: process.stdin,
+        output: process.stdout,
+        terminal: false
+    });
+
+    rl.on('line', handleInputLine);
+    process.on('SIGINT', () => {
+        logInfo('Shutting down MCP server...');
+        prisma.$disconnect();
+        rl.close();
+        process.exit(0);
+    });
+
+    console.error(`[MCP] Server ready - listening for JSON-RPC requests...`);
+    logInfo('MCP server ready');
+}
+
+startMcpServer();

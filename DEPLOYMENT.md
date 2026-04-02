@@ -20,6 +20,12 @@ xcopy /E "C:\Users\Scott\Desktop\WKG\BLOOMLEEDZ\rss\rss-scorer-mcp\node_modules"
 
 `mcp_server_config.json` is already generated at `server/mcp/` pointing to the correct DB path.
 
+`server/.env` is already generated with `DATABASE_URL` pointing at the deployment's SQLite. Prisma reads this automatically — no manual export needed. If you need to run Prisma commands from a different shell, set it yourself:
+
+```powershell
+$env:DATABASE_URL = "file:C:/path/to/your/deployment/data/name.sqlite"
+```
+
 ---
 
 ### 2. Set Up Config via Claude
@@ -32,7 +38,42 @@ update_config({ companyName: "...", companyEmail: "...", businessDescription: ".
 
 ---
 
-### 3. Fill In `DOCS/VALUE_PROP.md`
+### 3. Connect to The Leedz Marketplace
+
+This step enables Pre-Crime to post `leed_ready` bookings to theleedz.com via the MCP `createLeed` tool.
+
+**a) Get your Leedz email.** This is the email you use (or will use) on theleedz.com. If you don't have an account yet, that's fine — `addLeed` auto-creates a stub user on first post.
+
+**b) Generate a session JWT.** Run this once from any Python environment:
+
+```python
+import jwt, time
+
+JWT_SECRET = '648373eeea08d422032db0d1e61a1bc096fe08dd2729ce611092c7a1af15d09c'
+
+token = jwt.encode(
+    {
+        'email': 'YOUR_LEEDZ_EMAIL_HERE',
+        'type': 'session',
+        'exp': int(time.time()) + (365 * 24 * 3600)
+    },
+    JWT_SECRET,
+    algorithm='HS256'
+)
+print(token)
+```
+
+**c) Store both in Config:**
+
+```
+update_config({ leedzEmail: "your@email.com", leedzSession: "<paste token>" })
+```
+
+The enrichment agent reads these when posting bookings. No browser login required — the JWT is self-contained.
+
+---
+
+### 4. Fill In `DOCS/VALUE_PROP.md`
 
 A stub was generated. Add the full pitch:
 - Differentiators (specific, not generic)
@@ -47,7 +88,7 @@ A stub was generated. Add the full pitch:
 
 ---
 
-### 4. Review and Customize Skill Files
+### 5. Review and Customize Skill Files
 
 Each file in `skills/` was generated with your manifest tokens substituted in. Hand-tune as needed:
 
@@ -61,7 +102,7 @@ Each file in `skills/` was generated with your manifest tokens substituted in. H
 
 ---
 
-### 5. Populate `rss/rss-scorer-mcp/rss_config.json`
+### 6. Populate `rss/rss-scorer-mcp/rss_config.json`
 
 Feeds were generated from the manifest. Add, remove, or tune:
 - `feeds` — add high-value URLs not in the manifest
@@ -70,7 +111,7 @@ Feeds were generated from the manifest. Add, remove, or tune:
 
 ---
 
-### 6. Load Your Client Database
+### 7. Load Your Client Database
 
 **Option A: Migrate an existing SQLite (recommended)**
 
@@ -99,7 +140,7 @@ The `template.sqlite` is already in place at `data/{name}.sqlite`. Add clients u
 
 ---
 
-### 7. Launch
+### 8. Launch
 
 ```
 cd "{rootDir}"
@@ -120,6 +161,7 @@ Read DOCS/STATUS.md then run the enrichment workflow
 | Directory structure | ✓ | |
 | `data/{name}.sqlite` (empty schema) | ✓ | |
 | `server/mcp/mcp_server_config.json` | ✓ | |
+| `server/.env` (DATABASE_URL) | ✓ | |
 | `.mcp.json` | ✓ | |
 | `rss/rss-scorer-mcp/rss_config.json` | ✓ (base + manifest feeds) | Add extra feeds |
 | `skills/*.md` (token-substituted) | ✓ | Hand-tune for audience |
@@ -131,3 +173,4 @@ Read DOCS/STATUS.md then run the enrichment workflow
 | `rss/rss-scorer-mcp/index.js` | | **Copy from BloomLeedz** |
 | Client records in DB | | **You provide** |
 | Config table values | | **Set via update_config** |
+| `leedzEmail` + `leedzSession` | | **Set via Step 3** |

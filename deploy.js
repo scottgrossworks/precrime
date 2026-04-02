@@ -200,6 +200,9 @@ const dirs = [
   path.join(outputDir, 'logs'),
   path.join(outputDir, 'server', 'mcp'),
   path.join(outputDir, 'rss', 'rss-scorer-mcp'),
+  path.join(outputDir, 'reddit'),
+  path.join(outputDir, 'ig'),
+  path.join(outputDir, 'skills', 'ig-factlet-harvester'),
 ];
 dirs.forEach(mkdir);
 console.log('Directories created.');
@@ -230,6 +233,10 @@ if (fs.existsSync(tmplDb)) {
 // 3. Build tokens
 const tokens = buildTokens(manifest);
 
+// 4a. Generate server/.env (Prisma reads this automatically)
+write(path.join(outputDir, 'server', '.env'),
+  `DATABASE_URL="file:${dbDest.replace(/\\/g, '/')}"\n`);
+
 // 4. Generate mcp_server_config.json (DB path for MCP server)
 const mcpServerCfg = {
   mcp:      { name: `${manifest.deployment.name}-mcp`, version: '2.0.0', protocolVersion: '2025-06-18' },
@@ -254,6 +261,35 @@ if (mc.feeds && mc.feeds.length) {
 }
 write(path.join(outputDir, 'rss', 'rss-scorer-mcp', 'rss_config.json'), JSON.stringify(rssCfg, null, 2));
 
+// 6b. Generate reddit_config.json (merge base template + manifest subreddits)
+const baseRedditCfgPath = path.join(TMPL, 'reddit_config.json');
+if (fs.existsSync(baseRedditCfgPath)) {
+  let redditCfg = JSON.parse(fs.readFileSync(baseRedditCfgPath, 'utf8'));
+  const rc = manifest.redditConfig || {};
+  if (rc.additionalKeywords && rc.additionalKeywords.length) {
+    redditCfg.globalKeywords.push(...rc.additionalKeywords);
+    redditCfg.globalKeywords = [...new Set(redditCfg.globalKeywords)];
+  }
+  if (rc.subreddits && rc.subreddits.length) {
+    redditCfg.subreddits.push(...rc.subreddits);
+  }
+  write(path.join(outputDir, 'reddit', 'reddit_config.json'), JSON.stringify(redditCfg, null, 2));
+}
+
+// 6c. Generate ig_config.json (merge base template + manifest igConfig)
+const baseIgCfgPath = path.join(TMPL, 'ig_config.json');
+if (fs.existsSync(baseIgCfgPath)) {
+  let igCfg = JSON.parse(fs.readFileSync(baseIgCfgPath, 'utf8'));
+  const ic = manifest.igConfig || {};
+  if (ic.accounts && ic.accounts.length) {
+    igCfg.accounts.push(...ic.accounts);
+  }
+  if (ic.hashtags && ic.hashtags.length) {
+    igCfg.hashtags.push(...ic.hashtags);
+  }
+  write(path.join(outputDir, 'ig', 'ig_config.json'), JSON.stringify(igCfg, null, 2));
+}
+
 // 7. Copy + substitute skill templates
 console.log('\nSkill playbooks:');
 [
@@ -263,6 +299,9 @@ console.log('\nSkill playbooks:');
   ['skills/factlet-harvester.md',             'skills/factlet-harvester.md'],
   ['skills/fb-factlet-harvester/SKILL.md',    'skills/fb-factlet-harvester/SKILL.md'],
   ['skills/fb-factlet-harvester/fb_sources.md','skills/fb-factlet-harvester/fb_sources.md'],
+  ['skills/reddit-factlet-harvester.md',      'skills/reddit-factlet-harvester.md'],
+  ['skills/ig-factlet-harvester/SKILL.md',    'skills/ig-factlet-harvester/SKILL.md'],
+  ['skills/ig-factlet-harvester/ig_sources.md','skills/ig-factlet-harvester/ig_sources.md'],
 ].forEach(([src, dst]) => copyTemplate(src, dst, tokens));
 
 // 8. Copy + substitute doc stubs
@@ -291,6 +330,7 @@ ${'='.repeat(65)}
      cp -r <BLOOMLEEDZ>/rss/rss-scorer-mcp/index.js ${outputDir}/rss/rss-scorer-mcp/
 
    mcp_server_config.json is already generated at server/mcp/.
+   server/.env is already generated with DATABASE_URL for Prisma.
    DB path: ${path.relative(path.join(outputDir,'server','mcp'), dbDest).replace(/\\/g,'/')}
 
 2. SET UP CONFIG via Claude (once server is running):
@@ -309,10 +349,26 @@ ${'='.repeat(65)}
    - relevance-judge.md   : add/remove relevant topics for your domain
    - factlet-harvester.md : adjust topic filter for RSS article evaluation
    - fb-factlet-harvester/fb_sources.md : add Facebook page URLs to monitor
+   - reddit-factlet-harvester.md : review subreddit + keyword config
 
 5. POPULATE rss/rss-scorer-mcp/rss_config.json
    Feeds were generated from the manifest. Add/remove/tune feed URLs
    and per-feed keywords for your audience.
+
+5b. REDDIT HARVESTER (ready to use, no setup needed):
+    pip install requests  (usually already installed)
+    No API keys required — uses Reddit's public JSON endpoints.
+    Config: reddit/reddit_config.json (generated from manifest)
+    Test: python tools/reddit_harvest.py -r news -k "test" -n 5
+
+5c. INSTAGRAM HARVESTER (requires one pip install):
+    pip install instaloader
+    No API keys required — fetches public profiles and hashtags without login.
+    Config: ig/ig_config.json (generated from manifest)
+    Add accounts and hashtags to ig/ig_config.json and ig_sources.md.
+    Test: python tools/ig_harvest.py --account instagram --limit 3
+    Note: If Instagram throttles (RATE_LIMITED errors), reduce account/hashtag
+    count or increase delays between runs. Do not attempt to log in.
 
 6. LOAD YOUR CLIENT DATABASE
    Copy your pre-built SQLite into: ${dbDest}

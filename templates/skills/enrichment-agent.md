@@ -47,18 +47,89 @@ Full pitch reference: `DOCS/VALUE_PROP.md` — read this before composing any dr
 | `mcp__leedz-mcp__create_factlet` | Add broadly applicable intel to broadcast queue |
 | `WebFetch` | Scrape a URL for content |
 | `WebSearch` | Search the web for information about a client |
-| `mcp__Claude_in_Chrome__tabs_context_mcp` | Get/create browser tab group (call ONCE per session) |
+| `mcp__Claude_in_Chrome__tabs_context_mcp` | Get/create browser tab group (call ONCE per session — or pre-assigned in parallel mode) |
+| `mcp__Claude_in_Chrome__tabs_create_mcp` | Open a new tab (used by orchestrator in parallel mode to assign one Gemini tab per agent) |
 | `mcp__Claude_in_Chrome__navigate` | Navigate a tab to a URL |
 | `mcp__Claude_in_Chrome__get_page_text` | Extract text content from a page |
+| `mcp__Claude_in_Chrome__find` | Find elements on page by description |
 | `mcp__Claude_in_Chrome__computer` | Click, type, scroll, wait |
 
 ## Session Setup (once, before the loop)
 
-1. Verify DB: `mcp__leedz-mcp__get_stats()` — if this fails, STOP
-2. Verify RSS: `mcp__bloomleedz-rss__get_top_articles({ limit: 1 })` — if this fails, STOP
-3. If using Chrome: `mcp__Claude_in_Chrome__tabs_context_mcp({ createIfEmpty: true })`
+There are two modes: **single-agent** (sequential, one client at a time) and **parallel** (N agents launched simultaneously by an orchestrator). Choose based on volume and user instruction.
+
+---
+
+### SINGLE-AGENT MODE
+
+#### Step A: Initialize Chrome & Discover AI Assistants
+
+1. Call `mcp__Claude_in_Chrome__tabs_context_mcp({ createIfEmpty: true })` — get the full tab list.
+2. Scan all returned tabs for AI assistant URLs:
+   - **Gemini:** tab URL contains `gemini.google.com`
+   - **Grok:** tab URL contains `grok.com` or `x.com/i/grok`
+3. Record session state:
+   ```
+   SESSION_AI = {
+     gemini: <tabId> | null,
+     grok:   <tabId> | null
+   }
+   ```
+4. **If neither is found**, stop and tell the user:
+   > "No AI assistant tabs detected. Please open **Gemini** (gemini.google.com) and/or **Grok** (grok.com) in Chrome, then say 'go' to continue."
+   Wait for confirmation, then re-scan.
+5. **If at least one is found**, report and proceed.
+   > Example: "Gemini detected (tab 433998513). Will use for research fallback if WebFetch is blocked."
+
+**Priority:** Prefer Gemini if both are available. Fall back to Grok if Gemini is absent.
+
+#### Step B: Verify Core Tools
+
+6. Verify DB: `mcp__leedz-mcp__get_stats()` — if this fails, STOP
+7. Verify RSS: `mcp__bloomleedz-rss__get_top_articles({ limit: 1 })` — if this fails, STOP
 
 If any step fails, report the error and stop. Do not proceed with broken tools.
+
+---
+
+### PARALLEL-AGENT MODE
+
+**When to use:** Processing a large batch (5+ clients). The orchestrator handles session setup, then launches N background agents simultaneously. Each agent gets its own dedicated Gemini tab — no Chrome contention.
+
+#### Orchestrator Protocol (run BEFORE launching agents):
+
+1. Call `mcp__Claude_in_Chrome__tabs_context_mcp({ createIfEmpty: true })` — confirm Chrome is connected.
+2. Decide N (number of agents). Default: 5. Max: 10.
+3. For each agent slot, open and load a Gemini tab:
+   - `mcp__Claude_in_Chrome__tabs_create_mcp({})` → get `newTabId`
+   - `mcp__Claude_in_Chrome__navigate({ tabId: newTabId, url: "https://gemini.google.com" })`
+   - Record: `AI_TABS = [tabId_1, tabId_2, ..., tabId_N]`
+4. Verify DB: `mcp__leedz-mcp__get_stats()`
+5. Launch N agents in **one message** (parallel Agent tool calls), passing each its assigned tabId:
+   ```
+   Agent 1 prompt: "... Your assigned Gemini tab ID is: <tabId_1> ..."
+   Agent 2 prompt: "... Your assigned Gemini tab ID is: <tabId_2> ..."
+   ...
+   Agent N prompt: "... Your assigned Gemini tab ID is: <tabId_N> ..."
+   ```
+
+#### Sub-agent Protocol (each parallel agent):
+
+- **Do NOT call `tabs_context_mcp`** — your Gemini tab is pre-assigned. Use it directly.
+- Store at startup:
+  ```
+  SESSION_AI = { gemini: <YOUR_ASSIGNED_TAB_ID> }
+  ```
+- Use this tabId for all Gemini fallback operations. Do NOT open new tabs or navigate away from Gemini.
+- The atomic `get_next_client` cursor guarantees no two agents process the same client.
+- Append your ROUNDUP.md block independently when done.
+
+#### Key benefits:
+- N clients processed in the wall-clock time of 1
+- Each agent has a dedicated Gemini tab — zero Chrome contention
+- `get_next_client` atomic stamp prevents duplicate work across agents
+
+---
 
 ## The Loop
 
@@ -141,9 +212,27 @@ Valid URL types: `website`, `linkedin`, `twitter`, `facebook`, `rss`, `news`, `e
 Scrape each URL in `targetUrls`. For each:
 
 1. **Choose the right tool:**
-   - Regular websites, news, directories → `WebFetch`
+   - Regular websites, news, directories → `WebFetch` first
+     - If WebFetch returns JS framework code, 404, or ECONNREFUSED → **Gemini fallback** (see below)
    - Facebook pages → Chrome (Facebook blocks WebFetch)
    - LinkedIn → `WebFetch` first, fall back to Chrome if blocked
+
+**Gemini research fallback procedure** (when WebFetch fails or returns JS-only content):
+1. Confirm `SESSION_AI.gemini` is set. If not, check `SESSION_AI.grok`. If neither, skip and log `SCRAPE_FAILED`.
+2. Find the input on the existing AI tab:
+   `mcp__Claude_in_Chrome__find({ tabId: SESSION_AI.gemini, query: "chat input prompt box" })`
+3. Click the input, then type a targeted research prompt:
+   ```
+   "[Company name] [city/region] — give me: size, recent news or initiatives,
+   any expressed pain points from public reviews, and anything relevant to
+   [selling context / product category]."
+   ```
+4. Press Enter. Wait 4 seconds. Read the response:
+   `mcp__Claude_in_Chrome__get_page_text({ tabId: SESSION_AI.gemini })`
+5. Extract intel. Treat it as a WebFetch result — synthesize into dossier.
+6. Log to ROUNDUP.md: `SCRAPE_FALLBACK_GEMINI — [company] — [what was extracted]`
+
+**Do not open a new Gemini tab** — reuse the pre-assigned tab throughout the session. Each prompt replaces the previous one.
 
 2. **Look for signals relevant to selling {{PRODUCT_NAME}}:**
    - Pain signals: problems they're experiencing, needs they've expressed
@@ -250,7 +339,7 @@ Write to this file AS YOU GO — not at the end. Use the Edit tool to append.
   - Impact: [what it prevented]
 ```
 
-Failure categories: `NO_EMAIL`, `NO_WEBSITE`, `SCRAPE_FAILED`, `FACEBOOK_BLOCKED`, `LINKEDIN_BLOCKED`, `THIN_DOSSIER`, `DRAFT_FAILED_EVAL`, `OUT_OF_GEOGRAPHY`
+Failure categories: `NO_EMAIL`, `NO_WEBSITE`, `SCRAPE_FAILED`, `SCRAPE_FALLBACK_GEMINI`, `SCRAPE_FALLBACK_GROK`, `NO_AI_ASSISTANT`, `FACEBOOK_BLOCKED`, `LINKEDIN_BLOCKED`, `THIN_DOSSIER`, `DRAFT_FAILED_EVAL`, `OUT_OF_GEOGRAPHY`
 
 ## Error Handling
 

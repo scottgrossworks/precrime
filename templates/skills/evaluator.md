@@ -99,6 +99,51 @@ FIX: [what would make this draft ready]
 **Perfect draft, low warmthScore:** Hard gate catches this. A clever draft does not compensate for thin intelligence.
 
 ---
+
+## Booking Completeness Evaluation
+
+A separate gate for Bookings. Same concept — is the glass full? — but mechanical, not qualitative.
+
+### When to Run
+
+Run this check whenever a Booking is created or updated. The enrichment agent calls this after any Booking field changes, just as it calls the draft evaluator after composing.
+
+### Input
+
+A Booking object (all fields).
+
+### Required Fields (the three that fill the glass)
+
+| Field | What counts | Example |
+|-------|------------|---------|
+| `trade` | Must map to a valid Leedz trade name | "DJ", "Caterer", "Photographer" |
+| `startDate` | Any parseable date/datetime | 2026-06-15, "next Saturday" resolved to absolute |
+| `location` OR `zip` | At least one | "The Roosevelt Hotel, LA" or "90028" |
+
+### Verdict
+
+**All 3 present:**
+```
+BOOKING VERDICT: leed_ready
+REASON: trade=[trade], startDate=[date], location=[location/zip]. Ready for action.
+```
+→ Set `Booking.status = "leed_ready"`
+
+**Any missing:**
+```
+BOOKING VERDICT: new
+REASON: Missing [list missing fields]. Needs more intel.
+FIX: [what outreach or scraping would fill the gap]
+```
+→ `Booking.status` stays `"new"`. Enrichment continues.
+
+### Not Evaluated Here
+
+Everything else on the Booking (`flatRate`, `description`, `duration`, `hourlyRate`, etc.) is useful context but does NOT gate the verdict. The minimum viable leed is: **what trade, when, where.**
+
+The action decision (take / share to marketplace / both) happens AFTER `leed_ready`. That is not this skill's job.
+
+---
 <!-- CUSTOMIZATION NOTES FOR DEPLOYER
      ================================
      The 5-criteria structure is universal. What changes per deployment is the

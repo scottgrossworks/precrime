@@ -225,5 +225,39 @@
   "fbSources": [
     "https://www.facebook.com/YourFirstPage/",
     "https://www.facebook.com/YourSecondPage/"
-  ]
+  ],
+
+  "redditConfig": {
+    "subreddits": [
+      {
+        "name": "YourIndustrySubreddit",
+        "keywords": ["keyword relevant to your buyers", "another keyword"],
+        "category": "industry"
+      },
+      {
+        "name": "AnotherSubreddit",
+        "keywords": ["buying signal phrase", "pain point keyword"],
+        "category": "leads"
+      }
+    ],
+    "additionalKeywords": [
+      "keyword to add to global list"
+    ]
+  },
+
+  "igConfig": {
+    "accounts": [
+      {
+        "username": "example_industry_account",
+        "category": "industry"
+      }
+    ],
+    "hashtags": [
+      "relevanthashtag",
+      "anothertag"
+    ],
+    "additionalKeywords": [
+      "keyword to add to global list"
+    ]
+  }
 }

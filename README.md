@@ -401,6 +401,65 @@ These tools are available in every enrichment session:
 
 ---
 
+## Parallel Agent Architecture
+
+**Status: Proven. Active feature. Do not remove or simplify.**
+
+### What It Is
+
+Instead of processing clients one at a time (sequential), the orchestrator launches N enrichment agents simultaneously. Each agent claims a different client via the atomic `get_next_client` cursor, does the full enrichment loop independently, and saves results. Wall-clock time: N clients in the time of 1.
+
+### Architecture
+
+```
+Orchestrator (main Claude session)
+│
+├── tabs_context_mcp()              ← confirm Chrome is live
+├── tabs_create_mcp() × N           ← open N Gemini tabs, one per agent
+├── navigate each to gemini.google.com
+├── record AI_TABS = [tabId_1..tabId_N]
+│
+└── ONE message → N parallel Agent tool calls
+    ├── Agent 1  ← tabId_1, get_next_client(), full loop
+    ├── Agent 2  ← tabId_2, get_next_client(), full loop
+    ├── ...
+    └── Agent N  ← tabId_N, get_next_client(), full loop
+```
+
+### Why It Works Without Contention
+
+- **DB cursor:** `get_next_client` atomically stamps `lastQueueCheck=NOW` before returning. Each agent gets a different record. Guaranteed by SQLite write serialization.
+- **Chrome tabs:** Each agent has a dedicated Gemini tab opened by the orchestrator. No two agents share a tab. No race conditions.
+- **ROUNDUP.md:** Each agent appends its own named block. Never overwrites another agent's work.
+
+### How to Launch a Parallel Batch
+
+```
+1. tabs_context_mcp()                          — confirm Chrome
+2. tabs_create_mcp() × N                       — open N Gemini tabs
+3. navigate each to gemini.google.com           — load AI assistant
+4. record AI_TABS = [id_1, id_2, ..., id_N]
+5. Single message → N parallel Agent calls      — each gets one tabId
+6. Wait for all N to complete. Collect summaries.
+7. Immediately launch next batch of N.
+```
+
+### Scaling
+
+| N agents | Use case | Notes |
+|----------|----------|-------|
+| 1 | Debug / single client | Sequential mode |
+| 5 | Standard batch | Default. ~4-5 min wall clock. |
+| 10 | Max batch | Chrome slows above this. Test first. |
+
+### Gemini Tab Role
+
+Each agent uses WebSearch/WebFetch as its primary research tools. The pre-assigned Gemini tab is the **fallback** when WebFetch returns JS-only content or is blocked. With N dedicated tabs, fallback is available to every agent simultaneously — no queueing.
+
+Full session setup protocol is in `templates/skills/enrichment-agent.md` under **PARALLEL-AGENT MODE** and **SINGLE-AGENT MODE**.
+
+---
+
 ## Key Design Decisions (Do Not Change Without Reason)
 
 1. **Factlets are GLOBAL** — no clientId. Every factlet is broadcast to every client at enrichment time. Client-specific intel always goes into the dossier, never a factlet.
