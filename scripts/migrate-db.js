@@ -96,7 +96,6 @@ const PC_SCHEMA = {
     ['company',        'TEXT',     null],
     ['website',        'TEXT',     null],
     ['clientNotes',    'TEXT',     null],
-    ['segment',        'TEXT',     null],
     ['dossier',        'TEXT',     null],
     ['targetUrls',     'TEXT',     null],
     ['draft',          'TEXT',     null],

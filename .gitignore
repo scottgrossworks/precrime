@@ -19,6 +19,8 @@ scrapes/
 # Databases (live data, not source)
 *.sqlite
 *.sqlite.backup
+*.sqlite-shm
+*.sqlite-wal
 # Keep the empty schema template
 !data/template.sqlite
 

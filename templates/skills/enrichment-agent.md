@@ -243,6 +243,9 @@ Scrape each URL in `targetUrls`. For each:
 3. **Classify and store:**
    - **Client-specific intel** (about this org, this contact) → dossier ONLY
    - **Broadly applicable intel** (industry trend, policy, sector news) → dossier AND create_factlet
+   - **Intel about a DIFFERENT org/person** (encountered while scraping) → run four-path classification:
+     1. Already in DB? (`search_clients`) → YES: append to their dossier / NO: step 2
+     2. Has booking details (trade + date + location)? → YES + `leadCaptureEnabled`: Lead Capture hot / NO + `leadCaptureEnabled`: Lead Capture thin / disabled: skip
 
 **Facebook scraping:**
 1. `tabs_context_mcp({ createIfEmpty: true })` — ONCE per session

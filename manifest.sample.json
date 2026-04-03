@@ -227,6 +227,19 @@
     "https://www.facebook.com/YourSecondPage/"
   ],
 
+  "bookingConfig": {
+    "_comment": "Applies only to lead-capture / booking deployments. Leave blank for pure outreach deployments.",
+    "defaultTrade": "Your trade category — e.g. DJ, Photographer, Caterer, Caricature Artist",
+    "defaultBookingAction": "leedz_api",
+    "_defaultBookingAction_options": [
+      "leedz_api    — post to The Leedz marketplace via API (requires leedzEmail + leedzSession in Config)",
+      "email_share  — email booking to share@theleedz.com for manual submission",
+      "email_user   — email booking to companyEmail for seller to decide"
+    ],
+    "leadCaptureEnabled": false,
+    "marketplaceEnabled": false
+  },
+
   "redditConfig": {
     "subreddits": [
       {

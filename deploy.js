@@ -302,6 +302,8 @@ console.log('\nSkill playbooks:');
   ['skills/reddit-factlet-harvester.md',      'skills/reddit-factlet-harvester.md'],
   ['skills/ig-factlet-harvester/SKILL.md',    'skills/ig-factlet-harvester/SKILL.md'],
   ['skills/ig-factlet-harvester/ig_sources.md','skills/ig-factlet-harvester/ig_sources.md'],
+  ['skills/init-wizard.md',                   'skills/init-wizard.md'],
+  ['skills/share-skill.md',                   'skills/share-skill.md'],
 ].forEach(([src, dst]) => copyTemplate(src, dst, tokens));
 
 // 8. Copy + substitute doc stubs
@@ -379,7 +381,10 @@ ${'='.repeat(65)}
 7. LAUNCH
      cd "${outputDir}"
      claude
-     > Read DOCS/STATUS.md then run the enrichment workflow
+     > initialize this deployment
+
+   The init wizard will confirm config, generate your Leedz session JWT,
+   discover harvest sources, then launch harvesters automatically.
 
 ${'='.repeat(65)}
 `);

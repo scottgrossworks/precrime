@@ -69,10 +69,31 @@ RELEVANT:
 NOT RELEVANT:
 {{NOT_RELEVANT_TOPICS}}
 
-**Q2: Is this broadly applicable (factlet) or specific to one client (dossier)?**
+**Q2: Is this broadly applicable — or specific to one org/person?**
 
-BROAD → create factlet. Affects multiple orgs in the audience.
-SPECIFIC → skip here. Belongs in that org's dossier during enrichment.
+BROAD → create factlet. Affects multiple orgs in the audience. Proceed to Q3.
+
+SPECIFIC to one org/person → classify into exactly one path:
+
+1. Is this org/person already in the DB?
+   ```
+   mcp__leedz-mcp__search_clients({ company: "[org name]" })
+   ```
+   - **YES → Dossier:** `update_client({ dossier: "[date] Facebook:[page]: [finding]" })`. Stop — no factlet.
+   - **NO → step 2**
+
+2. Does this post contain booking details? (trade + date + location/zip)
+   - **YES AND `leadCaptureEnabled = true` → Lead Capture (hot):**
+     ```
+     create_client({ name, company, email, dossier: "[date] Facebook:[page]: [context]", draftStatus: "brewing" })
+     create_booking({ clientId, trade, startDate, location, zip, source: "facebook:[page]", sourceUrl, status: "leed_ready" })
+     ```
+     Then run Evaluator Booking Completeness Check.
+   - **NO AND `leadCaptureEnabled = true` → Lead Capture (thin):**
+     ```
+     create_client({ name or company, dossier: "[date] Facebook:[page]: [context]", draftStatus: "brewing" })
+     ```
+   - **`leadCaptureEnabled = false` → skip.** Log: `LEAD_CAPTURE_OFF — [name/org]`
 
 **Q3: Is this post-2023?**
 

@@ -141,7 +141,13 @@ FIX: [what outreach or scraping would fill the gap]
 
 Everything else on the Booking (`flatRate`, `description`, `duration`, `hourlyRate`, etc.) is useful context but does NOT gate the verdict. The minimum viable leed is: **what trade, when, where.**
 
-The action decision (take / share to marketplace / both) happens AFTER `leed_ready`. That is not this skill's job.
+---
+
+### After `leed_ready`: Hand Off to Share Skill
+
+Once a Booking reaches `leed_ready`, pass it to `skills/share-skill.md`.
+
+The Share Skill handles all action paths: leedz_api, email_share, email_user, and the once-per-session user prompt. Do not duplicate that logic here.
 
 ---
 <!-- CUSTOMIZATION NOTES FOR DEPLOYER

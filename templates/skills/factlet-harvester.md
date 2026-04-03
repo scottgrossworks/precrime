@@ -60,18 +60,34 @@ NOT RELEVANT:
 
 If not relevant: skip. Move to next article.
 
-**Q2: Is this broadly applicable to multiple clients — or specific to one?**
+**Q2: Is this broadly applicable — or specific to one org/person?**
 
-Factlets are for BROAD intel only. If an article is about one specific organization's internal event, it belongs in that org's dossier during enrichment — not here.
-
-BROAD (create factlet):
+BROAD (proceed to Q3):
 - Industry-wide trends, policy changes, market shifts
 - Statistics or studies that apply across your entire audience
 - Competitor moves that all your clients should know about
 
-NOT BROAD (skip):
-- One specific company's internal announcement
-- One individual's achievement or news
+SPECIFIC to one org/person → classify into exactly one path:
+
+1. Is this org/person already in the DB?
+   ```
+   mcp__leedz-mcp__search_clients({ company: "[org name]" })
+   ```
+   - **YES → Dossier:** Append to their dossier via `update_client({ dossier: "[date] RSS: [finding]" })`. Skip this article — do not create a factlet.
+   - **NO → step 2**
+
+2. Does this item contain booking details? (trade + date + location/zip)
+   - **YES AND `leadCaptureEnabled = true` → Lead Capture (hot):**
+     ```
+     create_client({ name, company, email, dossier: "[date] RSS:[feedName]: [context]", draftStatus: "brewing" })
+     create_booking({ clientId, trade, startDate, location, zip, source: "rss:[feedName]", sourceUrl, status: "leed_ready" })
+     ```
+     Then run Evaluator Booking Completeness Check.
+   - **NO AND `leadCaptureEnabled = true` → Lead Capture (thin):**
+     ```
+     create_client({ name or company, dossier: "[date] RSS:[feedName]: [context]", draftStatus: "brewing" })
+     ```
+   - **`leadCaptureEnabled = false` → skip.** Log: `LEAD_CAPTURE_OFF — [org name]`
 
 **Q3: Is this recent enough to matter?**
 

@@ -1,6 +1,6 @@
 # Pre-Crime — Session Status
 
-**Last updated:** 2026-04-02
+**Last updated:** 2026-04-02 (session 2)
 **Read this first. Then read files referenced here as needed. Do not glob or explore.**
 
 ---
@@ -41,6 +41,22 @@ The bridge: Pre-Crime calls The Leedz MCP `createLeed` (→ `addLeed` Lambda) wh
 - **The Leedz MCP `createLeed`** — session JWT decoded → email → `addLeed` Lambda via boto3 with authorizer context. Auto-creates user if new. Defaults `sh="*"` (broadcast).
 - **`AGENTIC_FUTURE.md` corrected** — `createLeed` tool calls `addLeed` Lambda. Naming clarified.
 - **`MCP_BRIEFING.md` updated** — Config schema now includes `leedzEmail` and `leedzSession` fields.
+- **Pre-Crime repo committed** — `24f7710`: DOCS/, IG/Reddit harvesters, booking MCP stats, leedzEmail/leedzSession, scrapes/.gitignore.
+
+---
+
+## The Leedz MCP Endpoint Testing (2026-04-02)
+
+| Tool | Status | Notes |
+|------|--------|-------|
+| `tools/list` | PASSED | 5 tools returned |
+| `getTrades` | PASSED | 36 trades, DJ=8 leedz |
+| `getStats` | PASSED | 458 posted, 15 bought, 115 users |
+| `getLeedz` | PASSED | sb="dj" → 4 unsold leedz |
+| `showUserPage` | FIX DEPLOYED, RETEST | Decimal serialization bug fixed, redeployed |
+| `createLeed` | NOT TESTED | Needs session JWT + test params |
+
+**Bug fix:** `showUserPage` failed with `Decimal is not JSON serializable`. DynamoDB returns `Decimal` for numeric fields. Added `from decimal import Decimal` and Decimal-safe `default` to `json.dumps()` in `call_showUserPage`. Redeployed by user.
 
 ---
 
@@ -48,28 +64,29 @@ The bridge: Pre-Crime calls The Leedz MCP `createLeed` (→ `addLeed` Lambda) wh
 
 | Track | What |
 |-------|------|
-| **MCP Endpoint Testing** | The Leedz MCP is live at `POST https://jjz8op6uy4.execute-api.us-west-2.amazonaws.com/Leedz_Stage_1/mcp`. Testing with a DJ agent scenario — foreign agent discovers marketplace, lists tools, browses trades, searches leedz, posts a test leed via `createLeed`. `tools/list` passed. Remaining tools untested. Session JWT generated for `scottgrossworks@gmail.com`. |
+| **MCP Endpoint Testing** | 3 of 5 tools passed. `showUserPage` fix deployed, retest needed. `createLeed` untested. Session JWT available for `scottgrossworks@gmail.com`. |
 | Subprocess | Pre-Crime MCP schema + code fixes per `DOCS\MCP_BRIEFING.md`. `leedzEmail` + `leedzSession` added to schema, pushed to SQLite. Prisma client regen pending (DLL lock — run `npx prisma generate` from standalone shell). |
 
 ---
 
 ## TODOs
 
-### TODO 1: Harvester Four-Output-Path Classification
-v1.0: factlet or dossier. v2.0 adds: lead thin (new Client) and lead hot (new Client + Booking).
-Classification: specific org? → in DB? → has booking details? → one of four paths.
-**Files:** `templates\skills\enrichment-agent.md`, `templates\skills\factlet-harvester.md`, `templates\skills\fb-factlet-harvester\SKILL.md`
-**Depends on:** Subprocess (Prisma Booking model)
+### ~~TODO 1: Harvester Four-Output-Path Classification~~ DONE (2026-04-02 session 2)
+Four-path classification tree added to `enrichment-agent.md`, `factlet-harvester.md`, `fb-factlet-harvester/SKILL.md`.
+New files: `templates\skills\share-skill.md` (all sharing logic), `templates\skills\init-wizard.md` (conversational setup).
+Init wizard: deployment mode question, getTrades API call, WHERE to harvest discovery, auto-launch harvesters.
+Evaluator: simplified — hands off to share-skill.md on leed_ready.
 
 ### TODO 2: Session JWT Setup in Pre-Crime Config
 Pre-Crime doesn't know the user's Leedz email. Setup skill must prompt for it, generate a session JWT, write both to Config (`leedzEmail`, `leedzSession`). `addLeed` auto-creates a stub user if email is new to platform.
 - JWT: `{'email': leedzEmail, 'type': 'session', 'exp': +1yr}` signed HS256
 - Secret: `648373eeea08d422032db0d1e61a1bc096fe08dd2729ce611092c7a1af15d09c`
+- Add as Step 5a in `init-wizard.md` (already present — verify it generates and writes the JWT)
 
 ### TODO 3: Action Decision + Marketplace Posting Wire-Up
-When Booking hits `leed_ready`: decide take / share / both. If sharing, call The Leedz MCP `createLeed` with Booking fields mapped to addLeed params (see `DOCS\ONTOLOGY.md`). Set `Booking.status = "shared"`, `Booking.leedId`.
-**Files:** New section in `templates\skills\enrichment-agent.md`
-**Depends on:** TODO 1 + TODO 2
+`share-skill.md` is written and handles all paths. Wire `deploy.js` to copy it into new deployments.
+Verify `createLeed` MCP tool end-to-end with a test Booking.
+**Depends on:** TODO 2 (needs leedzSession in Config for leedz_api path)
 
 ---
 
