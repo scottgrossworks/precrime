@@ -16,8 +16,9 @@
 
 'use strict';
 
-const fs   = require('fs');
-const path = require('path');
+const fs            = require('fs');
+const path          = require('path');
+const { execSync }  = require('child_process');
 
 // ---------------------------------------------------------------------------
 // CLI
@@ -199,6 +200,7 @@ const dirs = [
   path.join(outputDir, 'skills', 'fb-factlet-harvester'),
   path.join(outputDir, 'logs'),
   path.join(outputDir, 'server', 'mcp'),
+  path.join(outputDir, 'server', 'prisma'),
   path.join(outputDir, 'rss', 'rss-scorer-mcp'),
   path.join(outputDir, 'reddit'),
   path.join(outputDir, 'ig'),
@@ -215,6 +217,39 @@ if (fs.existsSync(mcpSrc)) {
 } else {
   console.warn(`  ⚠ MCP server source missing: ${mcpSrc}`);
   console.warn('    Copy server/mcp/mcp_server.js into the generated workspace manually.');
+}
+
+// 2b. Copy server/package.json
+const pkgSrc = path.join(PRECRIME, 'server', 'package.json');
+const pkgDst = path.join(outputDir, 'server', 'package.json');
+if (fs.existsSync(pkgSrc)) {
+  copyFile(pkgSrc, pkgDst);
+} else {
+  console.warn(`  ⚠ server/package.json missing: ${pkgSrc}`);
+}
+
+// 2c. Copy server/prisma/schema.prisma
+const schemaSrc = path.join(PRECRIME, 'server', 'prisma', 'schema.prisma');
+const schemaDst = path.join(outputDir, 'server', 'prisma', 'schema.prisma');
+if (fs.existsSync(schemaSrc)) {
+  copyFile(schemaSrc, schemaDst);
+} else {
+  console.warn(`  ⚠ server/prisma/schema.prisma missing: ${schemaSrc}`);
+}
+
+// 2d. npm install + prisma generate in generated workspace
+console.log('\nInstalling server dependencies (npm install)...');
+try {
+  execSync('npm install', { cwd: path.join(outputDir, 'server'), stdio: 'inherit' });
+} catch (e) {
+  console.warn('  ⚠ npm install failed — run manually: cd server && npm install');
+}
+
+console.log('\nGenerating Prisma client (npx prisma generate)...');
+try {
+  execSync('npx prisma generate', { cwd: path.join(outputDir, 'server'), stdio: 'inherit' });
+} catch (e) {
+  console.warn('  ⚠ prisma generate failed — run manually: cd server && npx prisma generate');
 }
 
 // 3. Copy template.sqlite → data/{name}.sqlite
@@ -326,14 +361,16 @@ ${'='.repeat(65)}
 SCAFFOLD COMPLETE — Manual steps to finish:
 ${'='.repeat(65)}
 
-1. COPY server infrastructure from BloomLeedz (shared, don't duplicate code):
-     cp -r <BLOOMLEEDZ>/server/mcp/mcp_server.js  ${outputDir}/server/mcp/
-     cp -r <BLOOMLEEDZ>/server/node_modules/       ${outputDir}/server/
-     cp -r <BLOOMLEEDZ>/rss/rss-scorer-mcp/index.js ${outputDir}/rss/rss-scorer-mcp/
+1. Server infrastructure was auto-installed:
+     server/mcp/mcp_server.js  — copied from Pre-Crime
+     server/package.json       — copied from Pre-Crime
+     server/prisma/            — schema copied + prisma generate ran
+     server/node_modules/      — npm install ran automatically
+     server/.env               — DATABASE_URL written for Prisma
+     server/mcp/mcp_server_config.json — DB path configured
 
-   mcp_server_config.json is already generated at server/mcp/.
-   server/.env is already generated with DATABASE_URL for Prisma.
-   DB path: ${path.relative(path.join(outputDir,'server','mcp'), dbDest).replace(/\\/g,'/')}
+   If npm install or prisma generate failed, run manually:
+     cd "${path.join(outputDir,'server').replace(/\\/g,'/')}" && npm install && npx prisma generate
 
 2. SET UP CONFIG via Claude (once server is running):
      Run Claude from ${outputDir}

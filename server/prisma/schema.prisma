@@ -1,0 +1,88 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = env("DATABASE_URL")
+}
+
+model Client {
+  id             String    @id @default(cuid())
+  name           String
+  email          String?   @unique
+  phone          String?
+  company        String?
+  website        String?
+  clientNotes    String?
+  segment        String?   // audience segment: defined per deployment
+  dossier        String?   // accumulated intelligence — timestamped prose
+  targetUrls     String?   // JSON: [{url, type, label}]
+  draft          String?   // current best outreach draft
+  draftStatus    String?   // "brewing" | "ready" | "sent"
+  warmthScore    Float?    // 0–10
+  lastEnriched   DateTime?
+  lastQueueCheck DateTime? // DB cursor + factlet watermark
+  source         String?   // how this client entered the DB
+  createdAt      DateTime  @default(now())
+  updatedAt      DateTime  @updatedAt
+  bookings       Booking[]
+}
+
+model Booking {
+  id               String    @id @default(cuid())
+  clientId         String
+  title            String?
+  description      String?
+  notes            String?
+  location         String?
+  startDate        DateTime?
+  endDate          DateTime?
+  startTime        String?
+  endTime          String?
+  duration         Float?
+  hourlyRate       Float?
+  flatRate         Float?
+  totalAmount      Float?
+  status           String    @default("new")  // new | leed_ready | shared | booked | cancelled
+  source           String?
+  sourceUrl        String?
+  trade            String?
+  zip              String?
+  shared           Boolean   @default(false)
+  sharedTo         String?   // "leedz_api" | "email_share" | "email_user"
+  sharedAt         BigInt?
+  leedPrice        Int?
+  leedId           String?   // returned by createLeed MCP tool
+  createdAt        DateTime  @default(now())
+  updatedAt        DateTime  @updatedAt
+  client           Client    @relation(fields: [clientId], references: [id])
+}
+
+model Factlet {
+  id        String   @id @default(cuid())
+  content   String
+  source    String
+  createdAt DateTime @default(now())
+}
+
+model Config {
+  id                   String   @id @default(cuid())
+  companyName          String?
+  companyEmail         String?
+  businessDescription  String?
+  activeEntities       String?  // JSON: ["client"] or ["client","booking"]
+  defaultTrade         String?  // e.g., "Caricature Artist"
+  defaultBookingAction String?  // "leedz_api" | "email_share" | "email_user"
+  marketplaceEnabled   Boolean  @default(false)
+  leadCaptureEnabled   Boolean  @default(false)
+  leedzEmail           String?
+  leedzSession         String?  // session JWT for createLeed MCP calls
+  llmApiKey            String?
+  llmProvider          String?
+  llmBaseUrl           String?
+  llmAnthropicVersion  String?
+  llmMaxTokens         Int?     @default(1024)
+  createdAt            DateTime @default(now())
+  updatedAt            DateTime @updatedAt
+}

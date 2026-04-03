@@ -1,6 +1,6 @@
 # Pre-Crime — Agentic Sales Enrichment Engine
 
-**Version:** 1.0
+**Version:** 2.0
 **Built by:** Scott Gross
 **Reference deployment:** BloomLeedz (K-12 student wellbeing outreach, Los Angeles)
 
@@ -62,13 +62,18 @@ Client-specific intel (about one specific org) goes only in the dossier.
 ```
 PRECRIME/
 ├── README.md                    ← This file
-├── DEPLOYMENT.md                ← Post-scaffold checklist (mirrors deploy.js output)
+├── DOCS/DEPLOYMENT.md           ← Full deployment reference
 ├── deploy.js                    ← Manifest → workspace generator
-├── package.json                 ← No npm deps required for deploy.js
+├── build.bat                    ← Packages distributable zip (see "Building a zip" below)
 ├── manifest.sample.json         ← Full blank manifest with all fields documented
 │
 ├── skills/
 │   └── deployment-wizard.md    ← Interactive wizard: interview → manifest → scaffold → walkthrough
+│
+├── server/
+│   ├── mcp/mcp_server.js       ← MCP server (15 tools) — auto-copied to each deployment
+│   ├── package.json            ← Node deps (Prisma + dotenv) — npm install runs automatically
+│   └── prisma/schema.prisma    ← SQLite schema — prisma generate runs automatically
 │
 ├── scripts/
 │   └── migrate-db.js           ← Lossless DB migration: any SQLite → Pre-Crime schema (Node 22.5+, no deps)
@@ -125,7 +130,7 @@ When you run `deploy.js`, it creates this workspace:
 │       └── mcp_server_config.json ← DB path (generated)
 ├── rss/
 │   └── rss-scorer-mcp/
-│       ├── index.js             ← COPY FROM BLOOMLEEDZ — not generated
+│       ├── index.js             ← Copy from your BLOOMLEEDZ/rss installation
 │       └── rss_config.json      ← Feed list (generated from manifest)
 └── logs/
     └── ROUNDUP.md               ← Per-run enrichment log (written by Claude)
@@ -135,7 +140,7 @@ When you run `deploy.js`, it creates this workspace:
 
 ## Database Schema
 
-The `template.sqlite` has three tables:
+The `template.sqlite` has four tables:
 
 ### Client
 | Column | Type | Purpose |
@@ -158,6 +163,31 @@ The `template.sqlite` has three tables:
 | `createdAt` | DATETIME | Record creation time |
 | `updatedAt` | DATETIME | Record last update time |
 
+### Booking
+| Column | Type | Purpose |
+|--------|------|---------|
+| `id` | TEXT | CUID primary key |
+| `clientId` | TEXT | FK → Client.id |
+| `title` | TEXT | Booking title / event name |
+| `description` | TEXT | Event details |
+| `notes` | TEXT | Internal notes |
+| `location` | TEXT | Event location |
+| `startDate` / `endDate` | DATETIME | Event dates |
+| `startTime` / `endTime` | TEXT | Time strings |
+| `duration` | REAL | Duration in hours |
+| `hourlyRate` / `flatRate` | REAL | Pricing |
+| `totalAmount` | REAL | Computed total |
+| `status` | TEXT | `new` \| `leed_ready` \| `shared` \| `booked` \| `cancelled` |
+| `source` / `sourceUrl` | TEXT | Where the lead came from |
+| `trade` | TEXT | Trade/service type |
+| `zip` | TEXT | Event zip code |
+| `shared` | BOOLEAN | Whether shared to marketplace |
+| `sharedTo` | TEXT | `leedz_api` \| `email_share` \| `email_user` |
+| `sharedAt` | INTEGER | Unix timestamp of share |
+| `leedPrice` | INTEGER | Price set for marketplace listing |
+| `leedId` | TEXT | ID returned by createLeed API |
+| `createdAt` / `updatedAt` | DATETIME | Timestamps |
+
 ### Factlet
 | Column | Type | Purpose |
 |--------|------|---------|
@@ -173,8 +203,16 @@ The `template.sqlite` has three tables:
 | `companyName` | TEXT | Seller's company name |
 | `companyEmail` | TEXT | Seller's email |
 | `businessDescription` | TEXT | Product/business description |
-| `llmApiKey` | TEXT | (Reserved — not used by Claude workflow) |
+| `activeEntities` | TEXT | JSON: `["client"]` or `["client","booking"]` |
+| `defaultTrade` | TEXT | e.g. "Caricature Artist" |
+| `defaultBookingAction` | TEXT | `leedz_api` \| `email_share` \| `email_user` |
+| `marketplaceEnabled` | BOOLEAN | Enable Leedz marketplace posting |
+| `leadCaptureEnabled` | BOOLEAN | Enable lead capture mode |
+| `leedzEmail` | TEXT | Leedz marketplace account email |
+| `leedzSession` | TEXT | Session JWT for createLeed API calls |
+| `llmApiKey` | TEXT | (Reserved) |
 | `llmProvider` | TEXT | (Reserved) |
+| `llmMaxTokens` | INTEGER | (Reserved, default 1024) |
 
 ---
 
@@ -188,10 +226,9 @@ The `template.sqlite` has three tables:
 
 ### Prerequisites
 
-1. **BloomLeedz installed** — the RSS scorer is shared infrastructure. The MCP server source is included in PRECRIME and copied automatically by `deploy.js`.
-2. **Claude Code desktop app** — for the enrichment workflow and Chrome bridge (for Facebook scraping).
-3. **Node.js ≥ 18** — for running deploy.js.
-4. **A contact database** — a SQLite file with the correct schema (or use `template.sqlite` as the base).
+1. **Claude Code desktop app** — for the enrichment workflow and Chrome bridge (for Facebook scraping).
+2. **Node.js ≥ 18** — for running deploy.js and the MCP server.
+3. **A contact database** — a SQLite file with the correct schema (or use `template.sqlite` as the base).
 
 ### Step 1: Create Your Manifest
 
@@ -217,34 +254,23 @@ See `sample-manifests/drawingshow.json` for a complete worked example.
 ### Step 2: Run the Generator
 
 ```
-cd C:\Users\Scott\Desktop\WKG\BLOOMLEEDZ\PRECRIME
+cd C:\path\to\PRECRIME
 node deploy.js --manifest my-project.json
 ```
 
 The generator will:
 - Create the workspace directory tree
 - Copy `template.sqlite` as your project database
-- Generate `mcp_server_config.json` (DB path)
+- Copy `server/mcp/mcp_server.js`, `server/package.json`, `server/prisma/schema.prisma`
+- Run `npm install` + `npx prisma generate` in the generated `server/` automatically
+- Generate `mcp_server_config.json` and `server/.env` (DB path for Prisma)
 - Generate `.mcp.json` (MCP server connections)
 - Generate `rss_config.json` (your feeds + keywords)
-- Copy and substitute all 5 skill playbooks
+- Copy and substitute all skill playbooks
 - Generate all DOCS stubs
 - Print a checklist of remaining manual steps
 
-### Step 3: Copy the Shared Server Code
-
-The MCP server and RSS scorer are not duplicated — copy them from BloomLeedz:
-
-```
-copy "C:\Users\Scott\Desktop\WKG\BLOOMLEEDZ\server\mcp\mcp_server.js" "{rootDir}\server\mcp\"
-xcopy /E "C:\Users\Scott\Desktop\WKG\BLOOMLEEDZ\server\node_modules" "{rootDir}\server\node_modules\"
-copy "C:\Users\Scott\Desktop\WKG\BLOOMLEEDZ\rss\rss-scorer-mcp\index.js" "{rootDir}\rss\rss-scorer-mcp\"
-xcopy /E "C:\Users\Scott\Desktop\WKG\BLOOMLEEDZ\rss\rss-scorer-mcp\node_modules" "{rootDir}\rss\rss-scorer-mcp\node_modules\"
-```
-
-When Pre-Crime is moved to a standalone location, run `npm install` in `server/` and `rss/rss-scorer-mcp/` instead of copying node_modules.
-
-### Step 4: Fill In VALUE_PROP.md
+### Step 3: Fill In VALUE_PROP.md
 
 The generated `DOCS/VALUE_PROP.md` has stubs. Fill in:
 - The full pitch (what you're selling, to whom, why)
@@ -256,7 +282,7 @@ The generated `DOCS/VALUE_PROP.md` has stubs. Fill in:
 
 **This document directly determines draft quality.** The better it is, the better every outreach email will be.
 
-### Step 5: Load Your Contact Database
+### Step 4: Load Your Contact Database
 
 The deployment starts with `template.sqlite` — empty schema, no clients. You have two options:
 
@@ -278,28 +304,59 @@ Requires Node.js ≥ 22.5. No additional npm packages.
 **Option B: Insert records manually**
 Use any SQLite editor (DB Browser for SQLite, DBeaver, etc.) to insert client rows directly into the template. Required columns: `id` (CUID or UUID), `name`, `company`. Everything else can be null — Pre-Crime will fill it in.
 
-### Step 6: Set Config
-
-Launch Claude Code from the workspace root and set the Config table:
-```
-> update_config({ companyName: "...", companyEmail: "...", businessDescription: "..." })
-```
-
-### Step 7: Review and Tune Skill Files
-
-The generated skill files have your manifest tokens substituted in but may need hand-tuning. See the **Customizing Skill Files** section below.
-
-### Step 8: Launch
+### Step 5: Launch
 
 ```
 cd "{rootDir}"
 claude
 ```
 
-Then in Claude:
+Then say: **initialize this deployment**
+
+The init wizard handles Config setup, Leedz JWT generation, and harvest source discovery. After that, say: **run the enrichment workflow**
+
+---
+
+## Building a Distributable Zip
+
+To package everything needed for a blank new deployment into a single zip:
+
+```bat
+build.bat
 ```
-Read DOCS/STATUS.md then run the enrichment workflow
+
+Run from `C:\path\to\PRECRIME`. Output goes to `dist\precrime-deploy-YYYYMMDD.zip`.
+
+### What's in the zip
+
+The zip contains a top-level `precrime/` folder:
+
 ```
+precrime/
+├── deploy.js
+├── build.bat
+├── README.md
+├── data/
+│   └── template.sqlite       ← blank schema DB
+├── server/
+│   ├── mcp/mcp_server.js     ← MCP server (15 tools)
+│   ├── package.json          ← node_modules NOT included — npm install runs on deploy
+│   └── prisma/schema.prisma
+├── templates/                ← all skill + doc templates
+└── scripts/
+    └── migrate-db.js
+```
+
+`node_modules` is NOT included in the zip. When the recipient runs `deploy.js`, it runs `npm install` + `npx prisma generate` automatically in the generated workspace.
+
+### Using the zip on another machine
+
+1. Unzip anywhere — you get a `precrime/` folder
+2. `cd precrime`
+3. Create or copy a manifest JSON
+4. `node deploy.js --manifest your-manifest.json`
+5. `cd` into the generated workspace and run `claude`
+6. Say: **initialize this deployment**
 
 ---
 
@@ -382,7 +439,7 @@ The generated skills work out of the box for most deployments. These notes expla
 
 ## MCP Tools Reference
 
-These tools are available in every enrichment session:
+15 tools available in every enrichment session:
 
 | Tool | Purpose |
 |------|---------|
@@ -397,6 +454,10 @@ These tools are available in every enrichment session:
 | `delete_factlet(id)` | Remove a factlet from the queue |
 | `get_config()` | Read the Config table |
 | `update_config(fields)` | Write any Config fields |
+| `create_booking(clientId, fields)` | Create a Booking record linked to a client |
+| `get_bookings(filters)` | List bookings with optional filters |
+| `get_client_bookings(clientId)` | Get all bookings for a specific client |
+| `update_booking(id, fields)` | Update a booking (status, leedId, sharedAt, etc.) |
 | `get_top_articles(limit)` | RSS scorer: return top-scored articles from configured feeds |
 
 ---
@@ -528,9 +589,9 @@ Each deployment is fully self-contained. Multiple deployments can run simultaneo
 The Pre-Crime framework has three layers:
 
 **Layer 1 — Infrastructure (zero changes per deployment)**
-- `mcp_server.js` — JSON-RPC server, Prisma + SQLite, 11 tools
+- `mcp_server.js` — JSON-RPC server, Prisma + SQLite, 15 tools
 - `rss-scorer-mcp/index.js` — RSS feed runner with keyword scoring
-- Prisma schema — Client, Factlet, Config (generic)
+- Prisma schema — Client, Booking, Factlet, Config (generic)
 - `template.sqlite` — empty schema file
 
 **Layer 2 — Configuration (structured, changes per deployment)**
