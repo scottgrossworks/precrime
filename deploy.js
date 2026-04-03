@@ -424,6 +424,11 @@ ${'='.repeat(65)}
    Feeds were generated from the manifest. Add/remove/tune feed URLs
    and per-feed keywords for your audience.
 
+5a. FACEBOOK HARVESTER (requires Claude-in-Chrome MCP):
+    Add Facebook page/group URLs to: skills/fb-factlet-harvester/fb_sources.md
+    Run skill: skills/fb-factlet-harvester/SKILL.md
+    Requires the Claude-in-Chrome browser extension connected.
+
 5b. REDDIT HARVESTER (ready to use, no setup needed):
     pip install requests  (usually already installed)
     No API keys required — uses Reddit's public JSON endpoints.
