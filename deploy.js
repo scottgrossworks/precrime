@@ -275,7 +275,7 @@ write(path.join(outputDir, 'server', '.env'),
 // 4. Generate mcp_server_config.json (DB path for MCP server)
 const mcpServerCfg = {
   mcp:      { name: `${manifest.deployment.name}-mcp`, version: '2.0.0', protocolVersion: '2025-06-18' },
-  database: { path: path.relative(path.join(outputDir, 'server', 'mcp'), dbDest).replace(/\\/g, '/') },
+  database: { path: path.relative(path.join(outputDir, 'server'), dbDest).replace(/\\/g, '/') },
   logging:  { level: 'info', file: './mcp_server.log' }
 };
 write(path.join(outputDir, 'server', 'mcp', 'mcp_server_config.json'), JSON.stringify(mcpServerCfg, null, 2));
