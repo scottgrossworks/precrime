@@ -294,6 +294,14 @@ const tokens = buildTokens(manifest);
 write(path.join(outputDir, 'server', '.env'),
   `DATABASE_URL="file:${dbDest.replace(/\\/g, '/')}"\n`);
 
+// 4b. Push schema to database — runs after .env and template.sqlite are in place
+console.log('\nPushing schema to database (npx prisma db push)...');
+try {
+  execSync('npx prisma db push', { cwd: path.join(outputDir, 'server'), stdio: 'inherit' });
+} catch (e) {
+  console.warn('  ⚠ prisma db push failed — run manually: cd server && npx prisma db push');
+}
+
 // 4. Generate mcp_server_config.json (DB path for MCP server)
 const mcpServerCfg = {
   mcp:      { name: `${manifest.deployment.name}-mcp`, version: '2.0.0', protocolVersion: '2025-06-18' },
