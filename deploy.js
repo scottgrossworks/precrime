@@ -291,7 +291,7 @@ const dbRelToServer = path.relative(path.join(outputDir, 'server'), dbDest).repl
 write(path.join(outputDir, 'server', '.env'),
   `DATABASE_URL="file:${dbRelToServer}"\n`);
 
-// 4b. Push schema to database — runs after .env and template.sqlite are in place
+// 4b. Push schema to database — runs after .env and data/ dir are in place
 console.log('\nPushing schema to database (npx prisma db push)...');
 try {
   execSync('npx prisma db push', { cwd: path.join(outputDir, 'server'), stdio: 'inherit' });
@@ -299,6 +299,14 @@ try {
   console.error('\nFATAL: prisma db push failed — database schema was not applied.');
   console.error('  Error:', e.message);
   process.exit(1);
+}
+
+// 4c. Prune devDependencies (removes prisma CLI + its engine binaries — not needed at runtime)
+console.log('\nPruning devDependencies (npm prune --production)...');
+try {
+  execSync('npm prune --production', { cwd: path.join(outputDir, 'server'), stdio: 'inherit' });
+} catch (e) {
+  console.warn('  ⚠ npm prune failed — zip will be larger than necessary');
 }
 
 // 4. Generate mcp_server_config.json (DB path for MCP server)
