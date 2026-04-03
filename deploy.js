@@ -286,8 +286,10 @@ console.log(`  ✓ data/ directory ready — ${dbFile} will be created by prisma
 const tokens = buildTokens(manifest);
 
 // 4a. Generate server/.env (Prisma reads this automatically)
+// Use path relative to server/ so it works in both build context and deployed workspace
+const dbRelToServer = path.relative(path.join(outputDir, 'server'), dbDest).replace(/\\/g, '/');
 write(path.join(outputDir, 'server', '.env'),
-  `DATABASE_URL="file:${dbDest.replace(/\\/g, '/')}"\n`);
+  `DATABASE_URL="file:${dbRelToServer}"\n`);
 
 // 4b. Push schema to database — runs after .env and template.sqlite are in place
 console.log('\nPushing schema to database (npx prisma db push)...');
