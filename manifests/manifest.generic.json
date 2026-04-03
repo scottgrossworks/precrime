@@ -1,0 +1,123 @@
+{
+  "deployment": {
+    "name": "Precrime",
+    "dbFile": "data/precrime.sqlite"
+  },
+  "seller": {
+    "name": "",
+    "company": "Your Company",
+    "email": "",
+    "website": "",
+    "phone": ""
+  },
+  "product": {
+    "name": "Your Product",
+    "description": "See DOCS/VALUE_PROP.md — fill this in before running enrichment",
+    "differentiators": [
+      "Add your differentiators to DOCS/VALUE_PROP.md"
+    ],
+    "geography": "Your market",
+    "pricing": "See DOCS/VALUE_PROP.md"
+  },
+  "audience": {
+    "segments": [
+      {
+        "label": "Target Customers",
+        "targetRoles": ["decision-maker"],
+        "events": [],
+        "seasonalWindows": []
+      }
+    ]
+  },
+  "relevanceSignals": {
+    "high": ["(define high-relevance signals for your audience)"],
+    "medium": [],
+    "timing": [],
+    "not": ["(define topics to ignore)"]
+  },
+  "factletTopics": [
+    "(define topics broadly relevant to your audience — used to evaluate RSS articles)"
+  ],
+  "factletNotTopics": [],
+  "warmthScoring": {
+    "categories": [
+      {
+        "name": "Email present",
+        "max": 2,
+        "criteria": { "0": "No email", "1": "Generic/catch-all email", "2": "Direct personal email" }
+      },
+      {
+        "name": "Recent activity",
+        "max": 2,
+        "criteria": { "0": "No activity found", "1": "Some online presence", "2": "Recent news or post (30 days)" }
+      },
+      {
+        "name": "Relevance fit",
+        "max": 2,
+        "criteria": { "0": "Poor fit", "1": "Reasonable fit", "2": "Strong fit for product" }
+      }
+    ],
+    "hardGates": [
+      "No email → warmthScore = 0"
+    ]
+  },
+  "evaluatorCriteria": [
+    {
+      "name": "Specificity",
+      "description": "Draft references something specific to THIS client — not generic",
+      "passExample": "Mentions a recent event, news item, or known pain specific to them",
+      "failExample": "Could have been sent to anyone on the list"
+    },
+    {
+      "name": "Pain-to-Product",
+      "description": "Connects their observable situation to what the product solves — in one sentence",
+      "passExample": "Clear causal link: their problem → your solution",
+      "failExample": "Product pitch with no connection to their world"
+    },
+    {
+      "name": "Brevity",
+      "description": "Under 150 words. Every sentence earns its place.",
+      "passExample": "Tight, punchy, no filler",
+      "failExample": "Padded with pleasantries or redundant sentences"
+    },
+    {
+      "name": "Opens strong",
+      "description": "First sentence creates urgency or curiosity — does NOT open with seller name/product name",
+      "passExample": "Leads with their world, a question, or a surprising fact",
+      "failExample": "\"My name is X and I'm reaching out about Y\""
+    },
+    {
+      "name": "Reply Test",
+      "description": "Would a busy decision-maker actually reply to this?",
+      "passExample": "Clear hook, specific ask, low friction",
+      "failExample": "Vague, too long, or asks for a 30-minute call as the first ask"
+    }
+  ],
+  "outreachRules": {
+    "maxWords": 150,
+    "tone": "confident, direct, human — no corporate speak",
+    "openWith": "Lead with THEIR world — never with your name or product name",
+    "closeWith": "Close with a command, not a hope ('Let's talk Thursday' not 'I hope to hear from you')",
+    "forbidden": [
+      "I hope this finds you well",
+      "I'm reaching out because",
+      "I would love the opportunity",
+      "Please don't hesitate to",
+      "I wanted to follow up",
+      "At [company], we help [audience] to"
+    ]
+  },
+  "rssConfig": {
+    "additionalKeywords": [],
+    "feeds": []
+  },
+  "redditConfig": {
+    "additionalKeywords": [],
+    "subreddits": []
+  },
+  "igConfig": {
+    "accounts": [],
+    "hashtags": []
+  },
+  "fbSources": []
+}

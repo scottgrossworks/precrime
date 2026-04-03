@@ -252,6 +252,28 @@ try {
   console.warn('  ⚠ prisma generate failed — run manually: cd server && npx prisma generate');
 }
 
+// 2e. Copy RSS scorer (index.js + package.json) and install its deps
+const rssSrc    = path.join(PRECRIME, 'rss', 'rss-scorer-mcp', 'index.js');
+const rssDst    = path.join(outputDir, 'rss', 'rss-scorer-mcp', 'index.js');
+const rssPkgSrc = path.join(PRECRIME, 'rss', 'rss-scorer-mcp', 'package.json');
+const rssPkgDst = path.join(outputDir, 'rss', 'rss-scorer-mcp', 'package.json');
+
+if (fs.existsSync(rssSrc)) {
+  copyFile(rssSrc, rssDst);
+} else {
+  console.warn(`  ⚠ RSS scorer source missing: ${rssSrc}`);
+}
+if (fs.existsSync(rssPkgSrc)) {
+  copyFile(rssPkgSrc, rssPkgDst);
+}
+
+console.log('\nInstalling RSS scorer dependencies (npm install)...');
+try {
+  execSync('npm install', { cwd: path.join(outputDir, 'rss', 'rss-scorer-mcp'), stdio: 'inherit' });
+} catch (e) {
+  console.warn('  ⚠ RSS npm install failed — run manually: cd rss/rss-scorer-mcp && npm install');
+}
+
 // 3. Copy template.sqlite → data/{name}.sqlite
 const dbFile    = (manifest.deployment.dbFile || `data/${(manifest.deployment.name||'project').toLowerCase()}.sqlite`);
 const dbDest    = path.join(outputDir, dbFile);

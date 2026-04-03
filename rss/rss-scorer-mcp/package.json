@@ -1,0 +1,14 @@
+{
+  "name": "precrime-rss-scorer-mcp",
+  "version": "2.0.0",
+  "description": "MCP server — fetches and scores RSS articles for Pre-Crime enrichment",
+  "main": "index.js",
+  "type": "module",
+  "scripts": {
+    "start": "node index.js"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.0.4",
+    "rss-parser": "^3.13.0"
+  }
+}
