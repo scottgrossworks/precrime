@@ -58,7 +58,7 @@ No HTTP server. MCP calls Prisma directly.
 
 ### MCP Tools
 
-**leedz-mcp** (11 tools): `get_next_client`, `get_client`, `search_clients`, `update_client`, `get_ready_drafts`, `get_stats`, `create_factlet`, `get_new_factlets`, `delete_factlet`, `get_config`, `update_config`
+**leedz-mcp** (15 tools): `get_next_client`, `get_client`, `search_clients`, `update_client`, `get_ready_drafts`, `get_stats`, `create_factlet`, `get_new_factlets`, `delete_factlet`, `get_config`, `update_config`, `create_booking`, `get_bookings`, `get_client_bookings`, `update_booking`
 
 **bloomleedz-rss** (1 tool): `get_top_articles`
 
@@ -81,6 +81,8 @@ get_next_client() → factlet check → discovery → scrape → score → compo
 | `skills/factlet-harvester.md` | RSS → factlet pipeline |
 | `skills/relevance-judge.md` | Relevance filter for all intel |
 | `skills/fb-factlet-harvester/SKILL.md` | Facebook → factlet pipeline (needs Chrome) |
+| `skills/init-wizard.md` | First-run setup wizard (say "initialize this deployment") |
+| `skills/share-skill.md` | leed_ready → post/email action handler |
 
 ---
 

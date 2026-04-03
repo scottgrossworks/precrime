@@ -27,7 +27,9 @@
 
 ## RUNNING THE WORKFLOW
 
-Say **"run the enrichment workflow"** in any Claude session.
+**First time:** say **"initialize this deployment"** — the init wizard will confirm config, generate your Leedz session JWT, discover harvest sources, then launch harvesters automatically.
+
+**Subsequent runs:** say **"run the enrichment workflow"** in any Claude session.
 
 | Playbook | Purpose |
 |----------|---------|
@@ -65,8 +67,40 @@ model Client {
   warmthScore    Float?    // 0–10
   lastEnriched   DateTime?
   lastQueueCheck DateTime? // DB cursor + factlet watermark
+  source         String?   // how this client entered the DB
   createdAt      DateTime  @default(now())
   updatedAt      DateTime  @updatedAt
+  bookings       Booking[]
+}
+
+model Booking {
+  id               String    @id @default(cuid())
+  clientId         String
+  title            String?
+  description      String?
+  notes            String?
+  location         String?
+  startDate        DateTime?
+  endDate          DateTime?
+  startTime        String?
+  endTime          String?
+  duration         Float?
+  hourlyRate       Float?
+  flatRate         Float?
+  totalAmount      Float?
+  status           String    @default("new")   // new | leed_ready | shared | booked | cancelled
+  source           String?
+  sourceUrl        String?
+  trade            String?
+  zip              String?
+  shared           Boolean   @default(false)
+  sharedTo         String?   // "leedz_api" | "email_share" | "email_user"
+  sharedAt         BigInt?
+  leedPrice        Int?
+  leedId           String?   // returned by createLeed MCP tool
+  createdAt        DateTime  @default(now())
+  updatedAt        DateTime  @updatedAt
+  client           Client    @relation(fields: [clientId], references: [id])
 }
 
 model Factlet {
@@ -81,6 +115,13 @@ model Config {
   companyName         String?
   companyEmail        String?
   businessDescription String?
+  activeEntities      String?  // JSON: ["client"] or ["client","booking"]
+  defaultTrade        String?  // e.g., "Caricature Artist"
+  defaultBookingAction String? // "leedz_api" | "email_share" | "email_user"
+  marketplaceEnabled  Boolean  @default(false)
+  leadCaptureEnabled  Boolean  @default(false)
+  leedzEmail          String?
+  leedzSession        String?  // session JWT for createLeed MCP calls
   llmApiKey           String?
   llmProvider         String?
   llmBaseUrl          String?
@@ -118,6 +159,8 @@ model Config {
 | `skills/factlet-harvester.md` | RSS factlet harvester |
 | `skills/fb-factlet-harvester/SKILL.md` | FB factlet harvester |
 | `skills/fb-factlet-harvester/fb_sources.md` | Curated FB page list |
+| `skills/init-wizard.md` | First-run setup wizard |
+| `skills/share-skill.md` | leed_ready → post/email action handler |
 | `server/mcp/mcp_server.js` | MCP server |
 | `server/mcp/mcp_server_config.json` | DB path config |
 | `rss/rss-scorer-mcp/index.js` | RSS scorer MCP |
@@ -148,13 +191,9 @@ model Config {
 - MCP server config pointing at correct DB
 
 ### TODO (manual steps required before first run)
-- [ ] Copy `mcp_server.js` from BloomLeedz server/ into this workspace
-- [ ] Copy `rss-scorer-mcp/index.js` from BloomLeedz into this workspace
 - [ ] Fill in `DOCS/VALUE_PROP.md` with the real product pitch
-- [ ] Populate `skills/fb-factlet-harvester/fb_sources.md` with Facebook pages
-- [ ] Load client records into the database
-- [ ] Set Config row via: `update_config({ companyName, companyEmail, businessDescription })`
-- [ ] Review and tune all 5 skill playbooks for this specific audience
+- [ ] Run init wizard: say "initialize this deployment" — it handles Config setup, JWT generation, and harvest source discovery
+- [ ] Load client records into the database (if outreach mode)
 
 ### Segments defined
 {{AUDIENCE_DESCRIPTION}}
