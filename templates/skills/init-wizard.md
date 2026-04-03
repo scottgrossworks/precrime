@@ -3,6 +3,10 @@ name: precrime-init-wizard
 description: Startup/initialization skill — conversationally configures a Pre-Crime deployment on first launch or re-initialization
 triggers:
   - initialize this deployment
+  - initialize precrime
+  - init precrime
+  - start precrime
+  - start the precrime workflow
   - run setup
   - configure this workspace
   - first time setup
