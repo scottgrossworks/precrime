@@ -242,14 +242,16 @@ console.log('\nInstalling server dependencies (npm install)...');
 try {
   execSync('npm install', { cwd: path.join(outputDir, 'server'), stdio: 'inherit' });
 } catch (e) {
-  console.warn('  ⚠ npm install failed — run manually: cd server && npm install');
+  console.error('\nFATAL: npm install failed. Fix npm/Node and retry.');
+  process.exit(1);
 }
 
 console.log('\nGenerating Prisma client (npx prisma generate)...');
 try {
   execSync('npx prisma generate', { cwd: path.join(outputDir, 'server'), stdio: 'inherit' });
 } catch (e) {
-  console.warn('  ⚠ prisma generate failed — run manually: cd server && npx prisma generate');
+  console.error('\nFATAL: prisma generate failed. Check schema.prisma and retry.');
+  process.exit(1);
 }
 
 // 2e. Copy RSS scorer (index.js + package.json) and install its deps
@@ -292,7 +294,9 @@ console.log('\nPushing schema to database (npx prisma db push)...');
 try {
   execSync('npx prisma db push', { cwd: path.join(outputDir, 'server'), stdio: 'inherit' });
 } catch (e) {
-  console.warn('  ⚠ prisma db push failed — run manually: cd server && npx prisma db push');
+  console.error('\nFATAL: prisma db push failed — database schema was not applied.');
+  console.error('  Error:', e.message);
+  process.exit(1);
 }
 
 // 4. Generate mcp_server_config.json (DB path for MCP server)
