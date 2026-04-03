@@ -274,18 +274,11 @@ try {
   console.warn('  ⚠ RSS npm install failed — run manually: cd rss/rss-scorer-mcp && npm install');
 }
 
-// 3. Copy template.sqlite → data/{name}.sqlite
-const dbFile    = (manifest.deployment.dbFile || `data/${(manifest.deployment.name||'project').toLowerCase()}.sqlite`);
-const dbDest    = path.join(outputDir, dbFile);
-const tmplDb    = path.join(DATA, 'template.sqlite');
-if (fs.existsSync(tmplDb)) {
-  mkdir(path.dirname(dbDest));
-  fs.copyFileSync(tmplDb, dbDest);
-  console.log(`  ✓ ${dbFile}  (empty schema — ready for clients)`);
-} else {
-  console.warn(`  ⚠ template.sqlite not found at ${tmplDb}`);
-  console.warn(`    Run: node scripts/create-template.js  to create it.`);
-}
+// 3. Create data directory — prisma db push will create the sqlite file from schema
+const dbFile = (manifest.deployment.dbFile || `data/${(manifest.deployment.name||'project').toLowerCase()}.sqlite`);
+const dbDest = path.join(outputDir, dbFile);
+mkdir(path.dirname(dbDest));
+console.log(`  ✓ data/ directory ready — ${dbFile} will be created by prisma db push`);
 
 // 3. Build tokens
 const tokens = buildTokens(manifest);
