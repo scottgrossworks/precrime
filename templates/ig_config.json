@@ -1,0 +1,19 @@
+{
+  "harvester": {
+    "command": "python tools/ig_harvest.py",
+    "outputDir": "./scrapes",
+    "maxPostsPerAccount": 20,
+    "maxPostsPerHashtag": 25
+  },
+  "accounts": [
+    {
+      "username": "example_industry_account",
+      "category": "industry"
+    }
+  ],
+  "hashtags": [
+    "examplehashtag"
+  ],
+  "recencyDays": 30,
+  "minLikes": 0
+}

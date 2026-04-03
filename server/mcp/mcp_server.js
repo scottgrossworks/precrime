@@ -476,16 +476,23 @@ async function handleGetReadyDrafts(id, params) {
 
 // Reference: prisma_sqlite_db.js getSystemStats() lines 624-641
 async function handleGetStats(id, params) {
-    const [totalClients, totalFactlets, brewing, ready, sent] = await Promise.all([
+    const [totalClients, totalFactlets, brewing, ready, sent,
+           totalBookings, newBookings, leedReady, taken, shared] = await Promise.all([
         prisma.client.count(),
         prisma.factlet.count(),
         prisma.client.count({ where: { draftStatus: 'brewing' } }),
         prisma.client.count({ where: { draftStatus: 'ready' } }),
-        prisma.client.count({ where: { draftStatus: 'sent' } })
+        prisma.client.count({ where: { draftStatus: 'sent' } }),
+        prisma.booking.count(),
+        prisma.booking.count({ where: { status: 'new' } }),
+        prisma.booking.count({ where: { status: 'leed_ready' } }),
+        prisma.booking.count({ where: { status: 'taken' } }),
+        prisma.booking.count({ where: { status: 'shared' } })
     ]);
     return createSuccessResponse(id, JSON.stringify({
         totalClients, totalFactlets,
-        drafts: { brewing, ready, sent }
+        drafts: { brewing, ready, sent },
+        bookings: { total: totalBookings, new: newBookings, leed_ready: leedReady, taken, shared }
     }, null, 2));
 }
 
@@ -627,6 +634,15 @@ async function handleUpdateBooking(id, params) {
     if (args.endDate)   data.endDate   = new Date(args.endDate);
     if (args.shared !== undefined) data.shared = !!args.shared;
     if (args.sharedAt !== undefined) data.sharedAt = BigInt(args.sharedAt);
+
+    // Auto-promote to leed_ready if fields complete and status not explicitly set
+    if (!data.status) {
+        const existing = await prisma.booking.findUnique({ where: { id: args.id } });
+        const merged = { ...existing, ...data };
+        if (merged.trade && merged.startDate && (merged.location || merged.zip)) {
+            data.status = 'leed_ready';
+        }
+    }
 
     const booking = await prisma.booking.update({ where: { id: args.id }, data });
     return createSuccessResponse(id, JSON.stringify(booking, null, 2));

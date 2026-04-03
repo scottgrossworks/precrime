@@ -13,6 +13,9 @@ TMP/SCRAPERS/
 *.env.*
 the-leedz-bf438f44eef5.json
 
+# Scraped data (output, not source)
+scrapes/
+
 # Databases (live data, not source)
 *.sqlite
 *.sqlite.backup

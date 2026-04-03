@@ -157,6 +157,8 @@ const PC_SCHEMA = {
     ['llmBaseUrl',          'TEXT',    null],
     ['llmAnthropicVersion', 'TEXT',    null],
     ['llmMaxTokens',        'INTEGER', '1024'],
+    ['leedzEmail',          'TEXT',    null],
+    ['leedzSession',        'TEXT',    null],
     ['createdAt',           'DATETIME',"CURRENT_TIMESTAMP"],
     ['updatedAt',           'DATETIME',"CURRENT_TIMESTAMP"],
   ]
