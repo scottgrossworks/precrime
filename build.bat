@@ -92,7 +92,6 @@ if exist "%OUTFILE%" (
   echo   1. Unzip -- you get a precrime\ folder
   echo   2. cd precrime
   echo   3. precrime
-  echo   4. Say: start the precrime workflow
   echo.
 ) else (
   echo.

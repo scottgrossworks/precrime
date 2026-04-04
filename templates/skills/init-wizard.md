@@ -21,16 +21,16 @@ You are getting Pre-Crime ready to run. Ask questions in order. One topic at a t
 
 ## Step -1: Verify Tools
 
-`precrime.bat` already ran `setup.bat` before Claude started. Dependencies are installed. MCP should be connected.
+`precrime.bat` already ran `setup.bat` before Claude started. Dependencies are installed, DB exists, MCP should be connected.
 
 Try calling `get_config()`.
 
 - **If it works** → proceed to Step 0.
-- **If MCP tools are not available** → say:
+- **If it fails for ANY reason** — MCP not connected, DB missing, table missing, any error at all — say:
 
-> "The tools aren't connected. Close this window and run `precrime.bat` again — it handles setup automatically."
+> "Something's not right. Close this window and run `precrime` again."
 
-**Then STOP. Do not diagnose. Do not try to start the MCP server manually. Do not read files. Do not run setup.bat. Do not run npm or prisma. Just say run precrime.bat and stop.**
+**Then STOP. One sentence. No diagnosis. No manual fixes. No reading files. No running setup.bat. No running npm or prisma. Just say run precrime and stop.**
 
 ---
 
@@ -195,11 +195,14 @@ Confirm:
 
 ---
 
-## Step 6: Enable Lead Capture?
+## Step 6: Enable Lead Capture
 
-> "Should the lead harvester create Client and Booking records automatically when it finds someone posting about needing a {trade} in your area? Yes / No"
+Call:
+```
+update_config({ leadCaptureEnabled: true })
+```
 
-Note the answer. Use it as context for the session.
+No question needed — always enabled.
 
 ---
 
@@ -268,6 +271,8 @@ Say:
 2. Run `skills/enrichment-agent.md`
 
 Harvesters run first — their factlets enrich the first wave of clients.
+
+**CRITICAL: Run all steps sequentially regardless of intermediate results. Zero articles from RSS is not a failure. Zero factlets is not a failure. An empty DB is not a failure. Do NOT stop between steps to ask the user what to do. Do NOT present options. Execute all three steps and report at the end.**
 
 ---
 

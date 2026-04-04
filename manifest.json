@@ -1,0 +1,414 @@
+{
+  "_comment": "Pre-Crime default manifest — caricature artist example. Copy and customize for your own deployment.",
+
+  "deployment": {
+    "name": "MyProject",
+    "version": "1.0",
+    "rootDir": "C:\\Users\\YourName\\Projects\\MYPROJECT",
+    "dbFile": "data/myproject.sqlite"
+  },
+
+  "seller": {
+    "name": "Your Name",
+    "company": "Your Company",
+    "email": "you@yourdomain.com",
+    "website": "https://yourdomain.com",
+    "phone": ""
+  },
+
+  "product": {
+    "name": "Live Caricature Entertainment",
+    "description": "A professional caricature artist available for corporate events, weddings, bar/bat mitzvahs, private parties, and trade shows in the Los Angeles area. Fast, funny, flattering likenesses drawn on the spot — guests leave with a keepsake they actually want to keep.",
+    "differentiators": [
+      "Fast, clean style — no exaggerated grotesques. Guests look like themselves, just funnier.",
+      "Works any event size from 20 to 500+ guests",
+      "Fully self-contained — easel, paper, markers. No setup needs from the venue.",
+      "Available as digital caricatures (iPad) for instant-share events"
+    ],
+    "geography": "Los Angeles metro area — Orange County, Ventura County on request",
+    "pricing": "$250/hr, 2-hour minimum. Deposit to hold date."
+  },
+
+  "audience": {
+    "segments": [
+      {
+        "id": "corporate",
+        "label": "Corporate Events",
+        "targetRoles": [
+          "Event Coordinator",
+          "HR Manager",
+          "Executive Assistant",
+          "Marketing Manager"
+        ],
+        "events": [
+          "holiday party",
+          "company picnic",
+          "team building event",
+          "trade show booth",
+          "product launch",
+          "client appreciation event",
+          "employee recognition event"
+        ],
+        "seasonalWindows": [
+          {
+            "name": "Holiday Party Season",
+            "months": [9, 10, 11],
+            "event_months": [11, 12],
+            "lead_weeks": 6
+          },
+          {
+            "name": "Summer Picnic Season",
+            "months": [3, 4, 5],
+            "event_months": [6, 7, 8],
+            "lead_weeks": 8
+          }
+        ]
+      },
+      {
+        "id": "weddings",
+        "label": "Weddings",
+        "targetRoles": [
+          "Wedding Planner",
+          "Bride",
+          "Groom",
+          "Maid of Honor (coordinator)"
+        ],
+        "events": [
+          "wedding reception",
+          "cocktail hour entertainment",
+          "rehearsal dinner",
+          "engagement party"
+        ],
+        "seasonalWindows": [
+          {
+            "name": "Spring Wedding Season",
+            "months": [12, 1, 2],
+            "event_months": [4, 5, 6],
+            "lead_weeks": 12
+          },
+          {
+            "name": "Fall Wedding Season",
+            "months": [5, 6, 7],
+            "event_months": [9, 10, 11],
+            "lead_weeks": 12
+          }
+        ]
+      },
+      {
+        "id": "bnb",
+        "label": "Bar / Bat Mitzvahs & Private Parties",
+        "targetRoles": [
+          "Parent",
+          "Event Planner",
+          "Party Host"
+        ],
+        "events": [
+          "bar mitzvah",
+          "bat mitzvah",
+          "birthday party",
+          "quinceañera",
+          "graduation party",
+          "sweet sixteen"
+        ],
+        "seasonalWindows": [
+          {
+            "name": "Party Season",
+            "months": [1, 2, 3, 8, 9, 10],
+            "event_months": [3, 4, 5, 10, 11, 12],
+            "lead_weeks": 8
+          }
+        ]
+      }
+    ]
+  },
+
+  "relevanceSignals": {
+    "high": [
+      "looking for caricature artist",
+      "caricature artist needed",
+      "need entertainment for party",
+      "need entertainment for wedding",
+      "need entertainment for corporate event",
+      "caricatures at my event",
+      "live artist for event",
+      "caricature for bar mitzvah",
+      "fun entertainment for party",
+      "unique entertainment idea"
+    ],
+    "medium": [
+      "planning a corporate event",
+      "planning a wedding reception",
+      "planning a bar mitzvah",
+      "event entertainment ideas",
+      "what entertainment should I book",
+      "ideas for party entertainment",
+      "trade show booth ideas",
+      "cocktail hour entertainment"
+    ],
+    "timing": [
+      "save the date",
+      "planning for",
+      "event is in",
+      "party is",
+      "looking to book",
+      "need to hire"
+    ],
+    "not": [
+      "digital art commission",
+      "portrait painting",
+      "tattoo",
+      "logo design",
+      "graphic design job posting",
+      "animation",
+      "concept art",
+      "political cartoon"
+    ]
+  },
+
+  "factletTopics": [
+    "corporate event planning trends Los Angeles",
+    "wedding entertainment trends",
+    "live event entertainment",
+    "bar mitzvah entertainment ideas",
+    "trade show booth engagement ideas",
+    "event industry recovery post-pandemic",
+    "party entertainment rental trends"
+  ],
+
+  "factletNotTopics": [
+    "digital art tools and software",
+    "fine art gallery news",
+    "animation industry",
+    "gaming art",
+    "NFT or crypto art",
+    "art school admissions"
+  ],
+
+  "warmthScoring": {
+    "categories": [
+      {
+        "name": "Contact Quality",
+        "max": 2,
+        "criteria": {
+          "0": "No contact found or no email",
+          "1": "Generic inbox (info@, events@) or role unclear",
+          "2": "Named decision-maker with direct email"
+        }
+      },
+      {
+        "name": "Buying Signal",
+        "max": 2,
+        "criteria": {
+          "0": "No evidence of event planning or entertainment need",
+          "1": "Historical evidence (past events, past entertainment bookings)",
+          "2": "Active signal (announcing event, asking for recommendations, posting about planning)"
+        }
+      },
+      {
+        "name": "Event Intel",
+        "max": 2,
+        "criteria": {
+          "0": "No event details found",
+          "1": "Event type known but no date or size",
+          "2": "Event type + date or size known — bookable intel"
+        }
+      },
+      {
+        "name": "Intel Depth",
+        "max": 1,
+        "criteria": {
+          "0": "No useful intel (no social, no site, no news)",
+          "1": "Scraped something useful — event details, budget signals, past bookings"
+        }
+      },
+      {
+        "name": "Specificity",
+        "max": 1,
+        "criteria": {
+          "0": "Only generic info — no differentiating facts",
+          "1": "At least one fact unique to THIS client (named event, specific date, stated need)"
+        }
+      },
+      {
+        "name": "Draft Hook Available",
+        "max": 1,
+        "criteria": {
+          "0": "Nothing specific enough to open with",
+          "1": "Clear hook exists — specific event, stated need, or recent post"
+        }
+      },
+      {
+        "name": "Geography Match",
+        "max": 1,
+        "criteria": {
+          "0": "Outside LA metro — not serviceable",
+          "1": "LA metro or adjacent — serviceable"
+        }
+      }
+    ],
+    "hardGates": [
+      "No email at all → warmthScore = 0, draftStatus = brewing, do not compose",
+      "Outside LA metro → warmthScore = 0, mark brewing, log OUT_OF_GEOGRAPHY",
+      "Score < 5 → draftStatus = brewing always"
+    ]
+  },
+
+  "evaluatorCriteria": [
+    {
+      "name": "Specificity",
+      "description": "Does the draft reference something specific to THIS event or person — not 'events like yours'?",
+      "passExample": "References a named event, stated date, specific type of gathering unique to them",
+      "failExample": "'Companies often book entertainment for...' / 'Events like yours benefit from...'"
+    },
+    {
+      "name": "Recency",
+      "description": "Is the hook recent — based on something they said, posted, or announced recently?",
+      "passExample": "References a post, announcement, or event within the past 60 days",
+      "failExample": "Only references static facts with no timely hook"
+    },
+    {
+      "name": "Pain-to-Product Bridge",
+      "description": "Does the draft connect THEIR event need to caricature entertainment in one clear sentence?",
+      "passExample": "One sentence: their event type → caricature artist = the entertainment that actually sticks",
+      "failExample": "Describes the artist's skills without connecting to their specific event"
+    },
+    {
+      "name": "Brevity",
+      "description": "Under 120 words. Every sentence earns its place.",
+      "passExample": "Tight, punchy, nothing wasted. No filler.",
+      "failExample": "Over 120 words, or contains any forbidden phrase"
+    },
+    {
+      "name": "Reply Test",
+      "description": "Would a busy event planner reply?",
+      "passExample": "They forward it to the person booking entertainment",
+      "failExample": "Finger on delete by sentence two"
+    }
+  ],
+
+  "outreachRules": {
+    "maxWords": 120,
+    "tone": "warm, direct, confident — not salesy. Sounds like a working artist who's done this a thousand times.",
+    "openWith": "Lead with THEIR event — their date, their venue, their guest count. Never open with your own name.",
+    "closeWith": "Close with a specific ask: 'Is [date] still open?' or 'What's the guest count?' — not 'let me know if you're interested'",
+    "forbidden": [
+      "I hope this finds you well",
+      "I'm reaching out because",
+      "I would love the opportunity",
+      "Please don't hesitate",
+      "At your earliest convenience",
+      "My name is [as opening sentence]",
+      "unique and memorable experience",
+      "fun for the whole family"
+    ]
+  },
+
+  "rssConfig": {
+    "additionalKeywords": [
+      "caricature artist",
+      "live entertainment event",
+      "corporate party entertainment",
+      "wedding entertainment",
+      "bar mitzvah entertainment",
+      "trade show engagement",
+      "Los Angeles events"
+    ],
+    "feeds": [
+      {
+        "url": "https://www.bizbash.com/feed",
+        "name": "BizBash Event News",
+        "category": "event_industry",
+        "keywords": ["entertainment", "corporate event", "wedding", "party"]
+      },
+      {
+        "url": "https://www.specialevents.com/feed",
+        "name": "Special Events Magazine",
+        "category": "event_industry",
+        "keywords": ["entertainment", "live event", "caricature", "artist"]
+      }
+    ]
+  },
+
+  "fbSources": [
+    "https://www.facebook.com/groups/LAweddings/",
+    "https://www.facebook.com/groups/LAeventplanners/",
+    "https://www.facebook.com/groups/LAcorporateevents/"
+  ],
+
+  "bookingConfig": {
+    "defaultTrade": "Caricature Artist",
+    "defaultBookingAction": "leedz_api",
+    "_defaultBookingAction_options": [
+      "leedz_api    — post to The Leedz marketplace via API",
+      "email_share  — email to share@theleedz.com",
+      "email_user   — email to companyEmail for seller to decide"
+    ],
+    "leadCaptureEnabled": true,
+    "marketplaceEnabled": true
+  },
+
+  "redditConfig": {
+    "subreddits": [
+      {
+        "name": "weddingplanning",
+        "keywords": ["caricature", "entertainment", "live artist", "party entertainment"],
+        "category": "leads"
+      },
+      {
+        "name": "LosAngeles",
+        "keywords": ["caricature artist", "entertainment", "event", "party"],
+        "category": "leads"
+      },
+      {
+        "name": "losangeles",
+        "keywords": ["caricature", "entertainment for event", "party artist"],
+        "category": "leads"
+      },
+      {
+        "name": "eventplanning",
+        "keywords": ["caricature artist", "live entertainment", "corporate event entertainment"],
+        "category": "leads"
+      },
+      {
+        "name": "barmizvah",
+        "keywords": ["entertainment", "caricature", "artist", "party"],
+        "category": "leads"
+      }
+    ],
+    "additionalKeywords": [
+      "caricature artist",
+      "live artist",
+      "entertainment for hire",
+      "event entertainment Los Angeles"
+    ]
+  },
+
+  "igConfig": {
+    "accounts": [
+      {
+        "username": "bizbash",
+        "category": "event_industry"
+      },
+      {
+        "username": "specialevents",
+        "category": "event_industry"
+      }
+    ],
+    "hashtags": [
+      "caricatureartist",
+      "laeventplanner",
+      "corporateevent",
+      "weddingentertainment",
+      "lawedding",
+      "barmitzvah",
+      "batmitzvah",
+      "partyentertainment"
+    ],
+    "additionalKeywords": [
+      "caricature",
+      "live artist",
+      "Los Angeles event",
+      "entertainment hire"
+    ]
+  }
+}

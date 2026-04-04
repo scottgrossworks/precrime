@@ -1,12 +1,12 @@
 # Pre-Crime — Developer Status
 
-**Read this first. Then read files referenced here as needed. Do not glob or explore.**
+**Read this first. Then CLAUDE.md. Then read files referenced here as needed. Do not glob or explore.**
 
 ---
 
 ## What Is Pre-Crime
 
-Agentic enrichment engine. Enriches contacts, scores warmth, composes outreach drafts, evaluates quality. v2.0 adds Bookings: when scraped intel contains a gig opportunity (trade + date + location), a Booking is created. `leed_ready` bookings post to The Leedz marketplace.
+Manifest-driven agentic enrichment engine. Enriches contacts, scores warmth, composes outreach drafts, evaluates quality. v2.0 adds Bookings: when scraped intel contains a gig opportunity (trade + date + location), a Booking is created. `leed_ready` bookings post to The Leedz marketplace.
 
 **Glass-of-water model:**
 - Client: `warmthScore ≥ 5` → draft → evaluator (5 criteria) → `ready` → outreach
@@ -14,41 +14,68 @@ Agentic enrichment engine. Enriches contacts, scores warmth, composes outreach d
 
 ---
 
-## Two MCP Servers
+## Architecture
+
+### Two MCP Servers
 
 | | Pre-Crime MCP | The Leedz MCP |
 |---|---|---|
 | **Purpose** | Enrichment pipeline DB | Marketplace CRUD |
 | **File** | `server/mcp/mcp_server.js` | Remote Lambda |
 | **Transport** | Local stdin/stdout | Remote `POST /mcp` on API Gateway |
-| **Backend** | Prisma → SQLite | DynamoDB |
+| **Backend** | Prisma 5 → SQLite | DynamoDB |
 | **Tools** | 15 tools | createLeed + reads |
 
 The bridge: Pre-Crime calls The Leedz MCP `createLeed` when a Booking hits `leed_ready`. `Booking.leedId` stores the returned marketplace ID.
 
 **NAMING:** The MCP tool is `createLeed`. It calls the `addLeed` Lambda. There is a separate SSR Lambda also named `createLeed` — do not invoke it.
 
+### DB Path Resolution
+
+The blank SQLite ships pre-built in the zip at `data/myproject.sqlite` (schema already applied — no `prisma db push` at runtime).
+
+MCP server resolves DB path via: `path.resolve(__dirname, '..', config.database.path)` in `mcp_server.js:35`. From `server/mcp/`, with config value `../data/myproject.sqlite`, this resolves to root `data/myproject.sqlite`. Verified working.
+
+`server/.env` has `DATABASE_URL="file:../data/myproject.sqlite"` — relative to `server/`, also resolves to root `data/`.
+
+### Prisma Version
+
+Project uses **Prisma 5** (`@prisma/client` 5.22.0 in `server/package.json`). The schema uses `datasource db { url = env("DATABASE_URL") }` which is Prisma 5 syntax. **Prisma 7 breaks this** — if the dev machine has Prisma 7 globally, always use the local `npx prisma` from within `server/`.
+
 ---
 
-## What's Done
+## Build → Deploy → Run
 
-- **Pre-Crime MCP** — 15 tools in `mcp_server.js`. Schema: Client, Booking, Factlet, Config (all v2.0 fields including `segment`, `leedzEmail`, `leedzSession`).
-- **`server/prisma/schema.prisma`** — v2.0 schema lives in PRECRIME source. deploy.js copies it automatically.
-- **`server/package.json`** — exists in PRECRIME source. deploy.js copies it during build.
-- **`build.bat`** — Usage: `build.bat` (no args). Runs `deploy.js --no-install` into a temp staging dir, copies `templates/setup.bat` into workspace root, zips as `dist/precrime-deploy-YYYYMMDD.zip` with `precrime/` folder at zip root.
-- **`templates/setup.bat`** — Infra bootstrap: npm install + prisma generate + db push. Included in every zip. **Run automatically by init-wizard Step -1** — user never runs it manually.
-- **`deploy.js --no-install` flag** — Skips all npm/prisma steps during build (node_modules are platform-specific; target machine runs `setup.bat`).
-- **`templates/docs/CLAUDE.md`** — uses `{{DB_RELATIVE_PATH}}` (relative to workspace root). Never an absolute path.
-- **`DOCS/DEPLOYMENT.md`** — full deployment reference: auto-steps, manual steps, troubleshooting.
-- **`README.md`** — updated to v2.0: 15 tools, Booking schema, end-user flow.
-- **deploy.js path fix** — `mcp_server_config.json` DB path corrected to `../data/` relative from `server/mcp/`. Committed `774d158`.
-- **Booking Completeness Evaluator** — `templates/skills/evaluator.md`. Gate: `trade` + `startDate` + (`location` OR `zip`) → `leed_ready`. Handoff to share-skill.md on leed_ready.
-- **Harvester four output paths** — classification tree in `enrichment-agent.md`, `factlet-harvester.md`, `fb-factlet-harvester/SKILL.md`.
-- **JWT setup in init-wizard** — `init-wizard.md` Step 5a generates PyJWT token, writes `leedzEmail` + `leedzSession` to Config.
-- **The Leedz MCP Phase 1** — `getTrades`, `getStats`, `getLeedz`, `getUser`, `createLeed` all implemented.
-- **`share_booking` tool** — in `mcp_server.js`. Agent calls `share_booking({ id })`. Server fetches Booking + Client, lowercases trade, converts startDate → epoch ms, enforces lc/zip constraint, POSTs JSON-RPC to Leedz MCP endpoint, updates Booking on success.
-- **`precrime.bat` launcher** — runs `setup.bat` before Claude starts (first run only), so MCP servers connect on first launch. Eliminates the mandatory restart that happened when setup.bat ran mid-session after MCP had already failed to connect.
-- **Init wizard Step -1 simplified** — no longer runs setup.bat (precrime.bat handles it). Just verifies MCP tools are connected. If not, tells user to run precrime.bat. No diagnosing, no manual server starts.
+### Developer builds the zip
+
+```
+cd PRECRIME
+build.bat
+# → dist\precrime-deploy-YYYYMMDD.zip
+```
+
+`build.bat` runs `deploy.js --no-install` → copies `templates/setup.bat` + `templates/precrime.bat` → zips with `precrime/` at root. The `--no-install` flag skips npm/prisma (node_modules are platform-specific). The blank DB (`data/blank.sqlite`) is copied into the zip as `data/myproject.sqlite`.
+
+### End user runs precrime
+
+```
+# 1. Unzip → get precrime\ folder
+# 2. cd precrime
+# 3. precrime
+```
+
+That's it. Three steps. Nothing else.
+
+### What `precrime.bat` does
+
+1. Runs `setup.bat` unconditionally (idempotent — fast if already done)
+2. Launches `claude --dangerously-skip-permissions "run precrime"`
+
+Setup = `npm install` + `npx prisma generate`. Two commands. No `prisma db push` (DB ships pre-built). No permission dialogs. The "run precrime" prompt triggers the startup skill automatically.
+
+### Why `precrime.bat` exists — hard sequencing constraint
+
+Claude Code reads `.mcp.json` at startup and connects MCP servers immediately. On first run, `node_modules/` doesn't exist — MCP connection fails silently. There is no mid-session reconnect. `precrime.bat` runs setup BEFORE Claude starts. By the time Claude reads `.mcp.json`, deps exist, DB exists, MCP connects first try. Without it: two launches, one wasted session, user confusion.
 
 ---
 
@@ -56,63 +83,70 @@ The bridge: Pre-Crime calls The Leedz MCP `createLeed` when a Booking hits `leed
 
 | File | Purpose |
 |------|---------|
-| `DOCS/ONTOLOGY.md` | v2.0 entity model. Four output paths. Booking→addLeed param mapping. |
-| `server/mcp/mcp_server.js` | Pre-Crime MCP — 15 tools, Prisma → SQLite |
-| `server/prisma/schema.prisma` | v2.0 Prisma schema — Client, Booking, Factlet, Config |
-| `server/package.json` | npm deps: @prisma/client, dotenv |
+| **Build & Deploy** | |
+| `deploy.js` | Manifest-driven workspace generator. Reads `manifest.json`, substitutes `{{TOKENS}}`, copies files. `--no-install` skips npm/prisma. |
+| `build.bat` | `build.bat` (no args) → `dist/precrime-deploy-YYYYMMDD.zip` |
+| `manifest.json` | Default manifest — edit for each deployment |
+| `manifest.sample.json` | Annotated template with all fields and comments |
+| `data/blank.sqlite` | Pre-built blank DB with schema. Copied into zip as `data/myproject.sqlite`. |
+| **Templates (copied into zip)** | |
+| `templates/precrime.bat` | User-facing launcher. Runs setup, launches Claude with prompt. THE ONLY THING THE USER RUNS. |
+| `templates/setup.bat` | npm install + prisma generate. Called by precrime.bat. Never run manually. |
+| `templates/docs/CLAUDE.md` | What Claude reads in deployed workspace. Uses `{{TOKEN}}` substitution. |
+| `templates/skills/init-wizard.md` | Startup skill — config walkthrough, then launches harvesters + enrichment |
+| `templates/skills/enrichment-agent.md` | Full enrichment loop (runs AFTER init-wizard) |
 | `templates/skills/evaluator.md` | Draft evaluator + Booking completeness gate |
-| `templates/skills/init-wizard.md` | Conversational setup — generates JWT, writes leedzEmail/leedzSession |
-| `templates/skills/share-skill.md` | leed_ready sharing: leedz_api / email_share / email_user |
-| `templates/skills/enrichment-agent.md` | Full enrichment loop |
-| `deploy.js` | Manifest-driven workspace generator. `--no-install` skips npm/prisma (used by build.bat). |
-| `build.bat` | `build.bat` → `dist/precrime-deploy-YYYYMMDD.zip` with `precrime/` at zip root |
-| `templates/precrime.bat` | **User-facing launcher.** Runs setup.bat on first run, then launches Claude. This is what the user runs — never setup.bat directly, never claude directly. |
-| `templates/setup.bat` | Infra bootstrap (npm + prisma). Called by precrime.bat on first run. Never run manually. |
+| `templates/skills/share-skill.md` | leed_ready → leedz_api / email_share / email_user |
+| `templates/skills/factlet-harvester.md` | RSS → factlet pipeline |
+| `templates/skills/fb-factlet-harvester/SKILL.md` | Facebook → factlet pipeline (needs Chrome) |
+| **Server (source of truth)** | |
+| `server/mcp/mcp_server.js` | Pre-Crime MCP — 15 tools, Prisma → SQLite |
+| `server/prisma/schema.prisma` | Prisma 5 schema — Client, Booking, Factlet, Config |
+| `server/package.json` | npm deps: @prisma/client 5.22.0, dotenv |
+| **Docs** | |
+| `DOCS/ONTOLOGY.md` | v2.0 entity model. Four output paths. Booking→addLeed param mapping. |
 | `DOCS/DEPLOYMENT.md` | Full deployment reference |
-| `manifest.json` | Default manifest — edit this for your deployment |
-| `manifest.sample.json` | Annotated manifest template with all fields and comments |
 
-All PRECRIME paths relative to the PRECRIME source root.
+All paths relative to PRECRIME source root.
 
 ---
 
-## End-User Deployment Workflow
+## What's Done (sessions 1-8)
 
-```
-# Build a distributable zip (from PRECRIME root):
-build.bat
-# → dist\precrime-deploy-YYYYMMDD.zip
-
-# On target machine:
-# 1. Unzip → get precrime\ folder
-# 2. cd precrime
-# 3. precrime
-# 4. Say: start the precrime workflow
-```
-
-### Why `precrime.bat` exists — this is not bloat
-
-The MCP connection problem is a hard sequencing constraint, not a preference:
-
-1. Claude Code reads `.mcp.json` **at startup** and tries to connect MCP servers immediately.
-2. On first run, `node_modules/` doesn't exist yet. The MCP server requires `@prisma/client`. Connection fails silently.
-3. The init wizard runs `setup.bat` which installs deps — but MCP is already dead for this session. There is no mid-session reconnect.
-4. Without `precrime.bat`, the user must: run Claude → setup runs → Claude says "restart me" → user closes → runs Claude again → says "start precrime" again. Two launches, one wasted session, confusing for a non-technical user.
-
-`precrime.bat` solves this by running `setup.bat` **before** Claude starts (only on first run — it checks for `node_modules`). By the time Claude reads `.mcp.json`, the Prisma client exists and MCP connects on the first attempt.
-
-This is 15 lines of batch script. It eliminates an entire failure mode and a mandatory restart. It's not abstraction — it's sequencing.
+- All 15 MCP tools in `mcp_server.js` including `share_booking`
+- All skill templates: init-wizard, enrichment-agent, evaluator, share-skill, factlet-harvester, fb-factlet-harvester, reddit-factlet-harvester, ig-factlet-harvester, relevance-judge
+- `deploy.js` with `--no-install` flag and correct path resolution
+- `build.bat` — zero args, handles staging/zipping/cleanup
+- `precrime.bat` — setup + Claude launch + auto-prompt + skip-permissions
+- `setup.bat` — npm install + prisma generate (no db push — DB ships pre-built)
+- Blank template DB (`data/blank.sqlite`) — schema pre-applied, no runtime DB creation
+- DB path bug fixed: `mcp_server_config.json` correctly uses `../data/` relative to `server/mcp/`
+- All personal data scrubbed (no BLOOMLEEDZ, no TDS, no Scott Gross, no scottgrossworks)
+- The Leedz MCP Phase 1: getTrades, getStats, getLeedz, getUser, createLeed
+- JWT generation in init-wizard Step 5a
+- Booking completeness evaluator with four output paths
 
 ---
 
-## Marketplace Wire-Up — share_booking end-to-end test
+## Pending
 
-`share_booking` tool is in `mcp_server.js`. To test end-to-end:
+- **End-to-end test**: unzip fresh → `cd precrime` → `precrime` → verify Claude starts, MCP connects, init-wizard runs config walkthrough, enrichment launches. This has NOT been tested clean yet.
+- **`share_booking` test**: create `leed_ready` Booking with tennis trade, call `share_booking`, verify status → `shared` + `leedId` set. Use non-production trade.
+- **The Leedz MCP**: retest `getUser`, test `createLeed` with session JWT.
+- **`deploy.js` console output**: still prints old "SCAFFOLD COMPLETE" manual steps and "initialize this deployment" language. Cosmetic — only developer sees it. Low priority.
 
-1. Set `leedzSession` + `leedzEmail` in Config (init wizard Step 5a)
-2. Set `marketplaceEnabled: true` in Config
-3. Create a `leed_ready` Booking with: `trade`, `title`, `startDate`, `zip`, `location`
-4. Call `share_booking({ id: bookingId })`
-5. Verify Booking status → `shared`, `leedId` is set
+---
 
-Use a non-production trade (e.g., `tennis`) for testing to avoid broadcasting to real vendors.
+## Critical Design Decisions — DO NOT UNDO
+
+1. **Blank DB ships in zip.** No `prisma db push` at runtime. The DB exists from the moment of unzip. This eliminates the "table does not exist" class of errors entirely.
+
+2. **`precrime.bat` runs setup BEFORE Claude.** MCP connects at Claude startup. If deps don't exist, MCP fails silently with no mid-session recovery. Setup must happen before Claude launches. This is a hard constraint of Claude Code's architecture.
+
+3. **`precrime.bat` runs setup unconditionally.** No `if not exist node_modules` check. Setup is idempotent. Conditional checks add failure modes for zero benefit.
+
+4. **`precrime.bat` passes `--dangerously-skip-permissions` and pre-seeds prompt.** User types one word (`precrime`). No permission dialogs. No "say start the workflow." Everything is automatic.
+
+5. **No engineer language in user-facing text.** Never say "initialization", "wizard", "configure", "deployment", "infrastructure", "bootstrap". The CLAUDE.md and init-wizard.md enforce this. Claude mirrors the language it reads.
+
+6. **Init wizard Step -1 does NOT diagnose.** If `get_config()` fails for any reason, it says "run precrime again" and stops. One sentence. No reading files, no checking paths, no running npm.

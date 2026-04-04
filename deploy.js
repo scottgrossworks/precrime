@@ -285,11 +285,18 @@ if (!noInstall) {
   console.log('[--no-install] Skipping RSS npm install');
 }
 
-// 3. Create data directory — prisma db push will create the sqlite file from schema
+// 3. Copy blank template DB — schema is already applied, no prisma db push needed at runtime
 const dbFile = (manifest.deployment.dbFile || `data/${(manifest.deployment.name||'project').toLowerCase()}.sqlite`);
 const dbDest = path.join(outputDir, dbFile);
 mkdir(path.dirname(dbDest));
-console.log(`  ✓ data/ directory ready — ${dbFile} will be created by prisma db push`);
+const blankDb = path.join(PRECRIME, 'data', 'blank.sqlite');
+if (fs.existsSync(blankDb)) {
+  fs.copyFileSync(blankDb, dbDest);
+  console.log(`  ✓ ${dbFile} — blank DB with schema copied`);
+} else {
+  console.warn(`  ⚠ data/blank.sqlite not found — DB will need prisma db push at runtime`);
+  console.log(`  ✓ data/ directory ready — ${dbFile} will need prisma db push`);
+}
 
 // 3. Build tokens
 const tokens = buildTokens(manifest);
@@ -300,16 +307,8 @@ const dbRelToServer = path.relative(path.join(outputDir, 'server'), dbDest).repl
 write(path.join(outputDir, 'server', '.env'),
   `DATABASE_URL="file:${dbRelToServer}"\n`);
 
-// 4b. Push schema to database — runs after .env and data/ dir are in place
+// 4b. DB already shipped as blank.sqlite — no prisma db push needed
 if (!noInstall) {
-  console.log('\nPushing schema to database (npx prisma db push)...');
-  try {
-    execSync('npx prisma db push', { cwd: path.join(outputDir, 'server'), stdio: 'inherit' });
-  } catch (e) {
-    console.error('\nFATAL: prisma db push failed — database schema was not applied.');
-    console.error('  Error:', e.message);
-    process.exit(1);
-  }
 
   // 4c. Prune devDependencies (removes prisma CLI + its engine binaries — not needed at runtime)
   console.log('\nPruning devDependencies (npm prune --production)...');

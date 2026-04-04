@@ -35,7 +35,7 @@ Only scrape URLs listed in that file. Never add new pages mid-run.
 
 ### Step 0: Pre-flight
 
-1. `tabs_context_mcp({ createIfEmpty: true })` — if this fails, STOP.
+1. `tabs_context_mcp({ createIfEmpty: true })` — if this fails, wait 3 seconds and retry once. If still failing, STOP.
 2. Read `fb_sources.md`. Parse all URLs (skip lines starting with `#` or blank).
 3. `get_new_factlets({ since: "1970-01-01T00:00:00Z" })` — load full queue for dedup.
 
@@ -157,5 +157,6 @@ One factlet per distinct news item — not one per post.
         News organizations post daily; could tighten to 30 days.
 
      CHROME REQUIREMENT: This skill requires the Claude-in-Chrome MCP extension.
-     Start Claude with `claude --chrome` to enable it.
+     The extension connects automatically if it is running in the browser.
+     No special claude launch flags are needed.
 -->
