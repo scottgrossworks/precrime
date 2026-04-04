@@ -22,7 +22,7 @@ You scan configured news feeds and create factlets — short, broadly applicable
 
 | Tool | Purpose |
 |------|---------|
-| `mcp__bloomleedz-rss__get_top_articles` | Fetch top-scoring articles from configured RSS feeds |
+| `mcp__precrime-rss__get_top_articles` | Fetch top-scoring articles from configured RSS feeds |
 | `mcp__leedz-mcp__create_factlet` | Save a qualifying article as a factlet |
 | `mcp__leedz-mcp__get_new_factlets` | Check existing queue (avoid duplicates) |
 | `WebFetch` | Fetch full article content if snippet is insufficient |
@@ -32,7 +32,7 @@ You scan configured news feeds and create factlets — short, broadly applicable
 ### Step 1: Fetch Articles
 
 ```
-mcp__bloomleedz-rss__get_top_articles({ limit: 100 })
+mcp__precrime-rss__get_top_articles({ limit: 100 })
 ```
 
 Returns scored articles: url, title, pubDate, feedName, category, score, snippet, content.

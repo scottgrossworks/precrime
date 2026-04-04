@@ -1,6 +1,5 @@
-# Pre-Crime — Session Status
+# Pre-Crime — Developer Status
 
-**Last updated:** 2026-04-02 (session 3)
 **Read this first. Then read files referenced here as needed. Do not glob or explore.**
 
 ---
@@ -13,8 +12,6 @@ Agentic enrichment engine. Enriches contacts, scores warmth, composes outreach d
 - Client: `warmthScore ≥ 5` → draft → evaluator (5 criteria) → `ready` → outreach
 - Booking: `trade` + `startDate` + (`location` OR `zip`) → `leed_ready` → post to marketplace
 
-Reference deployment: BloomLeedz (`C:\Users\Scott\Desktop\WKG\BLOOMLEEDZ`) — 351 LA school principals, outreach-only mode.
-
 ---
 
 ## Two MCP Servers
@@ -22,12 +19,12 @@ Reference deployment: BloomLeedz (`C:\Users\Scott\Desktop\WKG\BLOOMLEEDZ`) — 3
 | | Pre-Crime MCP | The Leedz MCP |
 |---|---|---|
 | **Purpose** | Enrichment pipeline DB | Marketplace CRUD |
-| **File** | `PRECRIME\server\mcp\mcp_server.js` | `LEEDZ\FRONT_3\py\mcp_server\lambda_function.py` |
+| **File** | `server/mcp/mcp_server.js` | Remote Lambda |
 | **Transport** | Local stdin/stdout | Remote `POST /mcp` on API Gateway |
-| **Backend** | Prisma → SQLite | boto3 → Lambdas → DynamoDB |
-| **Status** | 15 tools written, schema update in progress | Phase 1 reads + `createLeed` implemented |
+| **Backend** | Prisma → SQLite | DynamoDB |
+| **Tools** | 15 tools | createLeed + reads |
 
-The bridge: Pre-Crime calls The Leedz MCP `createLeed` (→ `addLeed` Lambda) when a Booking hits `leed_ready`. `Booking.leedId` stores the returned marketplace ID.
+The bridge: Pre-Crime calls The Leedz MCP `createLeed` when a Booking hits `leed_ready`. `Booking.leedId` stores the returned marketplace ID.
 
 **NAMING:** The MCP tool is `createLeed`. It calls the `addLeed` Lambda. There is a separate SSR Lambda also named `createLeed` — do not invoke it.
 
@@ -36,60 +33,22 @@ The bridge: Pre-Crime calls The Leedz MCP `createLeed` (→ `addLeed` Lambda) wh
 ## What's Done
 
 - **Pre-Crime MCP** — 15 tools in `mcp_server.js`. Schema: Client, Booking, Factlet, Config (all v2.0 fields including `segment`, `leedzEmail`, `leedzSession`).
-- **`server\prisma\schema.prisma`** — v2.0 schema now lives in PRECRIME source (was missing). deploy.js copies it automatically.
-- **`server\package.json`** — exists in PRECRIME source. deploy.js copies + runs `npm install` + `npx prisma generate` automatically on deploy.
-- **`build.bat`** — packages PRECRIME source into `dist\precrime-deploy-YYYYMMDD.zip` for distribution.
-- **`DOCS\DEPLOYMENT.md`** — full deployment reference: auto-steps, manual steps, troubleshooting.
-- **`README.md`** — updated to v2.0: 15 tools, Booking schema, auto npm install in deploy steps.
-- **deploy.js path fix** — `mcp_server_config.json` DB path was resolving to `../../data/` (relative to `server/mcp/`). Fixed to `../data/` (relative to `server/`) to match mcp_server.js resolution. Committed `774d158`.
-- **Booking Completeness Evaluator** — `templates\skills\evaluator.md`. Gate: `trade` + `startDate` + (`location` OR `zip`) → `leed_ready`.
-- **The Leedz MCP Phase 1** — `getTrades`, `getStats`, `getLeedz`, `showUserPage`, `createLeed` all implemented.
-- **Pre-Crime repo commits** — `5f5e4e5`, `bf27af8` (build system), `774d158` (path fix).
-
----
-
-## The Leedz MCP Endpoint Testing (2026-04-02)
-
-| Tool | Status | Notes |
-|------|--------|-------|
-| `tools/list` | PASSED | 5 tools returned |
-| `getTrades` | PASSED | 36 trades, DJ=8 leedz |
-| `getStats` | PASSED | 458 posted, 15 bought, 115 users |
-| `getLeedz` | PASSED | sb="dj" → 4 unsold leedz |
-| `showUserPage` | FIX DEPLOYED, RETEST | Decimal serialization bug fixed, redeployed |
-| `createLeed` | NOT TESTED | Needs session JWT + test params |
-
-**Bug fix:** `showUserPage` failed with `Decimal is not JSON serializable`. DynamoDB returns `Decimal` for numeric fields. Added `from decimal import Decimal` and Decimal-safe `default` to `json.dumps()` in `call_showUserPage`. Redeployed by user.
-
----
-
-## In Progress
-
-| Track | What |
-|-------|------|
-| **TDS Test Deployment** | TDS/PRECRIME needs to be deleted and redeployed with fixed deploy.js. DLL lock from old TDS Claude session blocks deletion. **Action:** close TDS Claude session → delete TDS\PRECRIME → run deploy.js → copy RSS scorer → open Claude in TDS\PRECRIME → `initialize this deployment`. |
-| **MCP Endpoint Testing** | 3 of 5 tools passed. `showUserPage` fix deployed, retest needed. `createLeed` untested. Session JWT available for `scottgrossworks@gmail.com`. |
-
----
-
-## TODOs
-
-### ~~TODO 1: Harvester Four-Output-Path Classification~~ DONE (2026-04-02 session 2)
-Four-path classification tree added to `enrichment-agent.md`, `factlet-harvester.md`, `fb-factlet-harvester/SKILL.md`.
-New files: `templates\skills\share-skill.md` (all sharing logic), `templates\skills\init-wizard.md` (conversational setup).
-Init wizard: deployment mode question, getTrades API call, WHERE to harvest discovery, auto-launch harvesters.
-Evaluator: simplified — hands off to share-skill.md on leed_ready.
-
-### TODO 2: Session JWT Setup in Pre-Crime Config
-Pre-Crime doesn't know the user's Leedz email. Setup skill must prompt for it, generate a session JWT, write both to Config (`leedzEmail`, `leedzSession`). `addLeed` auto-creates a stub user if email is new to platform.
-- JWT: `{'email': leedzEmail, 'type': 'session', 'exp': +1yr}` signed HS256
-- Secret: `648373eeea08d422032db0d1e61a1bc096fe08dd2729ce611092c7a1af15d09c`
-- Add as Step 5a in `init-wizard.md` (already present — verify it generates and writes the JWT)
-
-### TODO 3: Action Decision + Marketplace Posting Wire-Up
-`share-skill.md` is written and handles all paths. Wire `deploy.js` to copy it into new deployments.
-Verify `createLeed` MCP tool end-to-end with a test Booking.
-**Depends on:** TODO 2 (needs leedzSession in Config for leedz_api path)
+- **`server/prisma/schema.prisma`** — v2.0 schema lives in PRECRIME source. deploy.js copies it automatically.
+- **`server/package.json`** — exists in PRECRIME source. deploy.js copies it during build.
+- **`build.bat`** — Usage: `build.bat` (no args). Runs `deploy.js --no-install` into a temp staging dir, copies `templates/setup.bat` into workspace root, zips as `dist/precrime-deploy-YYYYMMDD.zip` with `precrime/` folder at zip root.
+- **`templates/setup.bat`** — Infra bootstrap: npm install + prisma generate + db push. Included in every zip. **Run automatically by init-wizard Step -1** — user never runs it manually.
+- **`deploy.js --no-install` flag** — Skips all npm/prisma steps during build (node_modules are platform-specific; target machine runs `setup.bat`).
+- **`templates/docs/CLAUDE.md`** — uses `{{DB_RELATIVE_PATH}}` (relative to workspace root). Never an absolute path.
+- **`DOCS/DEPLOYMENT.md`** — full deployment reference: auto-steps, manual steps, troubleshooting.
+- **`README.md`** — updated to v2.0: 15 tools, Booking schema, end-user flow.
+- **deploy.js path fix** — `mcp_server_config.json` DB path corrected to `../data/` relative from `server/mcp/`. Committed `774d158`.
+- **Booking Completeness Evaluator** — `templates/skills/evaluator.md`. Gate: `trade` + `startDate` + (`location` OR `zip`) → `leed_ready`. Handoff to share-skill.md on leed_ready.
+- **Harvester four output paths** — classification tree in `enrichment-agent.md`, `factlet-harvester.md`, `fb-factlet-harvester/SKILL.md`.
+- **JWT setup in init-wizard** — `init-wizard.md` Step 5a generates PyJWT token, writes `leedzEmail` + `leedzSession` to Config.
+- **The Leedz MCP Phase 1** — `getTrades`, `getStats`, `getLeedz`, `getUser`, `createLeed` all implemented.
+- **`share_booking` tool** — in `mcp_server.js`. Agent calls `share_booking({ id })`. Server fetches Booking + Client, lowercases trade, converts startDate → epoch ms, enforces lc/zip constraint, POSTs JSON-RPC to Leedz MCP endpoint, updates Booking on success.
+- **`precrime.bat` launcher** — runs `setup.bat` before Claude starts (first run only), so MCP servers connect on first launch. Eliminates the mandatory restart that happened when setup.bat ran mid-session after MCP had already failed to connect.
+- **Init wizard Step -1 simplified** — no longer runs setup.bat (precrime.bat handles it). Just verifies MCP tools are connected. If not, tells user to run precrime.bat. No diagnosing, no manual server starts.
 
 ---
 
@@ -97,40 +56,63 @@ Verify `createLeed` MCP tool end-to-end with a test Booking.
 
 | File | Purpose |
 |------|---------|
-| `DOCS\ONTOLOGY.md` | v2.0 entity model. Four output paths. Booking→addLeed param mapping. |
-| `server\mcp\mcp_server.js` | Pre-Crime MCP — 15 tools, Prisma → SQLite |
-| `server\prisma\schema.prisma` | v2.0 Prisma schema — Client, Booking, Factlet, Config |
-| `server\package.json` | npm deps: @prisma/client, dotenv |
-| `templates\skills\evaluator.md` | Draft evaluator + Booking completeness gate |
-| `templates\skills\init-wizard.md` | Conversational setup — generates JWT, writes leedzEmail/leedzSession |
-| `templates\skills\share-skill.md` | leed_ready sharing: leedz_api / email_share / email_user |
-| `templates\skills\enrichment-agent.md` | Full enrichment loop |
-| `LEEDZ\FRONT_3\py\mcp_server\lambda_function.py` | The Leedz MCP — Phase 1 + createLeed |
-| `LEEDZ\FRONT_3\DOCS\AGENTIC_FUTURE.md` | The Leedz MCP design spec |
-| `deploy.js` | Manifest-driven workspace generator |
-| `build.bat` | Packages PRECRIME source into distributable zip |
-| `DOCS\DEPLOYMENT.md` | Full deployment reference |
-| `manifests\manifest.tds.json` | TDS (caricature artist) test deployment manifest |
+| `DOCS/ONTOLOGY.md` | v2.0 entity model. Four output paths. Booking→addLeed param mapping. |
+| `server/mcp/mcp_server.js` | Pre-Crime MCP — 15 tools, Prisma → SQLite |
+| `server/prisma/schema.prisma` | v2.0 Prisma schema — Client, Booking, Factlet, Config |
+| `server/package.json` | npm deps: @prisma/client, dotenv |
+| `templates/skills/evaluator.md` | Draft evaluator + Booking completeness gate |
+| `templates/skills/init-wizard.md` | Conversational setup — generates JWT, writes leedzEmail/leedzSession |
+| `templates/skills/share-skill.md` | leed_ready sharing: leedz_api / email_share / email_user |
+| `templates/skills/enrichment-agent.md` | Full enrichment loop |
+| `deploy.js` | Manifest-driven workspace generator. `--no-install` skips npm/prisma (used by build.bat). |
+| `build.bat` | `build.bat` → `dist/precrime-deploy-YYYYMMDD.zip` with `precrime/` at zip root |
+| `templates/precrime.bat` | **User-facing launcher.** Runs setup.bat on first run, then launches Claude. This is what the user runs — never setup.bat directly, never claude directly. |
+| `templates/setup.bat` | Infra bootstrap (npm + prisma). Called by precrime.bat on first run. Never run manually. |
+| `DOCS/DEPLOYMENT.md` | Full deployment reference |
+| `manifest.json` | Default manifest — edit this for your deployment |
+| `manifest.sample.json` | Annotated manifest template with all fields and comments |
 
-All PRECRIME paths relative to `C:\Users\Scott\Desktop\WKG\PRECRIME\`.
+All PRECRIME paths relative to the PRECRIME source root.
 
-## TDS Redeploy — Exact Commands (next session)
+---
+
+## End-User Deployment Workflow
 
 ```
-# 1. Close TDS Claude session first (releases DLL lock)
+# Build a distributable zip (from PRECRIME root):
+build.bat
+# → dist\precrime-deploy-YYYYMMDD.zip
 
-# 2. Delete old TDS deployment
-powershell -NoProfile -Command "Remove-Item -Recurse -Force 'C:\Users\Scott\Desktop\WKG\TDS\PRECRIME'"
-
-# 3. Redeploy
-cd C:\Users\Scott\Desktop\WKG\PRECRIME
-node deploy.js --manifest manifests/manifest.tds.json
-
-# 4. Copy RSS scorer
-copy "C:\Users\Scott\Desktop\WKG\BLOOMLEEDZ\rss\rss-scorer-mcp\index.js" "C:\Users\Scott\Desktop\WKG\TDS\PRECRIME\rss\rss-scorer-mcp\"
-
-# 5. Open new Claude session in TDS\PRECRIME
-cd C:\Users\Scott\Desktop\WKG\TDS\PRECRIME
-claude
-# Then say: initialize this deployment
+# On target machine:
+# 1. Unzip → get precrime\ folder
+# 2. cd precrime
+# 3. precrime
+# 4. Say: start the precrime workflow
 ```
+
+### Why `precrime.bat` exists — this is not bloat
+
+The MCP connection problem is a hard sequencing constraint, not a preference:
+
+1. Claude Code reads `.mcp.json` **at startup** and tries to connect MCP servers immediately.
+2. On first run, `node_modules/` doesn't exist yet. The MCP server requires `@prisma/client`. Connection fails silently.
+3. The init wizard runs `setup.bat` which installs deps — but MCP is already dead for this session. There is no mid-session reconnect.
+4. Without `precrime.bat`, the user must: run Claude → setup runs → Claude says "restart me" → user closes → runs Claude again → says "start precrime" again. Two launches, one wasted session, confusing for a non-technical user.
+
+`precrime.bat` solves this by running `setup.bat` **before** Claude starts (only on first run — it checks for `node_modules`). By the time Claude reads `.mcp.json`, the Prisma client exists and MCP connects on the first attempt.
+
+This is 15 lines of batch script. It eliminates an entire failure mode and a mandatory restart. It's not abstraction — it's sequencing.
+
+---
+
+## Marketplace Wire-Up — share_booking end-to-end test
+
+`share_booking` tool is in `mcp_server.js`. To test end-to-end:
+
+1. Set `leedzSession` + `leedzEmail` in Config (init wizard Step 5a)
+2. Set `marketplaceEnabled: true` in Config
+3. Create a `leed_ready` Booking with: `trade`, `title`, `startDate`, `zip`, `location`
+4. Call `share_booking({ id: bookingId })`
+5. Verify Booking status → `shared`, `leedId` is set
+
+Use a non-production trade (e.g., `tennis`) for testing to avoid broadcasting to real vendors.

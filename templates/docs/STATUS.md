@@ -42,7 +42,7 @@
 
 ## DATABASE
 
-**`{{DB_ABS_PATH}}`**
+**`{{DB_RELATIVE_PATH}}`** (relative to workspace root)
 
 DO NOT use any other .sqlite file.
 
@@ -141,8 +141,8 @@ model Config {
 | Tool prefix | Server | Entry point |
 |-------------|--------|-------------|
 | `mcp__leedz-mcp__*` | leedz-mcp | `server/mcp/mcp_server.js` |
-| `mcp__bloomleedz-rss__*` | bloomleedz-rss | `rss/rss-scorer-mcp/index.js` |
-| `mcp__gmail-sender__*` | gmail-sender | globally configured |
+| `mcp__precrime-rss__*` | precrime-rss | `rss/rss-scorer-mcp/index.js` |
+| `mcp__gmail-sender__*` | gmail-sender | optional — requires separate MCP setup |
 
 ---
 
@@ -206,5 +206,4 @@ model Config {
 ## KNOWN LIMITATIONS
 
 - **`claude -p` does not attach MCP servers.** The headless flag runs without `.mcp.json`. Use the interactive Claude Code session.
-- **Chrome bridge requires desktop app.** The FB factlet harvester only works when Claude Code desktop app is used (not standalone CLI). The named pipe bridge does not connect from CLI.
-- **To run factlet harvester from CLI:** `cd {{PROJECT_ROOT}} && claude` then paste the trigger phrase.
+- **Chrome integration:** Use `claude --chrome` to start with Chrome connected. The Chrome MCP extension must be installed in your browser.

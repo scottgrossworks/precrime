@@ -7,7 +7,7 @@
 
 ## Why v2.0
 
-Pre-Crime v1.0 was a client enrichment engine. BloomLeedz proved it: take a database of contacts, enrich them, draft personalized outreach. One entity (Client), one output path (outreach draft), one goal (get a reply).
+Pre-Crime v1.0 was a client enrichment engine: take a database of contacts, enrich them, draft personalized outreach. One entity (Client), one output path (outreach draft), one goal (get a reply).
 
 v2.0 recognizes that the same scraping infrastructure that finds factlets also finds **gig opportunities**. A Reddit post saying "Looking for a DJ in LA next Saturday" isn't a factlet — it's a leed. Pre-Crime isn't just an outreach engine. For The Leedz, it's a **marketplace supply engine**.
 
@@ -251,13 +251,13 @@ After posting, `Booking.leedId` is set to the marketplace ID returned by addLeed
 
 ## Seeded vs Unseeded Deployments
 
-| Aspect | Seeded (BloomLeedz) | Unseeded (new deployment) |
-|--------|-------------------|-------------------------|
-| Client table on day 1 | 318 pre-loaded contacts | Empty |
+| Aspect | Seeded | Unseeded (new deployment) |
+|--------|--------|--------------------------|
+| Client table on day 1 | Pre-loaded contacts | Empty |
 | How clients arrive | Already there | Harvesters find them via Lead Capture |
 | Factlet utility | Immediate (enriches existing clients) | Stockpiles until first Client arrives |
 | First action | Enrichment loop on existing clients | Discovery + harvest → clients trickle in |
-| Example | BloomLeedz (K-12 principals) | "Find me DJ gigs in LA" |
+| Example | Outreach deployment with imported DB | "Find me DJ gigs in LA" |
 
 **Unseeded flow:**
 1. User configures value prop, trade, service area
@@ -273,9 +273,9 @@ After posting, `Booking.leedId` is set to the marketplace ID returned by addLeed
 
 | Archetype | activeEntities | Booking? | Marketplace? | Example |
 |-----------|---------------|----------|-------------|---------|
-| **Outreach only** | `["client"]` | No | No | BloomLeedz — enrich contacts, draft outreach |
-| **Full pipeline** | `["client", "booking"]` | Yes | Optional | TDS DJ service — find gigs, take them OR share |
-| **Marketplace seeder** | `["client", "booking"]` | Yes | Yes | The Leedz supply engine — find gigs, post to marketplace |
+| **Outreach only** | `["client"]` | No | No | K-12 platform — enrich contacts, draft outreach |
+| **Full pipeline** | `["client", "booking"]` | Yes | Optional | Gig service — find bookings, take them OR share |
+| **Marketplace seeder** | `["client", "booking"]` | Yes | Yes | Supply engine — find gigs, post to marketplace |
 
 ---
 
@@ -288,7 +288,7 @@ After posting, `Booking.leedId` is set to the marketplace ID returned by addLeed
 | `get_bookings` | Get Bookings by status |
 | `get_client_bookings` | Get all Bookings for a specific Client |
 
-These extend the existing BloomLeedz MCP server. The 11 existing tools are unchanged.
+These extend the existing MCP server. The 11 existing tools are unchanged.
 
 ---
 
@@ -316,4 +316,4 @@ Steps 1-3 are mechanical. Step 4-5 are where the intelligence lives. Steps 6-7 c
 6. **Factlets seed dossiers.** The factlet that discovers a new client also provides that client's first dossier entry. No empty dossiers.
 7. **Unseeded is first-class.** A deployment with zero starting clients is not broken — it's the normal state for marketplace-oriented use.
 8. **Marketplace posting is the last mile.** Pre-Crime finds the opportunity, enriches it, validates completeness. The actual posting is a single function call.
-9. **Existing tools untouched.** The 11 BloomLeedz MCP tools, the RSS scorer, the factlet engine skill — all unchanged. New capability is additive.
+9. **Existing tools untouched.** The 11 MCP tools, the RSS scorer, the factlet engine skill — all unchanged. New capability is additive.

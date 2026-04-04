@@ -47,22 +47,33 @@ Note the answer as session context: `defaultBookingAction = [choice]`. Apply to 
 
 ## Step 2a: Post via Leedz MCP (leedz_api)
 
+Field codes are short — they map directly to DynamoDB. Use them exactly as shown.
+
 ```
 mcp__leedz-mcp__createLeed({
-  trade: booking.trade,
-  title: booking.title or "[trade] needed — [location]",
-  location: booking.location,
-  zip: booking.zip,
-  startDate: booking.startDate,
-  description: booking.description,
-  leedPrice: booking.leedPrice or 0,
-  contactName: client.name,
-  contactEmail: client.email,
-  contactPhone: client.phone
+  session: config.leedzSession,          // JWT — required, extracted for creator email
+  tn:      booking.trade.toLowerCase(),  // trade name — MUST be lowercase
+  ti:      booking.title or (booking.trade + " needed — " + (booking.location or booking.zip)),
+  zp:      booking.zip,                  // 5-digit zip — required
+  st:      <booking.startDate as epoch milliseconds>,  // convert datetime → epoch ms
+  et:      <booking.endDate as epoch ms if present>,   // optional
+  lc:      booking.location,             // optional full address — if present MUST end with zip
+  dt:      booking.description,          // event details — optional, max 1000 chars
+  rq:      booking.notes,                // requirements — optional, max 1000 chars
+  pr:      booking.flatRate or 0,        // price in CENTS (e.g. $5.00 = 500) — default 0
+  cn:      client.name,                  // client name — optional, pay-to-see
+  em:      client.email,                 // client email — optional, pay-to-see
+  ph:      client.phone,                 // client phone — optional, pay-to-see
+  sh:      "*"                           // broadcast to all platform subscribers
 })
 ```
 
-On success: `update_booking({ id, leedId: <returned id>, status: "shared", shared: true, sharedTo: "leedz_api", sharedAt: Date.now() })`
+**lc constraint:** if `booking.location` is provided, verify it ends with `booking.zip`. If not, append it: `booking.location + " " + booking.zip`.
+
+**st conversion:** `booking.startDate` is a datetime string. Convert to epoch ms before passing: `new Date(booking.startDate).getTime()` or equivalent.
+
+On success (returns `{id, tn, ti, pr, cd:1}`):
+`update_booking({ id: booking.id, leedId: result.id, status: "shared", shared: true, sharedTo: "leedz_api", sharedAt: Date.now() })`
 
 On failure: fall back to Step 2b. Log: `LEEDZ_API_FAILED — [error] — falling back to email_share`
 

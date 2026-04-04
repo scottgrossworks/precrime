@@ -24,8 +24,9 @@ const { execSync }  = require('child_process');
 // CLI
 // ---------------------------------------------------------------------------
 
-const args = process.argv.slice(2);
-const get  = (flag) => { const i = args.indexOf(flag); return i !== -1 ? args[i + 1] : null; };
+const args      = process.argv.slice(2);
+const get       = (flag) => { const i = args.indexOf(flag); return i !== -1 ? args[i + 1] : null; };
+const noInstall = args.includes('--no-install');
 
 const manifestArg = get('--manifest');
 if (!manifestArg) {
@@ -238,20 +239,24 @@ if (fs.existsSync(schemaSrc)) {
 }
 
 // 2d. npm install + prisma generate in generated workspace
-console.log('\nInstalling server dependencies (npm install)...');
-try {
-  execSync('npm install', { cwd: path.join(outputDir, 'server'), stdio: 'inherit' });
-} catch (e) {
-  console.error('\nFATAL: npm install failed. Fix npm/Node and retry.');
-  process.exit(1);
-}
+if (!noInstall) {
+  console.log('\nInstalling server dependencies (npm install)...');
+  try {
+    execSync('npm install', { cwd: path.join(outputDir, 'server'), stdio: 'inherit' });
+  } catch (e) {
+    console.error('\nFATAL: npm install failed. Fix npm/Node and retry.');
+    process.exit(1);
+  }
 
-console.log('\nGenerating Prisma client (npx prisma generate)...');
-try {
-  execSync('npx prisma generate', { cwd: path.join(outputDir, 'server'), stdio: 'inherit' });
-} catch (e) {
-  console.error('\nFATAL: prisma generate failed. Check schema.prisma and retry.');
-  process.exit(1);
+  console.log('\nGenerating Prisma client (npx prisma generate)...');
+  try {
+    execSync('npx prisma generate', { cwd: path.join(outputDir, 'server'), stdio: 'inherit' });
+  } catch (e) {
+    console.error('\nFATAL: prisma generate failed. Check schema.prisma and retry.');
+    process.exit(1);
+  }
+} else {
+  console.log('\n[--no-install] Skipping npm install + prisma generate (run setup.bat on target)');
 }
 
 // 2e. Copy RSS scorer (index.js + package.json) and install its deps
@@ -269,11 +274,15 @@ if (fs.existsSync(rssPkgSrc)) {
   copyFile(rssPkgSrc, rssPkgDst);
 }
 
-console.log('\nInstalling RSS scorer dependencies (npm install)...');
-try {
-  execSync('npm install', { cwd: path.join(outputDir, 'rss', 'rss-scorer-mcp'), stdio: 'inherit' });
-} catch (e) {
-  console.warn('  ⚠ RSS npm install failed — run manually: cd rss/rss-scorer-mcp && npm install');
+if (!noInstall) {
+  console.log('\nInstalling RSS scorer dependencies (npm install)...');
+  try {
+    execSync('npm install', { cwd: path.join(outputDir, 'rss', 'rss-scorer-mcp'), stdio: 'inherit' });
+  } catch (e) {
+    console.warn('  ⚠ RSS npm install failed — run manually: cd rss/rss-scorer-mcp && npm install');
+  }
+} else {
+  console.log('[--no-install] Skipping RSS npm install');
 }
 
 // 3. Create data directory — prisma db push will create the sqlite file from schema
@@ -292,21 +301,25 @@ write(path.join(outputDir, 'server', '.env'),
   `DATABASE_URL="file:${dbRelToServer}"\n`);
 
 // 4b. Push schema to database — runs after .env and data/ dir are in place
-console.log('\nPushing schema to database (npx prisma db push)...');
-try {
-  execSync('npx prisma db push', { cwd: path.join(outputDir, 'server'), stdio: 'inherit' });
-} catch (e) {
-  console.error('\nFATAL: prisma db push failed — database schema was not applied.');
-  console.error('  Error:', e.message);
-  process.exit(1);
-}
+if (!noInstall) {
+  console.log('\nPushing schema to database (npx prisma db push)...');
+  try {
+    execSync('npx prisma db push', { cwd: path.join(outputDir, 'server'), stdio: 'inherit' });
+  } catch (e) {
+    console.error('\nFATAL: prisma db push failed — database schema was not applied.');
+    console.error('  Error:', e.message);
+    process.exit(1);
+  }
 
-// 4c. Prune devDependencies (removes prisma CLI + its engine binaries — not needed at runtime)
-console.log('\nPruning devDependencies (npm prune --production)...');
-try {
-  execSync('npm prune --production', { cwd: path.join(outputDir, 'server'), stdio: 'inherit' });
-} catch (e) {
-  console.warn('  ⚠ npm prune failed — zip will be larger than necessary');
+  // 4c. Prune devDependencies (removes prisma CLI + its engine binaries — not needed at runtime)
+  console.log('\nPruning devDependencies (npm prune --production)...');
+  try {
+    execSync('npm prune --production', { cwd: path.join(outputDir, 'server'), stdio: 'inherit' });
+  } catch (e) {
+    console.warn('  ⚠ npm prune failed — zip will be larger than necessary');
+  }
+} else {
+  console.log('[--no-install] Skipping prisma db push + npm prune (run setup.bat on target)');
 }
 
 // 4. Generate mcp_server_config.json (DB path for MCP server)
@@ -385,6 +398,9 @@ console.log('\nDocs:');
   ['docs/STATUS.md',    'DOCS/STATUS.md'],
   ['docs/VALUE_PROP.md','DOCS/VALUE_PROP.md'],
 ].forEach(([src, dst]) => copyTemplate(src, dst, tokens));
+
+// 8b. Write CLAUDE.md to workspace root (Claude Code auto-loads from cwd)
+copyTemplate('docs/CLAUDE.md', 'CLAUDE.md', tokens);
 
 // 9. Create empty run log
 write(path.join(outputDir, 'logs', 'ROUNDUP.md'),

@@ -1,18 +1,18 @@
 {
-  "_comment": "Pre-Crime manifest for That Drawing Show with Scott Gross — caricature artist, Los Angeles",
+  "_comment": "Pre-Crime sample manifest — caricature artist, Los Angeles. Copy this and fill in your own details.",
 
   "deployment": {
     "name": "DrawingShow",
     "version": "1.0",
-    "rootDir": "C:\\Users\\Scott\\Desktop\\WKG\\DRAWINGSHOW",
+    "rootDir": "C:\\Users\\YourName\\Projects\\DRAWINGSHOW",
     "dbFile": "data/drawingshow.sqlite"
   },
 
   "seller": {
-    "name": "Scott Gross",
+    "name": "Your Name",
     "company": "That Drawing Show",
-    "email": "scott@scottgross.works",
-    "website": "https://scottgross.works/drawingshow",
+    "email": "you@yourdomain.com",
+    "website": "https://yourdomain.com/drawingshow",
     "phone": ""
   },
 

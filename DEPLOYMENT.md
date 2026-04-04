@@ -1,39 +1,35 @@
 # Pre-Crime — Deployment Checklist
 
-This is the exact checklist `deploy.js` prints after scaffolding a new workspace.
-After running `node deploy.js --manifest <your-manifest.json>`, complete every step below.
+End-user workflow after receiving the distribution zip.
 
 ---
 
-## After `deploy.js` Runs
+## Getting Started
 
-### 1. Copy Server Infrastructure from BloomLeedz
-
-The MCP server source is included in PRECRIME and is copied automatically by `deploy.js` into the generated workspace.
-
-Copy the RSS scorer into the new workspace if you are reusing BloomLeedz infrastructure:
+### 1. Unzip and Launch
 
 ```
-copy "C:\Users\Scott\Desktop\WKG\BLOOMLEEDZ\rss\rss-scorer-mcp\index.js"    "{rootDir}\rss\rss-scorer-mcp\"
-xcopy /E "C:\Users\Scott\Desktop\WKG\BLOOMLEEDZ\rss\rss-scorer-mcp\node_modules" "{rootDir}\rss\rss-scorer-mcp\node_modules\"
+# Unzip — you get a precrime\ folder
+cd precrime
+claude
 ```
+
+Then say:
+```
+start the precrime workflow
+```
+
+The init wizard handles everything automatically:
+- Detects missing dependencies and runs `setup.bat` (npm install, Prisma client, DB creation)
+- Walks you through configuration (company, email, product, booking preferences)
+- Launches harvesters and enrichment
 
 `mcp_server_config.json` is already generated at `server/mcp/` pointing to the correct DB path.
 
-`server/.env` is already generated with `DATABASE_URL` pointing at the deployment's SQLite. Prisma reads this automatically — no manual export needed. If you need to run Prisma commands from a different shell, set it yourself:
+`server/.env` is already generated with `DATABASE_URL` pointing at the deployment's SQLite. Prisma reads this automatically — no manual export needed. If you ever need to run Prisma commands from a different shell, set it yourself:
 
 ```powershell
 $env:DATABASE_URL = "file:C:/path/to/your/deployment/data/name.sqlite"
-```
-
----
-
-### 2. Set Up Config via Claude
-
-Once the server is running, launch Claude from `{rootDir}` and call:
-
-```
-update_config({ companyName: "...", companyEmail: "...", businessDescription: "..." })
 ```
 
 ---
@@ -168,9 +164,9 @@ Read DOCS/STATUS.md then run the enrichment workflow
 | `DOCS/CLAUDE.md`, `DOCS/STATUS.md` | ✓ | Update STATUS.md per run |
 | `DOCS/VALUE_PROP.md` (stub) | ✓ stub | **You fill this in** |
 | `logs/ROUNDUP.md` | ✓ empty | Claude writes to this |
-| `server/mcp/mcp_server.js` | | **Copy from BloomLeedz** |
-| `server/node_modules/` | | **Copy from BloomLeedz** |
-| `rss/rss-scorer-mcp/index.js` | | **Copy from BloomLeedz** |
+| `server/mcp/mcp_server.js` | ✓ (from zip) | |
+| `server/node_modules/` | ✓ (via setup.bat) | |
+| `rss/rss-scorer-mcp/index.js` | ✓ (from zip) | |
 | Client records in DB | | **You provide** |
 | Config table values | | **Set via update_config** |
 | `leedzEmail` + `leedzSession` | | **Set via Step 3** |

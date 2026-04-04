@@ -1,25 +1,36 @@
 ---
-name: precrime-init-wizard
-description: Startup/initialization skill — conversationally configures a Pre-Crime deployment on first launch or re-initialization
+name: precrime-startup
+description: First-run startup — installs deps if needed, walks user through config, launches harvesters and enrichment
 triggers:
-  - initialize this deployment
-  - initialize precrime
-  - init precrime
+  - start
   - start precrime
   - start the precrime workflow
-  - run setup
-  - configure this workspace
-  - first time setup
-  - re-initialize
+  - start the workflow
+  - run precrime
+  - let's go
+  - go
 ---
 
-# Pre-Crime Initialization Wizard
+# Pre-Crime Startup
 
-You are configuring a Pre-Crime deployment for first use. Ask questions in order. One topic at a time. Don't ask everything at once. Write each answer to Config as you go — don't batch at the end.
+You are getting Pre-Crime ready to run. Ask questions in order. One topic at a time. Don't ask everything at once. Write each answer to Config as you go — don't batch at the end.
 
-**When to run:** First launch of a new deployment, or any time the user says the config is stale/wrong.
+**When to run:** First launch, or any time the user says the config is stale/wrong.
 
-**Prerequisite:** MCP tools must be loaded. Start by calling `get_config()` to see what's already set. Skip questions whose answers are already in Config.
+---
+
+## Step -1: Verify Tools
+
+`precrime.bat` already ran `setup.bat` before Claude started. Dependencies are installed. MCP should be connected.
+
+Try calling `get_config()`.
+
+- **If it works** → proceed to Step 0.
+- **If MCP tools are not available** → say:
+
+> "The tools aren't connected. Close this window and run `precrime.bat` again — it handles setup automatically."
+
+**Then STOP. Do not diagnose. Do not try to start the MCP server manually. Do not read files. Do not run setup.bat. Do not run npm or prisma. Just say run precrime.bat and stop.**
 
 ---
 
@@ -44,7 +55,7 @@ If everything is set, say so and offer to review/update any field.
 
 Ask:
 
-> "What's your name, company, and email address? (One line is fine — e.g., 'Scott Gross / That Drawing Show / scott@scottgross.works')"
+> "What's your name, company, and email address? (One line is fine — e.g., 'Jane Smith / Acme Events / jane@acmeevents.com')"
 
 Parse and call:
 ```
@@ -84,11 +95,11 @@ If they want to draft it now: "I can help with that after we finish config. Let'
 
 ---
 
-## Step 3.5: Deployment Mode
+## Step 3.5: Gig or B2B?
 
 Ask:
 
-> "Is this a gig or service business where you might share bookings to The Leedz marketplace? Or is this a B2B/non-gig outreach deployment? (gig / B2B)"
+> "Is this a gig or service business where you might share bookings to The Leedz marketplace? Or is this B2B outreach? (gig / B2B)"
 
 **If gig/Leedz (or unsure — default to gig):**
 
@@ -207,7 +218,7 @@ Trade:            {defaultTrade or '(not set)'}
 Booking action:   {defaultBookingAction or '(not set)'}
 Marketplace:      {marketplaceEnabled}
 Lead capture:     {leadCaptureEnabled}
-Leedz account:    {leedzEmail or '(not configured)'}
+Leedz account:    {leedzEmail or '(not set)'}
 =================================================================
 ```
 
@@ -260,10 +271,11 @@ Harvesters run first — their factlets enrich the first wave of clients.
 
 ---
 
-## Wizard Rules
+## Rules
 
 - **One question at a time.** Don't stack questions.
 - **Write to Config immediately** after each answer. Don't batch.
 - **Skip what's already set.** Check Step 0 before asking anything.
 - **Don't invent values.** If the user doesn't know — leave it unset and move on.
-- **No sales pitch.** Don't explain Pre-Crime. They already deployed it.
+- **No sales pitch.** Don't explain Pre-Crime. They're already here.
+- **No engineer talk.** Never say "initialization", "wizard", "configure", "deployment", "infrastructure", "bootstrap". Say "setup", "getting started", "ready to go".

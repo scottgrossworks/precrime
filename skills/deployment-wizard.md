@@ -15,7 +15,7 @@ You are running an interactive deployment wizard for the Pre-Crime agentic outre
 
 Your job is to interview the user, build a complete manifest, run `deploy.js`, then walk them through every remaining manual step. Do not skip phases. Do not ask all questions at once — move through the phases in order, wait for responses, then continue.
 
-**Run this from:** `C:\Users\Scott\Desktop\WKG\BLOOMLEEDZ\PRECRIME\`
+**Run this from:** The PRECRIME root directory (where `deploy.js` lives)
 
 ---
 
@@ -41,8 +41,8 @@ If all present, greet the user:
 
 Ask:
 
-> 1. **What is the project name?** (short slug, no spaces — e.g., `DrawingShow`, `BloomLeedz`, `NorthStar`) — this becomes the workspace folder name and MCP server name
-> 2. **Where should the workspace be created?** Full absolute path — e.g., `C:\Users\Scott\Desktop\WKG\DRAWINGSHOW`
+> 1. **What is the project name?** (short slug, no spaces — e.g., `DrawingShow`, `NorthStar`, `EventPro`) — this becomes the workspace folder name and MCP server name
+> 2. **Where should the workspace be created?** Full absolute path — e.g., `C:\Users\YourName\Projects\DRAWINGSHOW`
 > 3. **What should the database file be named?** — e.g., `data/drawingshow.sqlite` (or leave blank to use `data/{name}.sqlite`)
 
 Wait for answers. Confirm before continuing:
@@ -57,7 +57,7 @@ Ask:
 
 > "Who is doing the outreach? Give me: name, company, email, website, and phone (optional)."
 >
-> Example: "Scott Gross / That Drawing Show / scott@scottgross.works / https://scottgross.works/drawingshow"
+> Example: "Jane Smith / Acme Events / jane@acmeevents.com / https://acmeevents.com"
 
 Accept free-form input. Parse it into:
 ```json
@@ -259,7 +259,7 @@ Update the manifest with any additions before writing to disk.
 ## Phase 7: Write the Manifest File
 
 Determine the output path:
-- Default: `C:\Users\Scott\Desktop\WKG\BLOOMLEEDZ\PRECRIME\sample-manifests\{name}.json`
+- Default: `sample-manifests/{name}.json` (relative to PRECRIME root)
 - Ask: "Where should I save the manifest? Default is `sample-manifests/{name}.json`. Hit enter to accept or give a different path."
 
 Write the final manifest JSON to that path.
@@ -292,18 +292,16 @@ If successful, show the checklist output to the user and say:
 
 Work through each step interactively. Don't dump the whole list — do one at a time, confirm completion before moving to the next.
 
-### Step 9a: Copy Server Infrastructure
+### Step 9a: Verify Server Infrastructure
 
-Tell the user exactly what to run:
+The server files are included in the zip and were copied by `deploy.js`. Verify:
 
 ```
-copy "C:\Users\Scott\Desktop\WKG\BLOOMLEEDZ\server\mcp\mcp_server.js" "{rootDir}\server\mcp\"
-xcopy /E "C:\Users\Scott\Desktop\WKG\BLOOMLEEDZ\server\node_modules" "{rootDir}\server\node_modules\"
-copy "C:\Users\Scott\Desktop\WKG\BLOOMLEEDZ\rss\rss-scorer-mcp\index.js" "{rootDir}\rss\rss-scorer-mcp\"
-xcopy /E "C:\Users\Scott\Desktop\WKG\BLOOMLEEDZ\rss\rss-scorer-mcp\node_modules" "{rootDir}\rss\rss-scorer-mcp\node_modules\"
+dir "{rootDir}\server\mcp\mcp_server.js"
+dir "{rootDir}\rss\rss-scorer-mcp\index.js"
 ```
 
-> "Run those four commands in a terminal, then come back and tell me when done."
+> "If those files are missing, run `setup.bat` again from `{rootDir}`. If they still don't appear, re-unzip from the original archive."
 
 Wait for confirmation. Then proceed.
 
@@ -506,7 +504,7 @@ For reference when generating the manifest (all field names and types):
 | Error | What to do |
 |-------|-----------|
 | `deploy.js not found` | Check that you're in the PRECRIME root (`C:\Users\...\PRECRIME`) |
-| `template.sqlite not found` | Run `node scripts/create-template.js` if it exists, or re-copy from BloomLeedz |
+| `template.sqlite not found` | Re-unzip the distribution archive — `data/template.sqlite` should be included |
 | `JSON parse error` in manifest | Open the written manifest, find the syntax error, fix it, re-run deploy.js |
 | `rootDir not found` after scaffold | The directory was created — verify with `ls {rootDir}` |
 | MCP tools not loading after deploy | Launch Claude Code from {rootDir}, not a subdirectory; check `.mcp.json` exists at root |

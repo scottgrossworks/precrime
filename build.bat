@@ -3,64 +3,100 @@ setlocal
 cd /d "%~dp0"
 
 echo.
-echo Pre-Crime -- Build Deployment Zip
+echo Pre-Crime -- Build Distribution Zip
 echo.
 
+:: Use manifest.json in this directory
+if not "%~1"=="" (
+  set MANIFEST=%~1
+) else (
+  set MANIFEST=manifest.json
+)
+
+if not exist "%~dp0%MANIFEST%" (
+  echo FATAL: Manifest not found: %~dp0%MANIFEST%
+  exit /b 1
+)
+
+:: Date stamp
 for /f %%I in ('powershell -NoProfile -Command "Get-Date -Format yyyyMMdd"') do set DATESTAMP=%%I
 
 set ROOT=%~dp0
 if "%ROOT:~-1%"=="\" set ROOT=%ROOT:~0,-1%
 
-if not exist "%ROOT%\dist" mkdir "%ROOT%\dist"
+:: Output zip dir (arg 2, default dist\)
+if not "%~2"=="" (
+  set ZIPDIR=%~2
+) else (
+  set ZIPDIR=%ROOT%\dist
+)
+if not exist "%ZIPDIR%" mkdir "%ZIPDIR%"
 
-set OUTFILE=%ROOT%\dist\precrime-deploy-%DATESTAMP%.zip
+set OUTFILE=%ZIPDIR%\precrime-deploy-%DATESTAMP%.zip
 
 if exist "%OUTFILE%" (
   echo Removing old: %OUTFILE%
   del /f /q "%OUTFILE%"
 )
 
-:: Create temp staging dir
-for /f %%I in ('powershell -NoProfile -Command "[System.IO.Path]::GetTempPath().TrimEnd([char]92)"') do set TMPBASE=%%I
-set TMPDIR=%TMPBASE%\precrime-build-%DATESTAMP%
-set STAGEDIR=%TMPDIR%\precrime
+:: Temp staging: parent = TEMP\precrime-bld-DATESTAMP, child = precrime
+set TMPPARENT=%TEMP%\precrime-bld-%DATESTAMP%
+set STAGEDIR=%TMPPARENT%\precrime
 
-if exist "%TMPDIR%" (
+if exist "%TMPPARENT%" (
   echo Cleaning old staging dir...
-  rmdir /s /q "%TMPDIR%"
+  rmdir /s /q "%TMPPARENT%"
 )
-mkdir "%TMPDIR%"
+mkdir "%STAGEDIR%"
 
-echo Generating workspace (includes npm install + prisma generate)...
-echo.
-node "%ROOT%\deploy.js" --manifest "%ROOT%\manifests\manifest.generic.json" --output "%STAGEDIR%"
+echo Running deploy.js --no-install to build workspace...
+node "%ROOT%\deploy.js" --manifest "%ROOT%\%MANIFEST%" --output "%STAGEDIR%" --no-install
+if errorlevel 1 (
+  echo FATAL: deploy.js failed.
+  rmdir /s /q "%TMPPARENT%"
+  exit /b 1
+)
 
-if %errorlevel% neq 0 (
-  echo.
-  echo BUILD FAILED -- deploy.js error
-  rmdir /s /q "%TMPDIR%"
+:: Copy setup.bat and precrime.bat into workspace root
+if exist "%ROOT%\templates\setup.bat" (
+  copy "%ROOT%\templates\setup.bat" "%STAGEDIR%\setup.bat" >nul
+  echo   + setup.bat
+) else (
+  echo FATAL: templates\setup.bat not found -- cannot include setup script
+  rmdir /s /q "%TMPPARENT%"
+  exit /b 1
+)
+if exist "%ROOT%\templates\precrime.bat" (
+  copy "%ROOT%\templates\precrime.bat" "%STAGEDIR%\precrime.bat" >nul
+  echo   + precrime.bat
+) else (
+  echo FATAL: templates\precrime.bat not found -- cannot include launcher
+  rmdir /s /q "%TMPPARENT%"
   exit /b 1
 )
 
 echo.
 echo Packaging zip...
-powershell -NoProfile -ExecutionPolicy Bypass -Command ^
-  "$src='%STAGEDIR%'; $out='%OUTFILE%'; Compress-Archive -Path $src -DestinationPath $out -Force; Write-Host ('SUCCESS: ' + $out)"
+echo   Source: %STAGEDIR%
+echo   Output: %OUTFILE%
+set PC_SRC=%STAGEDIR%
+set PC_OUT=%OUTFILE%
+powershell -NoProfile -ExecutionPolicy Bypass -Command "Compress-Archive -Path $env:PC_SRC -DestinationPath $env:PC_OUT -Force"
 
-if %errorlevel%==0 (
-  rmdir /s /q "%TMPDIR%"
+if exist "%OUTFILE%" (
+  rmdir /s /q "%TMPPARENT%"
   echo.
   echo Build complete: %OUTFILE%
   echo.
-  echo Recipient instructions:
+  echo === Recipient instructions ===
   echo   1. Unzip -- you get a precrime\ folder
   echo   2. cd precrime
-  echo   3. claude
-  echo   4. Say: initialize this deployment
+  echo   3. precrime
+  echo   4. Say: start the precrime workflow
   echo.
 ) else (
   echo.
   echo BUILD FAILED -- zip step failed
-  rmdir /s /q "%TMPDIR%"
+  rmdir /s /q "%TMPPARENT%"
   exit /b 1
 )

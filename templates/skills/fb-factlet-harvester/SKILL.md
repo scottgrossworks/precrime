@@ -156,7 +156,6 @@ One factlet per distinct news item — not one per post.
         Religious orgs and small associations may post monthly; raise to 90 days.
         News organizations post daily; could tighten to 30 days.
 
-     CHROME REQUIREMENT: This skill requires the Claude Code desktop app with the
-     Claude-in-Chrome MCP extension. It will not work from the standalone CLI.
-     See DOCS/STATUS.md for the Chrome bridge limitation note.
+     CHROME REQUIREMENT: This skill requires the Claude-in-Chrome MCP extension.
+     Start Claude with `claude --chrome` to enable it.
 -->

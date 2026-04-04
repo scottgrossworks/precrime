@@ -14,6 +14,16 @@ Read in order before touching any file:
 
 ---
 
+## YOU ARE ALREADY DEPLOYED — READ FILES DIRECTLY
+
+All skill files, config, and templates are already present as local files in this workspace.
+
+- **NEVER read from a `.zip` file.** If you see one, ignore it.
+- **NEVER use Python or shell to extract files.** Read them directly with your Read tool.
+- Skills are in `skills/`. Docs are in `DOCS/`. Read them as files.
+
+---
+
 ## PROJECT: {{DEPLOYMENT_NAME}}
 
 Contextual outreach engine for **{{SELLER_COMPANY}}** ({{SELLER_NAME}}).
@@ -27,7 +37,7 @@ Runs locally on Windows. Claude is the orchestrator — no local LLM.
 
 ## DATABASE — SINGLE SOURCE OF TRUTH
 
-**`{{DB_ABS_PATH}}`**
+**`{{DB_RELATIVE_PATH}}`** (relative to workspace root)
 
 DO NOT use any other .sqlite file.
 
@@ -60,9 +70,9 @@ No HTTP server. MCP calls Prisma directly.
 
 **leedz-mcp** (15 tools): `get_next_client`, `get_client`, `search_clients`, `update_client`, `get_ready_drafts`, `get_stats`, `create_factlet`, `get_new_factlets`, `delete_factlet`, `get_config`, `update_config`, `create_booking`, `get_bookings`, `get_client_bookings`, `update_booking`
 
-**bloomleedz-rss** (1 tool): `get_top_articles`
+**precrime-rss** (1 tool): `get_top_articles`
 
-**gmail-sender** (1 tool): `gmail_send` — use `draft: true` for human review
+**gmail-sender** (1 tool, optional): `gmail_send` — requires separate MCP setup; use `draft: true` for human review
 
 ### Enrichment Loop
 
@@ -72,16 +82,29 @@ get_next_client() → factlet check → discovery → scrape → score → compo
 
 ---
 
+## STARTUP — MANDATORY
+
+When the user says any of these: "start precrime", "start the precrime workflow", "start the workflow", "start", "run precrime", "let's go":
+
+1. Read `skills/init-wizard.md`
+2. Follow every step in order, starting from Step -1 (verify MCP tools are connected)
+3. Do not skip steps. Do not improvise. Do not diagnose problems manually.
+4. If MCP tools aren't connected, tell the user to close Claude and run `precrime.bat` again. **Do NOT manually start the MCP server, read config files, check paths, run setup.bat, or diagnose.** Just say run precrime.bat and stop.
+
+**Language rule:** Never say "initialization", "wizard", "configure", "deployment", "infrastructure" to the user. Say "setup", "getting started", "ready to go".
+
+---
+
 ## SKILL FILES
 
 | File | Purpose |
 |------|---------|
-| `skills/enrichment-agent.md` | Full enrichment loop |
+| `skills/init-wizard.md` | **START HERE.** First-run setup. Installs deps, walks through config, launches enrichment. |
+| `skills/enrichment-agent.md` | Full enrichment loop (run AFTER init-wizard completes) |
 | `skills/evaluator.md` | Draft evaluation logic |
 | `skills/factlet-harvester.md` | RSS → factlet pipeline |
 | `skills/relevance-judge.md` | Relevance filter for all intel |
 | `skills/fb-factlet-harvester/SKILL.md` | Facebook → factlet pipeline (needs Chrome) |
-| `skills/init-wizard.md` | First-run setup wizard (say "initialize this deployment") |
 | `skills/share-skill.md` | leed_ready → post/email action handler |
 
 ---

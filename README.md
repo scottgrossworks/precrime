@@ -1,8 +1,6 @@
 # Pre-Crime — Agentic Sales Enrichment Engine
 
 **Version:** 2.0
-**Built by:** Scott Gross
-**Reference deployment:** BloomLeedz (K-12 student wellbeing outreach, Los Angeles)
 
 ---
 
@@ -65,7 +63,8 @@ PRECRIME/
 ├── DOCS/DEPLOYMENT.md           ← Full deployment reference
 ├── deploy.js                    ← Manifest → workspace generator
 ├── build.bat                    ← Packages distributable zip (see "Building a zip" below)
-├── manifest.sample.json         ← Full blank manifest with all fields documented
+├── manifest.json                ← Default manifest — copy and customize for your deployment
+├── manifest.sample.json         ← Fully documented manifest with all fields explained
 │
 ├── skills/
 │   └── deployment-wizard.md    ← Interactive wizard: interview → manifest → scaffold → walkthrough
@@ -130,7 +129,7 @@ When you run `deploy.js`, it creates this workspace:
 │       └── mcp_server_config.json ← DB path (generated)
 ├── rss/
 │   └── rss-scorer-mcp/
-│       ├── index.js             ← Copy from your BLOOMLEEDZ/rss installation
+│       ├── index.js             ← RSS scorer (included in zip; not regenerated per deploy)
 │       └── rss_config.json      ← Feed list (generated from manifest)
 └── logs/
     └── ROUNDUP.md               ← Per-run enrichment log (written by Claude)
@@ -545,7 +544,7 @@ Full session setup protocol is in `templates/skills/enrichment-agent.md` under *
 
 1. Create a new manifest JSON file (copy `manifest.sample.json`)
 2. Run `node deploy.js --manifest new-manifest.json`
-3. Copy server infrastructure (or symlink from BloomLeedz)
+3. Copy the RSS scorer (`rss/rss-scorer-mcp/index.js`) if not already present
 4. Fill in `DOCS/VALUE_PROP.md`
 5. Load client database
 6. Tune skill files for the new audience
@@ -568,9 +567,8 @@ Each deployment is fully self-contained. Multiple deployments can run simultaneo
 - Check the log at `logs/rss_server.log`
 
 **Facebook scraping not working:**
-- Chrome bridge requires the Claude Code desktop app — not the standalone CLI
-- The Chrome MCP extension must be installed and connected
-- See DOCS/STATUS.md for the Chrome bridge limitation note
+- Start Claude with `claude --chrome` to enable the Chrome integration
+- The Chrome MCP extension must be installed and connected in your browser
 
 **All drafts stay in `brewing`:**
 - Check warmthScores — if everything is below 5, discovery is finding nothing useful
@@ -608,14 +606,8 @@ The token system in deploy.js uses `{{TOKEN}}` placeholders in template files. T
 
 ---
 
-## Reference Deployment: BloomLeedz
+## Sample Manifest
 
-The canonical example deployment is BloomLeedz at `C:\Users\Scott\Desktop\WKG\BLOOMLEEDZ`.
+See `sample-manifests/drawingshow.json` for a complete worked example — a caricature artist booking entertainment for corporate events, schools, and private parties in Los Angeles.
 
-- **Product:** Bloomsights (K-12 student wellbeing platform)
-- **Audience:** 351 school principals/admins in Los Angeles
-- **DB:** `data/ca_schools.sqlite`
-- **Feeds:** 28 RSS feeds (education, SEL, Catholic, Jewish sector)
-- **Factlets:** global broadcast queue, 10 active
-
-BloomLeedz was built before Pre-Crime was formalized. It runs the same pipeline with hand-crafted skill files. Refer to it when the behavior of a generated skill file is unclear.
+Use `manifest.json` as your starting point. Copy it, fill in your own product and audience details, then run `node deploy.js --manifest your-manifest.json`.

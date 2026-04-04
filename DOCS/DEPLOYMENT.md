@@ -43,15 +43,9 @@ Fill in:
 - Objection handling
 - Examples of past outreach that worked
 
-### 2. Copy the RSS scorer
+### 2. Verify the RSS scorer
 
-The RSS scorer (`rss/rss-scorer-mcp/index.js`) is not included in the PRECRIME distributable — it's maintained separately. Copy it from your BloomLeedz installation:
-
-```
-copy "C:\path\to\BLOOMLEEDZ\rss\rss-scorer-mcp\index.js" "{rootDir}\rss\rss-scorer-mcp\"
-```
-
-The `rss_config.json` is already generated and wired. You only need `index.js`.
+The RSS scorer (`rss/rss-scorer-mcp/index.js`) is included in the distributable zip. Verify it exists at `{rootDir}/rss/rss-scorer-mcp/index.js`. The `rss_config.json` is generated and wired automatically — no manual step needed for the scorer itself.
 
 ### 3. Load client records
 
@@ -140,7 +134,7 @@ precrime/
 - `manifests/` — your manifest files are specific to you; don't distribute them
 - `DOCS/` — master PRECRIME docs (recipient gets their own generated in the workspace)
 - `TMP/` — working scratch space, not for distribution
-- Any generated workspaces (e.g., `TDS/`)
+- Any generated workspaces
 
 ### Deploying from the zip (recipient instructions)
 
@@ -151,7 +145,7 @@ precrime/
    node deploy.js --manifest your-manifest.json
    ```
 4. `npm install` + `npx prisma generate` run automatically
-5. Copy the RSS scorer (`index.js`) from your BloomLeedz installation into `{rootDir}/rss/rss-scorer-mcp/`
+5. Verify `{rootDir}/rss/rss-scorer-mcp/index.js` exists (included in zip)
 6. Fill in `{rootDir}/DOCS/VALUE_PROP.md`
 7. Load client records into the DB
 8. `cd "{rootDir}" && claude`

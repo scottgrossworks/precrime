@@ -86,7 +86,7 @@ There are two modes: **single-agent** (sequential, one client at a time) and **p
 #### Step B: Verify Core Tools
 
 6. Verify DB: `mcp__leedz-mcp__get_stats()` — if this fails, STOP
-7. Verify RSS: `mcp__bloomleedz-rss__get_top_articles({ limit: 1 })` — if this fails, STOP
+7. Verify RSS: `mcp__precrime-rss__get_top_articles({ limit: 1 })` — if this fails, STOP
 
 If any step fails, report the error and stop. Do not proceed with broken tools.
 

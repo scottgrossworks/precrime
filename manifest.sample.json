@@ -4,7 +4,7 @@
   "deployment": {
     "name": "MyProject",
     "version": "1.0",
-    "rootDir": "C:\\Users\\Scott\\Desktop\\WKG\\MYPROJECT",
+    "rootDir": "C:\\Users\\YourName\\Projects\\MYPROJECT",
     "dbFile": "data/myproject.sqlite"
   },
 
