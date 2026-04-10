@@ -408,13 +408,14 @@ function handleToolsList(id) {
                 },
                 {
                     name: 'get_bookings',
-                    description: 'Get Bookings, optionally filtered by status and/or trade. Returns booking fields + slim client stub (id, name, company, email, phone, segment — no dossier).',
+                    description: 'Get Bookings, optionally filtered by status, trade, and/or keyword search. Search checks title, description, notes, and location fields. Returns booking fields + slim client stub.',
                     inputSchema: {
                         type: 'object',
                         properties: {
+                            search: { type: 'string', description: 'Keyword search across title, description, notes, and location fields' },
                             status: { type: 'string', description: 'Filter by status: new, leed_ready, taken, shared, expired' },
                             trade: { type: 'string', description: 'Filter by trade name' },
-                            limit: { type: 'number', description: 'Max results (default 10)' }
+                            limit: { type: 'number', description: 'Max results (default 20)' }
                         }
                     }
                 },
@@ -857,7 +858,17 @@ async function handleGetBookings(id, params) {
     const where = {};
     if (args.status) where.status = args.status;
     if (args.trade)  where.trade  = args.trade;
-    const limit = args.limit || 10;
+    const limit = args.limit || 20;
+
+    // Keyword search across title, description, notes, location
+    if (args.search) {
+        where.OR = [
+            { title:       { contains: args.search } },
+            { description: { contains: args.search } },
+            { notes:       { contains: args.search } },
+            { location:    { contains: args.search } }
+        ];
+    }
 
     const bookings = await prisma.booking.findMany({
         where,
