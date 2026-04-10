@@ -20,4 +20,4 @@
 # ADD YOUR PAGES BELOW HERE
 # -------------------------
 
-{{FB_SOURCES_LIST}}
+# (add your Facebook page URLs here, one per line)

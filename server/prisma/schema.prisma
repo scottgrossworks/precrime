@@ -20,13 +20,17 @@ model Client {
   targetUrls     String?   // JSON: [{url, type, label}]
   draft          String?   // current best outreach draft
   draftStatus    String?   // "brewing" | "ready" | "sent"
-  warmthScore    Float?    // 0–10
+  warmthScore    Float?    // DEPRECATED — use dossierScore. Kept for backwards compat.
+  dossierScore   Int?      // continuous, unbounded — computed by score_client
+  contactGate    Boolean   @default(false) // binary: has real named contact + direct email
+  intelScore     Int?      // D2+D3 — set by enrichment agent after scraping
   lastEnriched   DateTime?
   lastQueueCheck DateTime? // DB cursor + factlet watermark
   source         String?   // how this client entered the DB
   createdAt      DateTime  @default(now())
   updatedAt      DateTime  @updatedAt
   bookings       Booking[]
+  factlets       ClientFactlet[]
 }
 
 model Booking {
@@ -54,16 +58,32 @@ model Booking {
   sharedAt         BigInt?
   leedPrice        Int?
   leedId           String?   // returned by createLeed MCP tool
+  bookingScore     Int?      // 0–100 procedural readiness score
+  contactQuality   String?   // none | generic_email | name_only | named_email | named_email_and_name
   createdAt        DateTime  @default(now())
   updatedAt        DateTime  @updatedAt
   client           Client    @relation(fields: [clientId], references: [id])
 }
 
 model Factlet {
-  id        String   @id @default(cuid())
+  id        String          @id @default(cuid())
   content   String
   source    String
-  createdAt DateTime @default(now())
+  createdAt DateTime        @default(now())
+  clients   ClientFactlet[]
+}
+
+model ClientFactlet {
+  id         String   @id @default(cuid())
+  clientId   String
+  factletId  String
+  signalType String   // "pain" | "occasion" | "context"
+  points     Int      // 2 (pain/occasion) or 1 (context)
+  appliedAt  DateTime @default(now())
+  client     Client   @relation(fields: [clientId], references: [id])
+  factlet    Factlet  @relation(fields: [factletId], references: [id])
+
+  @@unique([clientId, factletId])
 }
 
 model Config {

@@ -10,7 +10,9 @@ triggers:
 
 # {{DEPLOYMENT_NAME}} — Facebook Factlet Harvester
 
-You scrape curated Facebook pages for broadly applicable news relevant to selling **{{PRODUCT_NAME}}** and create factlets for the broadcast queue.
+You scrape curated Facebook pages for broadly applicable news relevant to selling the product (per `DOCS/VALUE_PROP.md`) and create factlets for the broadcast queue.
+
+**Before running: read `DOCS/VALUE_PROP.md`** for product name, audience, and relevance signals.
 
 **This skill REQUIRES Chrome.** If Chrome is not connected, STOP immediately and tell the user.
 
@@ -39,6 +41,10 @@ Only scrape URLs listed in that file. Never add new pages mid-run.
 2. Read `fb_sources.md`. Parse all URLs (skip lines starting with `#` or blank).
 3. `get_new_factlets({ since: "1970-01-01T00:00:00Z" })` — load full queue for dedup.
 
+### Step 0.5: Discover AI Assistant
+
+Scan open tabs for `gemini.google.com` or `grok.com`. Store as `SESSION_AI = { gemini: <tabId> | null, grok: <tabId> | null }`. Chrome is already connected (required above) — this is just a tab scan, no extra overhead. If neither found, set `SESSION_AI = null`; Gemini steps below will be skipped.
+
 ### Step 1: Activity Screen (fast pass)
 
 Before deep-scraping any page, do a quick activity check:
@@ -51,7 +57,21 @@ Before deep-scraping any page, do a quick activity check:
 
 This prevents wasting tokens on dead pages. Move fast — ~3 seconds per page.
 
-### Step 2: Deep Scrape (active pages only)
+### Step 1.5: Bulk Relevance Pre-filter via Gemini (if SESSION_AI available)
+
+**Skip to Step 2 if SESSION_AI is null.**
+
+After the activity screen, you have a list of active (non-stale) pages plus a short text sample from each. Use Gemini to filter before spending Chrome cost on deep scrapes.
+
+1. Compile a numbered list of active pages: `[N] [page URL] — [first 50 words of activity-screen text]`
+2. Navigate to Gemini tab and paste:
+   > "We sell [PRODUCT_NAME] to [AUDIENCE_DESCRIPTION]. From this numbered list of Facebook pages, return ONLY the numbers of pages likely to contain relevant buying signals, industry trends, or pain points for this audience. Comma-separated numbers only, no explanation."
+   (Fill [PRODUCT_NAME] and [AUDIENCE_DESCRIPTION] from DOCS/VALUE_PROP.md)
+3. Wait 5 seconds. Read response via `get_page_text`.
+4. Parse the comma-separated list. Only run Step 2 deep scrape on those pages. Mark the rest as `GEMINI_FILTERED` in the report.
+5. Log: `Gemini pre-filter: [N active pages] → [M selected for deep scrape]`
+
+### Step 2: Deep Scrape (Gemini-selected pages only)
 
 1. Scroll down twice: `scroll down 5 ticks` → wait 1s → `scroll down 5 ticks`
 2. `get_page_text` — capture full visible post feed
@@ -60,40 +80,24 @@ This prevents wasting tokens on dead pages. Move fast — ~3 seconds per page.
 
 For each post, apply the same three questions as the RSS harvester:
 
-**Q1: Is this relevant to selling {{PRODUCT_NAME}} to {{AUDIENCE_DESCRIPTION}}?**
+**Q1: Is this relevant to selling [PRODUCT_NAME] to [AUDIENCE_DESCRIPTION]?**
+(Use product name and audience from DOCS/VALUE_PROP.md)
 
 RELEVANT:
-{{RELEVANT_SIGNALS_HIGH}}
-{{RELEVANT_SIGNALS_MEDIUM}}
+(See "Relevance Signals — Relevant" section in DOCS/VALUE_PROP.md)
 
 NOT RELEVANT:
-{{NOT_RELEVANT_TOPICS}}
+(See "Relevance Signals — Not Relevant" section in DOCS/VALUE_PROP.md)
 
 **Q2: Is this broadly applicable — or specific to one org/person?**
 
 BROAD → create factlet. Affects multiple orgs in the audience. Proceed to Q3.
 
-SPECIFIC to one org/person → classify into exactly one path:
-
-1. Is this org/person already in the DB?
-   ```
-   mcp__leedz-mcp__search_clients({ company: "[org name]" })
-   ```
-   - **YES → Dossier:** `update_client({ dossier: "[date] Facebook:[page]: [finding]" })`. Stop — no factlet.
-   - **NO → step 2**
-
-2. Does this post contain booking details? (trade + date + location/zip)
-   - **YES AND `leadCaptureEnabled = true` → Lead Capture (hot):**
-     ```
-     create_client({ name, company, email, dossier: "[date] Facebook:[page]: [context]", draftStatus: "brewing" })
-     create_booking({ clientId, trade, startDate, location, zip, source: "facebook:[page]", sourceUrl, status: "leed_ready" })
-     ```
-     Then run Evaluator Booking Completeness Check.
-   - **NO AND `leadCaptureEnabled = true` → Lead Capture (thin):**
-     ```
-     create_client({ name or company, dossier: "[date] Facebook:[page]: [context]", draftStatus: "brewing" })
-     ```
-   - **`leadCaptureEnabled = false` → skip.** Log: `LEAD_CAPTURE_OFF — [name/org]`
+SPECIFIC to one org/person → four-path classification:
+- Already in DB? `search_clients({ company: "[name]", limit: 1 })` → YES: append to dossier, no factlet. NO: continue.
+- Has trade + date + location/zip AND `leadCaptureEnabled`? → Lead HOT: `create_client` + `create_booking(status:"leed_ready")`, run Booking Completeness Check.
+- Missing booking details AND `leadCaptureEnabled`? → Lead THIN: `create_client` only, dossier note.
+- `leadCaptureEnabled = false`? → skip. Log: `LEAD_CAPTURE_OFF — [name/org]`
 
 **Q3: Is this post-2023?**
 
@@ -103,22 +107,25 @@ Recency is a bonus, not a gate. Only skip if pre-2023 AND superseded by newer da
 
 ```
 mcp__leedz-mcp__create_factlet({
-  content: "[2-3 sentences. What. Why it matters for {{TARGET_ROLES}}. Implication.]",
+  content: "[2-3 sentences. What. Why it matters for the target decision-makers. Implication.]",
   source: "[Facebook page URL]"
 })
 ```
 
-Rules: same as RSS harvester. 2-3 sentences. No opinions. No mention of {{PRODUCT_NAME}}.
+Rules: same as RSS harvester. 2-3 sentences. No opinions. No mention of the product.
 One factlet per distinct news item — not one per post.
 
 ### Step 5: Report
 
 - Total pages in source file
 - Pages screened as STALE (with URLs — recommend removal from fb_sources.md)
-- Pages scraped (active)
+- Pages active (passed activity screen)
+- Gemini pre-filter: N active → M selected (or "Gemini not available — all active pages deep-scraped")
+- Pages deep-scraped
 - Posts evaluated
 - Factlets created (with summaries)
 - Duplicates skipped
+- Gemini-filtered skipped: N
 
 ## Performance Targets
 

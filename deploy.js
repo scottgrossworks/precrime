@@ -73,10 +73,15 @@ function substitute(content, tokens) {
   return out;
 }
 
+function stripHtmlComments(content) {
+  // Remove deployer CUSTOMIZATION NOTES blocks — not needed at runtime, pure token waste
+  return content.replace(/<!--[\s\S]*?-->/g, '').replace(/\n{3,}/g, '\n\n');
+}
+
 function copyTemplate(tmplRel, outRel, tokens) {
   const src = path.join(TMPL, tmplRel);
   if (!fs.existsSync(src)) { console.warn(`  ⚠ template missing: ${tmplRel}`); return; }
-  write(path.join(outputDir, outRel), substitute(fs.readFileSync(src, 'utf8'), tokens));
+  write(path.join(outputDir, outRel), stripHtmlComments(substitute(fs.readFileSync(src, 'utf8'), tokens)));
 }
 
 // ---------------------------------------------------------------------------
@@ -206,6 +211,7 @@ const dirs = [
   path.join(outputDir, 'reddit'),
   path.join(outputDir, 'ig'),
   path.join(outputDir, 'skills', 'ig-factlet-harvester'),
+  path.join(outputDir, 'skills', 'source-discovery'),
 ];
 dirs.forEach(mkdir);
 console.log('Directories created.');
@@ -378,6 +384,7 @@ if (fs.existsSync(baseIgCfgPath)) {
 console.log('\nSkill playbooks:');
 [
   ['skills/enrichment-agent.md',              'skills/enrichment-agent.md'],
+  ['skills/enrichment-agent-parallel.md',     'skills/enrichment-agent-parallel.md'],
   ['skills/evaluator.md',                     'skills/evaluator.md'],
   ['skills/relevance-judge.md',               'skills/relevance-judge.md'],
   ['skills/factlet-harvester.md',             'skills/factlet-harvester.md'],
@@ -386,6 +393,8 @@ console.log('\nSkill playbooks:');
   ['skills/reddit-factlet-harvester.md',      'skills/reddit-factlet-harvester.md'],
   ['skills/ig-factlet-harvester/SKILL.md',    'skills/ig-factlet-harvester/SKILL.md'],
   ['skills/ig-factlet-harvester/ig_sources.md','skills/ig-factlet-harvester/ig_sources.md'],
+  ['skills/source-discovery.md',              'skills/source-discovery.md'],
+  ['skills/source-discovery/discovered_directories.md', 'skills/source-discovery/discovered_directories.md'],
   ['skills/init-wizard.md',                   'skills/init-wizard.md'],
   ['skills/share-skill.md',                   'skills/share-skill.md'],
 ].forEach(([src, dst]) => copyTemplate(src, dst, tokens));
@@ -410,75 +419,17 @@ write(path.join(outputDir, 'logs', 'ROUNDUP.md'),
 // ---------------------------------------------------------------------------
 console.log(`
 ${'='.repeat(65)}
-SCAFFOLD COMPLETE — Manual steps to finish:
+DEPLOYMENT READY — ${outputDir}
 ${'='.repeat(65)}
 
-1. Server infrastructure was auto-installed:
-     server/mcp/mcp_server.js  — copied from Pre-Crime
-     server/package.json       — copied from Pre-Crime
-     server/prisma/            — schema copied + prisma generate ran
-     server/node_modules/      — npm install ran automatically
-     server/.env               — DATABASE_URL written for Prisma
-     server/mcp/mcp_server_config.json — DB path configured
-
-   If npm install or prisma generate failed, run manually:
-     cd "${path.join(outputDir,'server').replace(/\\/g,'/')}" && npm install && npx prisma generate
-
-2. SET UP CONFIG via Claude (once server is running):
-     Run Claude from ${outputDir}
-     Call: update_config({ companyName, companyEmail, businessDescription })
-
-3. FILL IN DOCS/VALUE_PROP.md
-   A stub was generated. Add the full pitch: differentiators, case studies,
-   use cases, competitive positioning, pricing, objection handling.
-   This is what the Composer reads to write outreach. The better it is,
-   the better the drafts.
-
-4. REVIEW AND CUSTOMIZE each skill file in skills/:
-   - enrichment-agent.md  : adjust discovery steps for your audience
-   - evaluator.md         : tune the 5 pass/fail criteria for your buyer
-   - relevance-judge.md   : add/remove relevant topics for your domain
-   - factlet-harvester.md : adjust topic filter for RSS article evaluation
-   - fb-factlet-harvester/fb_sources.md : add Facebook page URLs to monitor
-   - reddit-factlet-harvester.md : review subreddit + keyword config
-
-5. POPULATE rss/rss-scorer-mcp/rss_config.json
-   Feeds were generated from the manifest. Add/remove/tune feed URLs
-   and per-feed keywords for your audience.
-
-5a. FACEBOOK HARVESTER (requires Claude-in-Chrome MCP):
-    Add Facebook page/group URLs to: skills/fb-factlet-harvester/fb_sources.md
-    Run skill: skills/fb-factlet-harvester/SKILL.md
-    Requires the Claude-in-Chrome browser extension connected.
-
-5b. REDDIT HARVESTER (ready to use, no setup needed):
-    pip install requests  (usually already installed)
-    No API keys required — uses Reddit's public JSON endpoints.
-    Config: reddit/reddit_config.json (generated from manifest)
-    Test: python tools/reddit_harvest.py -r news -k "test" -n 5
-
-5c. INSTAGRAM HARVESTER (requires one pip install):
-    pip install instaloader
-    No API keys required — fetches public profiles and hashtags without login.
-    Config: ig/ig_config.json (generated from manifest)
-    Add accounts and hashtags to ig/ig_config.json and ig_sources.md.
-    Test: python tools/ig_harvest.py --account instagram --limit 3
-    Note: If Instagram throttles (RATE_LIMITED errors), reduce account/hashtag
-    count or increase delays between runs. Do not attempt to log in.
-
-6. LOAD YOUR CLIENT DATABASE
-   Copy your pre-built SQLite into: ${dbDest}
-   (The template.sqlite schema has been applied — just replace the file
-   with one that has the same schema + your client rows.)
-   OR insert clients directly into the empty DB.
-
-7. LAUNCH
-     cd "${outputDir}"
-     claude
-     > initialize this deployment
-
-   The init wizard will confirm config, generate your Leedz session JWT,
-   discover harvest sources, then launch harvesters automatically.
+Next steps:
+  1. Fill in DOCS/VALUE_PROP.md (drives draft quality)
+  2. Review and tune skill files in skills/
+  3. Add RSS feeds: rss/rss-scorer-mcp/rss_config.json
+  4. Add Facebook pages: skills/fb-factlet-harvester/fb_sources.md
+  5. Add Reddit subreddits/keywords: reddit/reddit_config.json
+  6. Add Instagram accounts/hashtags: ig/ig_config.json
+  7. Unzip on target machine → cd precrime → precrime
 
 ${'='.repeat(65)}
 `);

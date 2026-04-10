@@ -7,31 +7,31 @@ This document is the Composer's reference. The enrichment agent reads it before 
 
 ## THE PRODUCT
 
-**{{PRODUCT_NAME}}**
-**Seller:** {{SELLER_NAME}} — {{SELLER_COMPANY}}
-**Website:** {{SELLER_WEBSITE}}
-**Geography:** {{GEOGRAPHY}}
-**Pricing:** {{PRICING}}
+**[YOUR PRODUCT NAME]**
+**Seller:** [YOUR NAME] — [YOUR COMPANY]
+**Website:** [YOUR WEBSITE]
+**Geography:** [GEOGRAPHY SERVED]
+**Pricing:** [PRICING]
 
 ---
 
 ## THE PITCH (2-3 sentences)
 
-{{PRODUCT_DESCRIPTION}}
+*[Describe the product in 2-3 sentences. What it is, what problem it solves, who it's for.]*
 
 ---
 
 ## WHY US — DIFFERENTIATORS
 
-{{PRODUCT_DIFFERENTIATORS}}
+*[List 3-5 specific differentiators. Not "professional" or "experienced" — name facts.]*
 
 ---
 
 ## WHO BUYS THIS
 
-**Primary buyers:** {{TARGET_ROLES}}
-**Segments:** {{AUDIENCE_DESCRIPTION}}
-**Buying occasions:** {{ALL_EVENTS}}
+**Primary buyers:** [TARGET ROLES — e.g., "HR Managers, Event Coordinators"]
+**Segments:** [AUDIENCE SEGMENTS — e.g., "Corporate events, Weddings, Private parties"]
+**Buying occasions:** [TRIGGER EVENTS — what makes someone need this now?]
 
 ---
 
@@ -47,7 +47,7 @@ This document is the Composer's reference. The enrichment agent reads it before 
      - What does a "yes" look like? (booking, signed contract, meeting scheduled)
 -->
 
-*[Complete this section with the actual sales motion for {{PRODUCT_NAME}}]*
+*[Complete this section with the actual sales motion for your product]*
 
 ---
 
@@ -58,13 +58,13 @@ This document is the Composer's reference. The enrichment agent reads it before 
      For each pain point:
      - Name the pain clearly
      - Describe the emotional weight of it (what does it feel like to have this problem?)
-     - Explain how {{PRODUCT_NAME}} addresses it specifically
+     - Explain how your product addresses it specifically
      - If you have metrics, case studies, or testimonials — add them here
      Example:
 
      ### Pain: [Name the pain]
      [What does this feel like from the buyer's perspective?]
-     **How {{PRODUCT_NAME}} helps:** [specific capability or outcome]
+     **How the product helps:** [specific capability or outcome]
      **Evidence:** [metric, testimonial, case study — no invented stats]
 -->
 
@@ -139,6 +139,32 @@ This document is the Composer's reference. The enrichment agent reads it before 
 -->
 
 *[Add working examples here — these are the single highest-value content in this document]*
+
+---
+
+## RELEVANCE SIGNALS
+
+The enrichment agent and harvesters use these to filter articles, posts, and scraped content. Fill in after you know your audience.
+
+### Relevant — High Signal (strong buying intent)
+
+*[List phrases or topics that indicate someone needs your product RIGHT NOW.
+Example: "looking for [your service]", "need [your product type]", "[specific buying phrase for your audience"]*
+
+### Relevant — Medium Signal (context, not urgent)
+
+*[Topics that are relevant background but not an active buying signal.
+Example: "planning a corporate event", "event entertainment ideas"]*
+
+### Relevant — Timing Signals
+
+*[Words that suggest a deadline or booking window is open.
+Example: "save the date", "planning for", "event is in [month]"]*
+
+### Not Relevant — Skip These
+
+*[Topics that look adjacent but aren't. Keeps the relevance filter tight.
+Example: "digital art commission", "graphic design job posting"]*
 
 ---
 

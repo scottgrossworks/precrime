@@ -4,7 +4,7 @@
  * JSON-RPC server for Claude Desktop. Queries deployment SQLite
  * directly via PrismaClient. No HTTP server required.
  *
- * 16 tools: 11 original (client/factlet/config) + 4 booking tools + share_booking
+ * 20 tools: 12 original (+ create_client) + 4 booking + share_booking + 3 scoring (link_factlet, get_client_factlets, score_client)
  *
  * @version 2.0.0
  */
@@ -191,8 +191,28 @@ function handleToolsList(id) {
                     }
                 },
                 {
+                    name: 'create_client',
+                    description: 'Create a new client record. Requires at least name or company. Sets draftStatus to "brewing" by default. Returns the created client with its ID.',
+                    inputSchema: {
+                        type: 'object',
+                        properties: {
+                            name: { type: 'string', description: 'Contact person name' },
+                            email: { type: 'string', description: 'Email address' },
+                            phone: { type: 'string', description: 'Phone number' },
+                            company: { type: 'string', description: 'Company or organization name' },
+                            website: { type: 'string', description: 'Website URL' },
+                            clientNotes: { type: 'string' },
+                            segment: { type: 'string', description: 'Audience segment' },
+                            dossier: { type: 'string', description: 'Initial dossier notes' },
+                            targetUrls: { type: 'string', description: 'JSON array of URLs: [{url, type, label}]' },
+                            draftStatus: { type: 'string', description: 'Default: brewing' },
+                            source: { type: 'string', description: 'How this client was found (e.g., "seeder:directory", "harvester:reddit")' }
+                        }
+                    }
+                },
+                {
                     name: 'search_clients',
-                    description: 'Search clients by name, email, company, or keyword. Also filter by draftStatus.',
+                    description: 'Search clients by name, email, company, or keyword. Filter by draftStatus, warmthScore, and/or segment. Returns lightweight summary records by default (no dossier/draft/targetUrls). Pass summary=false ONLY when you need full records for one specific client.',
                     inputSchema: {
                         type: 'object',
                         properties: {
@@ -200,8 +220,13 @@ function handleToolsList(id) {
                             name: { type: 'string', description: 'Filter by name (partial match)' },
                             email: { type: 'string', description: 'Filter by email (exact match)' },
                             company: { type: 'string', description: 'Filter by company (partial match)' },
+                            segment: { type: 'string', description: 'Filter by segment (partial match)' },
                             draftStatus: { type: 'string', description: 'Filter by draft status: brewing, ready, sent' },
-                            limit: { type: 'number', description: 'Max results (default 50)' }
+                            warmthScore: { type: 'number', description: 'Exact warmthScore match (e.g. 10)' },
+                            minWarmthScore: { type: 'number', description: 'Minimum warmthScore (inclusive)' },
+                            maxWarmthScore: { type: 'number', description: 'Maximum warmthScore (inclusive)' },
+                            limit: { type: 'number', description: 'Max results (default 10)' },
+                            summary: { type: 'boolean', description: 'DEFAULT TRUE. Returns lightweight records (no dossier/draft/targetUrls). Pass false ONLY when you need full records — but prefer get_client(id) for single full records instead.' }
                         }
                     }
                 },
@@ -235,7 +260,8 @@ function handleToolsList(id) {
                     inputSchema: {
                         type: 'object',
                         properties: {
-                            limit: { type: 'number', description: 'Max results (default 10)' }
+                            limit: { type: 'number', description: 'Max results (default 10)' },
+                            summary: { type: 'boolean', description: 'If true, return lightweight records only (no dossier, draft, targetUrls). Use for browsing the list before fetching individual records.' }
                         }
                     }
                 },
@@ -382,13 +408,13 @@ function handleToolsList(id) {
                 },
                 {
                     name: 'get_bookings',
-                    description: 'Get Bookings, optionally filtered by status and/or trade',
+                    description: 'Get Bookings, optionally filtered by status and/or trade. Returns booking fields + slim client stub (id, name, company, email, phone, segment — no dossier).',
                     inputSchema: {
                         type: 'object',
                         properties: {
                             status: { type: 'string', description: 'Filter by status: new, leed_ready, taken, shared, expired' },
                             trade: { type: 'string', description: 'Filter by trade name' },
-                            limit: { type: 'number', description: 'Max results (default 50)' }
+                            limit: { type: 'number', description: 'Max results (default 10)' }
                         }
                     }
                 },
@@ -404,6 +430,17 @@ function handleToolsList(id) {
                     }
                 },
                 {
+                    name: 'score_booking',
+                    description: 'Compute a 0-100 readiness score for a Booking. Five categories: trade (0/20), date (0/20), location (0/10/20), contact (0/10/15/20 — generic emails like info@ score 0), description (0/10/20). Share threshold: total >= 70 AND contact >= 10. Writes bookingScore + contactQuality to DB and returns full breakdown + recommended action.',
+                    inputSchema: {
+                        type: 'object',
+                        properties: {
+                            id: { type: 'string', description: 'Booking ID' }
+                        },
+                        required: ['id']
+                    }
+                },
+                {
                     name: 'share_booking',
                     description: 'Post a leed_ready Booking to The Leedz marketplace. Fetches Booking + Client from DB, calls createLeed API (trade auto-lowercased), updates Booking with leedId and status=shared. Requires marketplaceEnabled=true and leedzSession in Config.',
                     inputSchema: {
@@ -412,6 +449,42 @@ function handleToolsList(id) {
                             id: { type: 'string', description: 'Booking ID' }
                         },
                         required: ['id']
+                    }
+                },
+                {
+                    name: 'link_factlet',
+                    description: 'Associate a factlet with a client. Classifies the factlet as pain/occasion/context for THIS client and assigns points (pain=2, occasion=2, context=1). Idempotent — calling again for the same client+factlet pair updates signalType/points.',
+                    inputSchema: {
+                        type: 'object',
+                        properties: {
+                            clientId: { type: 'string', description: 'Client ID' },
+                            factletId: { type: 'string', description: 'Factlet ID' },
+                            signalType: { type: 'string', description: 'pain | occasion | context' }
+                        },
+                        required: ['clientId', 'factletId', 'signalType']
+                    }
+                },
+                {
+                    name: 'get_client_factlets',
+                    description: 'Get all factlets linked to a client, with their signalType, points, and full factlet content. Use at start of enrichment to hydrate factlet context.',
+                    inputSchema: {
+                        type: 'object',
+                        properties: {
+                            clientId: { type: 'string', description: 'Client ID' }
+                        },
+                        required: ['clientId']
+                    }
+                },
+                {
+                    name: 'score_client',
+                    description: 'Procedural client scoring (no LLM). Computes contactGate (binary: named person + direct email), factletScore (sum of linked factlet points), dossierScore (intelScore + factletScore), and canDraft (contactGate AND dossierScore >= 5). Writes scores back to DB. Pass intelScore (D2+D3) after scraping.',
+                    inputSchema: {
+                        type: 'object',
+                        properties: {
+                            clientId: { type: 'string', description: 'Client ID' },
+                            intelScore: { type: 'number', description: 'Intel depth + direct signals score (D2+D3, max 7). Set by enrichment agent after scraping.' }
+                        },
+                        required: ['clientId']
                     }
                 }
             ]
@@ -464,11 +537,33 @@ async function handleGetClient(id, params) {
     return createSuccessResponse(id, JSON.stringify(client, null, 2));
 }
 
+async function handleCreateClient(id, params) {
+    const args = params.arguments || {};
+    if (!args.name && !args.company) {
+        return createErrorResponse(id, -32602, 'At least one of name or company is required');
+    }
+
+    const data = {};
+    const allowedFields = [
+        'name', 'email', 'phone', 'company', 'website', 'clientNotes',
+        'segment', 'dossier', 'targetUrls', 'draftStatus', 'source'
+    ];
+    for (const field of allowedFields) {
+        if (args[field] !== undefined) {
+            data[field] = args[field];
+        }
+    }
+    if (!data.draftStatus) data.draftStatus = 'brewing';
+
+    const client = await prisma.client.create({ data });
+    return createSuccessResponse(id, JSON.stringify(client, null, 2));
+}
+
 // Reference: prisma_sqlite_db.js getClients() lines 116-196
 async function handleSearchClients(id, params) {
     const args = params.arguments || {};
     let where = {};
-    const limit = args.limit || 50;
+    const limit = args.limit || 10;
 
     if (args.search) {
         where.OR = [
@@ -480,11 +575,34 @@ async function handleSearchClients(id, params) {
         if (args.name) where.name = { contains: args.name };
         if (args.email) where.email = args.email;
         if (args.company) where.company = { contains: args.company };
+        if (args.segment) where.segment = { contains: args.segment };
     }
 
     if (args.draftStatus) where.draftStatus = args.draftStatus;
 
-    const clients = await prisma.client.findMany({ where, take: limit });
+    if (args.warmthScore !== undefined) {
+        where.warmthScore = parseInt(args.warmthScore, 10);
+    } else if (args.minWarmthScore !== undefined || args.maxWarmthScore !== undefined) {
+        where.warmthScore = {};
+        if (args.minWarmthScore !== undefined) where.warmthScore.gte = parseInt(args.minWarmthScore, 10);
+        if (args.maxWarmthScore !== undefined) where.warmthScore.lte = parseInt(args.maxWarmthScore, 10);
+    }
+
+    const queryOpts = { where, take: limit, orderBy: { dossierScore: 'desc' } };
+
+    // Default to summary mode — full records with dossier/draft/targetUrls are too large
+    // for MCP response limits. Pass summary=false ONLY when you need the full record.
+    const useSummary = args.summary !== false;
+    if (useSummary) {
+        queryOpts.select = {
+            id: true, name: true, company: true, segment: true,
+            email: true, phone: true, website: true,
+            dossierScore: true, contactGate: true, intelScore: true,
+            warmthScore: true, draftStatus: true, lastEnriched: true, source: true
+        };
+    }
+
+    const clients = await prisma.client.findMany(queryOpts);
     return createSuccessResponse(id, JSON.stringify(clients, null, 2));
 }
 
@@ -496,7 +614,9 @@ async function handleUpdateClient(id, params) {
 
     const allowedFields = [
         'name', 'email', 'phone', 'company', 'website', 'clientNotes',
-        'dossier', 'targetUrls', 'draft', 'draftStatus', 'warmthScore', 'lastEnriched', 'lastQueueCheck'
+        'dossier', 'targetUrls', 'draft', 'draftStatus', 'warmthScore',
+        'dossierScore', 'contactGate', 'intelScore',
+        'lastEnriched', 'lastQueueCheck'
     ];
 
     const data = {};
@@ -506,6 +626,10 @@ async function handleUpdateClient(id, params) {
                 data[field] = new Date(args[field]);
             } else if (field === 'warmthScore') {
                 data[field] = parseFloat(args[field]);
+            } else if (field === 'dossierScore' || field === 'intelScore') {
+                data[field] = parseInt(args[field], 10);
+            } else if (field === 'contactGate') {
+                data[field] = !!args[field];
             } else {
                 data[field] = args[field];
             }
@@ -517,34 +641,62 @@ async function handleUpdateClient(id, params) {
 }
 
 async function handleGetReadyDrafts(id, params) {
-    const limit = params.arguments?.limit || 10;
-    const clients = await prisma.client.findMany({
+    const args = params.arguments || {};
+    const limit = args.limit || 10;
+    const queryOpts = {
         where: { draftStatus: 'ready' },
-        orderBy: { warmthScore: 'desc' },
+        orderBy: { dossierScore: 'desc' },
         take: limit
-    });
+    };
+    if (args.summary) {
+        queryOpts.select = {
+            id: true, name: true, company: true, segment: true,
+            email: true, dossierScore: true, contactGate: true,
+            warmthScore: true, draftStatus: true, lastEnriched: true
+        };
+    }
+    const clients = await prisma.client.findMany(queryOpts);
     return createSuccessResponse(id, JSON.stringify(clients, null, 2));
 }
 
 // Reference: prisma_sqlite_db.js getSystemStats() lines 624-641
 async function handleGetStats(id, params) {
-    const [totalClients, totalFactlets, brewing, ready, sent,
-           totalBookings, newBookings, leedReady, taken, shared] = await Promise.all([
+    const [totalClients, totalFactlets, totalLinkedFactlets, brewing, ready, sent,
+           contactGatePass, contactGateFail,
+           dossierHigh, dossierMid, dossierLow, dossierNone,
+           totalBookings, newBookings, leedReady, taken, shared,
+           scoreHigh, scoreMid, scoreLow, scoreNone] = await Promise.all([
         prisma.client.count(),
         prisma.factlet.count(),
+        prisma.clientFactlet.count(),
         prisma.client.count({ where: { draftStatus: 'brewing' } }),
         prisma.client.count({ where: { draftStatus: 'ready' } }),
         prisma.client.count({ where: { draftStatus: 'sent' } }),
+        prisma.client.count({ where: { contactGate: true } }),
+        prisma.client.count({ where: { contactGate: false } }),
+        prisma.client.count({ where: { dossierScore: { gte: 10 } } }),
+        prisma.client.count({ where: { dossierScore: { gte: 5, lt: 10 } } }),
+        prisma.client.count({ where: { AND: [{ dossierScore: { not: null } }, { dossierScore: { lt: 5 } }] } }),
+        prisma.client.count({ where: { dossierScore: null } }),
         prisma.booking.count(),
         prisma.booking.count({ where: { status: 'new' } }),
         prisma.booking.count({ where: { status: 'leed_ready' } }),
         prisma.booking.count({ where: { status: 'taken' } }),
-        prisma.booking.count({ where: { status: 'shared' } })
+        prisma.booking.count({ where: { status: 'shared' } }),
+        prisma.booking.count({ where: { bookingScore: { gte: 70 } } }),
+        prisma.booking.count({ where: { bookingScore: { gte: 50, lt: 70 } } }),
+        prisma.booking.count({ where: { AND: [{ bookingScore: { not: null } }, { bookingScore: { lt: 50 } }] } }),
+        prisma.booking.count({ where: { bookingScore: null } })
     ]);
     return createSuccessResponse(id, JSON.stringify({
-        totalClients, totalFactlets,
+        totalClients, totalFactlets, totalLinkedFactlets,
         drafts: { brewing, ready, sent },
-        bookings: { total: totalBookings, new: newBookings, leed_ready: leedReady, taken, shared }
+        contactGate: { pass: contactGatePass, fail: contactGateFail },
+        dossierScores: { high: dossierHigh, mid: dossierMid, low: dossierLow, unscored: dossierNone },
+        bookings: {
+            total: totalBookings, new: newBookings, leed_ready: leedReady, taken, shared,
+            scores: { share_ready: scoreHigh, needs_work: scoreMid, incomplete: scoreLow, unscored: scoreNone }
+        }
     }, null, 2));
 }
 
@@ -705,15 +857,271 @@ async function handleGetBookings(id, params) {
     const where = {};
     if (args.status) where.status = args.status;
     if (args.trade)  where.trade  = args.trade;
-    const limit = args.limit || 50;
+    const limit = args.limit || 10;
 
     const bookings = await prisma.booking.findMany({
         where,
         orderBy: { createdAt: 'desc' },
         take: limit,
-        include: { client: true }
+        include: {
+            client: {
+                select: { id: true, name: true, company: true, email: true, phone: true, segment: true }
+            }
+        }
     });
     return createSuccessResponse(id, safeJson(bookings));
+}
+
+// ============================================================================
+// CLIENT SCORING — PROCEDURAL, NO LLM
+// ============================================================================
+
+const SIGNAL_POINTS = { pain: 2, occasion: 2, context: 1 };
+const DRAFT_THRESHOLD = 5;
+
+async function handleLinkFactlet(id, params) {
+    const args = params.arguments || {};
+    const { clientId, factletId, signalType } = args;
+    if (!clientId)   return createErrorResponse(id, -32602, 'Missing clientId');
+    if (!factletId)  return createErrorResponse(id, -32602, 'Missing factletId');
+    if (!signalType) return createErrorResponse(id, -32602, 'Missing signalType');
+
+    const validTypes = ['pain', 'occasion', 'context'];
+    if (!validTypes.includes(signalType)) {
+        return createErrorResponse(id, -32602, `Invalid signalType "${signalType}". Must be: ${validTypes.join(', ')}`);
+    }
+
+    const points = SIGNAL_POINTS[signalType];
+
+    // Upsert — idempotent on clientId+factletId unique constraint
+    const link = await prisma.clientFactlet.upsert({
+        where: { clientId_factletId: { clientId, factletId } },
+        create: { clientId, factletId, signalType, points },
+        update: { signalType, points },
+        include: { factlet: { select: { content: true, source: true } } }
+    });
+
+    return createSuccessResponse(id, JSON.stringify(link, null, 2));
+}
+
+async function handleGetClientFactlets(id, params) {
+    const clientId = params.arguments?.clientId;
+    if (!clientId) return createErrorResponse(id, -32602, 'Missing clientId');
+
+    const links = await prisma.clientFactlet.findMany({
+        where: { clientId },
+        include: { factlet: { select: { id: true, content: true, source: true, createdAt: true } } },
+        orderBy: { appliedAt: 'desc' }
+    });
+
+    return createSuccessResponse(id, JSON.stringify(links, null, 2));
+}
+
+async function handleScoreClient(id, params) {
+    const args = params.arguments || {};
+    const clientId = args.clientId;
+    if (!clientId) return createErrorResponse(id, -32602, 'Missing clientId');
+
+    const client = await prisma.client.findUnique({ where: { id: clientId } });
+    if (!client) return createErrorResponse(id, -32602, `Client not found: ${clientId}`);
+
+    // --- Contact Gate ---
+    const hasName = !!(client.name && client.name.trim());
+    const email = (client.email || '').trim();
+    const generic = email ? isGenericEmail(email) : false;
+    const hasDirectEmail = !!(email && !generic);
+    const contactGate = hasName && hasDirectEmail;
+
+    // --- Factlet Score (D4) ---
+    const factletAgg = await prisma.clientFactlet.aggregate({
+        where: { clientId },
+        _sum: { points: true },
+        _count: true
+    });
+    const factletScore = factletAgg._sum.points || 0;
+    const factletCount = factletAgg._count || 0;
+
+    // --- Intel Score (D2+D3) ---
+    // Use provided param if present, otherwise use stored value
+    const intelScore = (args.intelScore !== undefined)
+        ? parseInt(args.intelScore, 10)
+        : (client.intelScore || 0);
+
+    // --- Dossier Score ---
+    const dossierScore = intelScore + factletScore;
+
+    // --- Draft Eligibility ---
+    const canDraft = contactGate && (dossierScore >= DRAFT_THRESHOLD);
+
+    // --- Recommended action ---
+    let action = null;
+    if (!canDraft) {
+        if (!hasName) {
+            action = 'CHASE_CONTACT: No named person. Find a decision-maker via website, LinkedIn, or staff directory.';
+        } else if (!email) {
+            action = 'CHASE_CONTACT: No email at all. Search for direct email via LinkedIn, staff directory, domain patterns.';
+        } else if (generic) {
+            action = `CHASE_CONTACT: ${email} is a generic inbox. Find ${client.name}'s direct email.`;
+        } else if (dossierScore < DRAFT_THRESHOLD) {
+            action = `THIN_DOSSIER: dossierScore ${dossierScore} < ${DRAFT_THRESHOLD}. Need more signals or factlets.`;
+        }
+    }
+
+    // --- Write back to DB ---
+    const updateData = { dossierScore, contactGate };
+    if (args.intelScore !== undefined) {
+        updateData.intelScore = intelScore;
+    }
+    await prisma.client.update({ where: { id: clientId }, data: updateData });
+
+    const emailNote = email
+        ? (generic ? ` (generic — gate fails)` : '')
+        : ' (no email)';
+
+    return createSuccessResponse(id, JSON.stringify({
+        clientId,
+        contactGate,
+        dossierScore,
+        factletScore,
+        factletCount,
+        intelScore,
+        canDraft,
+        breakdown: {
+            contact: `${contactGate ? 'PASS' : 'FAIL'} — ${client.name || 'NO NAME'} / ${email || 'no email'}${emailNote}`,
+            intel:   `${intelScore}/7 — D2+D3 from scraping`,
+            factlets: `${factletScore} pts from ${factletCount} linked factlets`,
+            total:   `${dossierScore} (threshold: ${DRAFT_THRESHOLD})`
+        },
+        action
+    }, null, 2));
+}
+
+// ============================================================================
+// BOOKING SCORE — PROCEDURAL, NO LLM
+// ============================================================================
+
+const GENERIC_EMAIL_PREFIXES = new Set([
+    'info', 'contact', 'hello', 'support', 'admin', 'office',
+    'general', 'mail', 'help', 'team', 'webmaster', 'bookings',
+    'events', 'enquiries', 'inquiries', 'noreply', 'noreply',
+    'sales', 'marketing', 'pr', 'media', 'press', 'news',
+    'reception', 'management', 'operations', 'service', 'services',
+    'customerservice', 'customercare', 'care', 'feedback', 'staff'
+]);
+
+function isGenericEmail(email) {
+    if (!email) return false;
+    const prefix = email.split('@')[0].toLowerCase().replace(/[^a-z]/g, '');
+    return GENERIC_EMAIL_PREFIXES.has(prefix);
+}
+
+function computeBookingScore(booking, client) {
+    const b = {};
+
+    // Trade: 0 or 20
+    b.trade = booking.trade ? 20 : 0;
+
+    // Date: 0 or 20
+    b.date = booking.startDate ? 20 : 0;
+
+    // Location: 0, 10, or 20
+    const hasLoc = !!(booking.location && booking.location.trim());
+    const hasZip = !!(booking.zip && booking.zip.trim());
+    if (hasLoc && hasZip)      b.location = 20;
+    else if (hasZip || hasLoc) b.location = 10;
+    else                       b.location = 0;
+
+    // Contact: 0, 10, 15, or 20 — generic email always scores 0
+    const hasName      = !!(client?.name && client.name.trim());
+    const email        = (client?.email || '').trim();
+    const generic      = email ? isGenericEmail(email) : false;
+    const hasNamedEmail = email && !generic;
+    if (hasName && hasNamedEmail) b.contact = 20;
+    else if (hasNamedEmail)       b.contact = 15;
+    else if (hasName)             b.contact = 10;
+    else                          b.contact = 0;  // no contact OR generic email only
+
+    // Description: 0, 10, or 20
+    const desc      = (booking.description || '').trim();
+    const wordCount = desc ? desc.split(/\s+/).length : 0;
+    if (wordCount >= 20)   b.description = 20;
+    else if (wordCount > 0) b.description = 10;
+    else                    b.description = 0;
+
+    const total = b.trade + b.date + b.location + b.contact + b.description;
+
+    // Hard gates: total >= 70 AND contact >= 10 (must have a real person)
+    const shareReady = total >= 70 && b.contact >= 10;
+
+    // Contact quality label
+    let contactQuality;
+    if (b.contact === 20)      contactQuality = 'named_email_and_name';
+    else if (b.contact === 15) contactQuality = 'named_email';
+    else if (b.contact === 10) contactQuality = 'name_only';
+    else if (generic)          contactQuality = 'generic_email';
+    else                       contactQuality = 'none';
+
+    // Recommended next action if not share-ready
+    let action = null;
+    if (!shareReady) {
+        if (b.contact === 0 && generic) {
+            action = `ENRICH: ${email} is a generic inbox. Find a named contact via website, LinkedIn, or Facebook.`;
+        } else if (b.contact === 0) {
+            action = 'ENRICH: No contact found. Search for a named person at this organization.';
+        } else if (!booking.trade) {
+            action = 'CLASSIFY: Assign a trade category before sharing.';
+        } else if (!booking.startDate) {
+            action = 'ENRICH: No event date. Search or send probe email to confirm timing.';
+        } else if (b.location < 20) {
+            action = 'ENRICH: Partial location. Search for venue address and zip.';
+        } else if (b.description < 20) {
+            action = 'ENRICH: Thin description. Scrape more context or send probe email.';
+        } else {
+            action = 'OUTREACH: Send probe email to confirm missing details.';
+        }
+    }
+
+    return { total, breakdown: b, shareReady, contactQuality, action };
+}
+
+async function handleScoreBooking(id, params) {
+    const bookingId = params.arguments?.id;
+    if (!bookingId) return createErrorResponse(id, -32602, 'Missing booking ID');
+
+    const booking = await prisma.booking.findUnique({
+        where: { id: bookingId },
+        include: { client: { select: { id: true, name: true, email: true } } }
+    });
+    if (!booking) return createErrorResponse(id, -32602, `Booking not found: ${bookingId}`);
+
+    const { total, breakdown: b, shareReady, contactQuality, action } = computeBookingScore(booking, booking.client);
+
+    // Write score back to DB
+    await prisma.booking.update({
+        where: { id: bookingId },
+        data: { bookingScore: total, contactQuality }
+    });
+
+    const dateStr   = booking.startDate ? new Date(booking.startDate).toISOString().split('T')[0] : 'MISSING';
+    const locStr    = [booking.location, booking.zip].filter(Boolean).join(', ') || 'MISSING';
+    const emailNote = booking.client?.email
+        ? (contactQuality === 'generic_email' ? ` (generic — scores 0)` : '')
+        : '';
+
+    return createSuccessResponse(id, JSON.stringify({
+        id:             bookingId,
+        score:          total,
+        shareReady,
+        contactQuality,
+        breakdown: {
+            trade:       `${b.trade}/20  — ${booking.trade || 'MISSING'}`,
+            date:        `${b.date}/20  — ${dateStr}`,
+            location:    `${b.location}/20 — ${locStr}`,
+            contact:     `${b.contact}/20 — ${booking.client?.email || 'no email'}${emailNote}`,
+            description: `${b.description}/20 — ${(booking.description||'').split(/\s+/).filter(Boolean).length} words`,
+        },
+        action
+    }, null, 2));
 }
 
 async function handleShareBooking(id, params) {
@@ -807,6 +1215,7 @@ async function handleToolCall(id, params) {
     try {
         switch (params.name) {
             case 'get_client':          return await handleGetClient(id, params);
+            case 'create_client':       return await handleCreateClient(id, params);
             case 'search_clients':      return await handleSearchClients(id, params);
             case 'update_client':       return await handleUpdateClient(id, params);
             case 'get_ready_drafts':    return await handleGetReadyDrafts(id, params);
@@ -821,7 +1230,11 @@ async function handleToolCall(id, params) {
             case 'update_booking':      return await handleUpdateBooking(id, params);
             case 'get_bookings':        return await handleGetBookings(id, params);
             case 'get_client_bookings': return await handleGetClientBookings(id, params);
+            case 'score_booking':       return await handleScoreBooking(id, params);
             case 'share_booking':       return await handleShareBooking(id, params);
+            case 'link_factlet':        return await handleLinkFactlet(id, params);
+            case 'get_client_factlets': return await handleGetClientFactlets(id, params);
+            case 'score_client':        return await handleScoreClient(id, params);
             default:
                 return createErrorResponse(id, -32601, `Unknown tool: ${params.name}`);
         }

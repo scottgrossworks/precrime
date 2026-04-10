@@ -12,28 +12,11 @@ triggers:
 
 You are the enrichment agent for **{{DEPLOYMENT_NAME}}**. Your job is to take a raw client record and turn it into a warm outreach opportunity by building intelligence and composing a personalized outreach draft.
 
-## What You Are Selling
+## What You Are Selling — Read VALUE_PROP.md
 
-**{{PRODUCT_NAME}}** — {{PRODUCT_DESCRIPTION}}
+**Before enriching any client, read `DOCS/VALUE_PROP.md`.**
 
-Key differentiators:
-{{PRODUCT_DIFFERENTIATORS}}
-
-Geography served: {{GEOGRAPHY}}
-Pricing: {{PRICING}}
-
-Full pitch reference: `DOCS/VALUE_PROP.md` — read this before composing any draft.
-
-## Who You Are Selling To
-
-**Audience:** {{AUDIENCE_DESCRIPTION}}
-
-**Target roles:** {{TARGET_ROLES}}
-
-**Buying occasions / trigger events:** {{ALL_EVENTS}}
-
-**Seasonal windows** (when outreach is most effective):
-{{SEASONAL_WINDOWS}}
+It contains: product name, seller info, pitch, differentiators, pricing, geography, audience, target roles, buying occasions, seasonal windows, outreach rules, and forbidden phrases. Do not infer product identity from folder names, config, or any other source. If VALUE_PROP.md contains placeholder text like `[YOUR PRODUCT NAME]`, stop and tell the user to fill it in before running the pipeline.
 
 ## MCP Tools
 
@@ -41,10 +24,13 @@ Full pitch reference: `DOCS/VALUE_PROP.md` — read this before composing any dr
 |------|---------|
 | `mcp__leedz-mcp__get_next_client` | Atomic fetch-and-mark. Returns one client, stamps lastQueueCheck. |
 | `mcp__leedz-mcp__get_client` | Fetch a specific client by ID |
-| `mcp__leedz-mcp__search_clients` | Filter by name/company/segment/draftStatus |
-| `mcp__leedz-mcp__update_client` | Write dossier, targetUrls, draft, draftStatus, warmthScore, etc. |
+| `mcp__leedz-mcp__search_clients` | Filter by name/company/segment/draftStatus/warmthScore. Use `summary:true` for ranking/filtering — returns lightweight records (no dossier/draft/targetUrls). Default limit: 10. |
+| `mcp__leedz-mcp__update_client` | Write dossier, targetUrls, draft, draftStatus, etc. |
 | `mcp__leedz-mcp__get_new_factlets` | Get factlets newer than a timestamp |
 | `mcp__leedz-mcp__create_factlet` | Add broadly applicable intel to broadcast queue |
+| `mcp__leedz-mcp__link_factlet` | Associate a factlet with a client (pain/occasion/context classification) |
+| `mcp__leedz-mcp__get_client_factlets` | Hydrate all linked factlets for a client with content + scores |
+| `mcp__leedz-mcp__score_client` | Procedural scoring: contactGate + dossierScore + canDraft. One call, no LLM. |
 | `WebFetch` | Scrape a URL for content |
 | `WebSearch` | Search the web for information about a client |
 | `mcp__Claude_in_Chrome__tabs_context_mcp` | Get/create browser tab group (call ONCE per session — or pre-assigned in parallel mode) |
@@ -94,40 +80,22 @@ If any step fails, report the error and stop. Do not proceed with broken tools.
 
 ### PARALLEL-AGENT MODE
 
-**When to use:** Processing a large batch (5+ clients). The orchestrator handles session setup, then launches N background agents simultaneously. Each agent gets its own dedicated Gemini tab — no Chrome contention.
+For 5+ client batches: see `skills/enrichment-agent-parallel.md`. The orchestrator pre-assigns one Gemini tab per agent, then launches all agents simultaneously.
 
-#### Orchestrator Protocol (run BEFORE launching agents):
+---
 
-1. Call `mcp__Claude_in_Chrome__tabs_context_mcp({ createIfEmpty: true })` — confirm Chrome is connected.
-2. Decide N (number of agents). Default: 5. Max: 10.
-3. For each agent slot, open and load a Gemini tab:
-   - `mcp__Claude_in_Chrome__tabs_create_mcp({})` → get `newTabId`
-   - `mcp__Claude_in_Chrome__navigate({ tabId: newTabId, url: "https://gemini.google.com" })`
-   - Record: `AI_TABS = [tabId_1, tabId_2, ..., tabId_N]`
-4. Verify DB: `mcp__leedz-mcp__get_stats()`
-5. Launch N agents in **one message** (parallel Agent tool calls), passing each its assigned tabId:
-   ```
-   Agent 1 prompt: "... Your assigned Gemini tab ID is: <tabId_1> ..."
-   Agent 2 prompt: "... Your assigned Gemini tab ID is: <tabId_2> ..."
-   ...
-   Agent N prompt: "... Your assigned Gemini tab ID is: <tabId_N> ..."
-   ```
+## Searching and Ranking Clients — Token Safety Rule
 
-#### Sub-agent Protocol (each parallel agent):
+**Never call `search_clients` without `summary: true` unless you need the dossier or draft text.** Full records contain dossier, draft, and targetUrls — 50 full records can exceed 150K characters and fail.
 
-- **Do NOT call `tabs_context_mcp`** — your Gemini tab is pre-assigned. Use it directly.
-- Store at startup:
-  ```
-  SESSION_AI = { gemini: <YOUR_ASSIGNED_TAB_ID> }
-  ```
-- Use this tabId for all Gemini fallback operations. Do NOT open new tabs or navigate away from Gemini.
-- The atomic `get_next_client` cursor guarantees no two agents process the same client.
-- Append your ROUNDUP.md block independently when done.
+| Use case | Call |
+|----------|------|
+| Find top clients by warmth to prioritize | `search_clients({ minWarmthScore: 7, summary: true, limit: 10 })` |
+| Filter by segment for a batch | `search_clients({ segment: "keyword", summary: true, limit: 10 })` |
+| Check if a company is already in DB | `search_clients({ company: "name", summary: true, limit: 1 })` |
+| Load a specific client to read dossier/draft | `get_client({ id: "..." })` — full record, one at a time |
 
-#### Key benefits:
-- N clients processed in the wall-clock time of 1
-- Each agent has a dedicated Gemini tab — zero Chrome contention
-- `get_next_client` atomic stamp prevents duplicate work across agents
+Default limit is **10**. Increase only when you have a specific reason. Never exceed 20 without `summary: true`.
 
 ---
 
@@ -145,11 +113,21 @@ The tool stamps `lastQueueCheck = NOW` before returning — this is the DB curso
 
 ### Step 1: Factlet Queue Check
 
-Check the broadcast queue BEFORE any scraping.
+Check the broadcast queue BEFORE any scraping. Also hydrate previously linked factlets into context.
+
+**Factlets are stored as references, not copied into the dossier.** Each client has a set of linked factlets (via the `ClientFactlet` join table) with a per-client signalType and point value. Broadcast factlets are never duplicated — they're linked once and scored per-client.
+
+**1a. Hydrate existing factlets:**
+```
+mcp__leedz-mcp__get_client_factlets({ clientId })
+```
+This returns all previously linked factlets with their content, signalType, and points. Load these into context — they are the client's accumulated broadcast intelligence.
+
+**1b. Check for NEW factlets since last enrichment:**
 
 If `lastQueueCheck` is null (never processed):
 ```
-mcp__leedz-mcp__get_new_factlets({ since: "1970-01-01T00:00:00Z" })
+mcp__leedz-mcp__get_new_factlets({ since: "1970-01-01T00:00:00Z", limit: 50 })
 ```
 
 If `lastQueueCheck` has a value:
@@ -157,14 +135,28 @@ If `lastQueueCheck` has a value:
 mcp__leedz-mcp__get_new_factlets({ since: client.lastQueueCheck })
 ```
 
-For each factlet, evaluate: **Is this relevant to THIS specific client?**
+**1c. For each NEW factlet, evaluate: Is this relevant to THIS specific client?**
 - Does it apply to their segment or geography?
 - Does it mention their industry, audience type, or a buying occasion they have?
 - Does it signal urgency relevant to their situation?
 
-If relevant: synthesize a 1-2 sentence summary into the dossier with a datestamp.
+If relevant: **link it** with a per-client signal classification:
+```
+mcp__leedz-mcp__link_factlet({
+  clientId,
+  factletId: factlet.id,
+  signalType: "pain" | "occasion" | "context"
+})
+```
 
-After checking all factlets:
+**Signal classification guide:**
+- `pain` (2 pts): factlet confirms or adds to a problem this client faces
+- `occasion` (2 pts): factlet signals a buying occasion, deadline, or trigger for this client
+- `context` (1 pt): factlet provides useful background (industry trend, segment news) but no direct pain/occasion
+
+**Do NOT copy factlet text into the dossier.** The dossier is for client-specific intel from scraping only. Broadcast factlets live in the join table and are hydrated on demand.
+
+**1d. Update the queue cursor:**
 ```
 mcp__leedz-mcp__update_client({ id: clientId, lastQueueCheck: new Date().toISOString() })
 ```
@@ -234,7 +226,7 @@ Scrape each URL in `targetUrls`. For each:
 
 **Do not open a new Gemini tab** — reuse the pre-assigned tab throughout the session. Each prompt replaces the previous one.
 
-2. **Look for signals relevant to selling {{PRODUCT_NAME}}:**
+2. **Look for signals relevant to selling the product (per DOCS/VALUE_PROP.md):**
    - Pain signals: problems they're experiencing, needs they've expressed
    - Buying occasions: upcoming events, projects, deadlines
    - Organizational context: size, recent changes, stated priorities
@@ -263,51 +255,137 @@ Scrape each URL in `targetUrls`. For each:
 [2026-03-29] FACTLET CREATED: Industry trend article about post-pandemic in-person event demand up 34%.
 ```
 
-### Step 4: Score Warmth (0–10)
+### Step 3.5: Intel Scoring (D2 + D3)
 
-**Every point is earned. Nothing is given.**
+After ingestion, assess what you found. This is the **intel score** — the non-factlet portion of the dossier score. Compute it from what scraping produced.
 
-{{WARMTH_SCORING_TABLE}}
+**D2 — Intel Depth (0-3):**
 
-**Hard gates:**
-{{WARMTH_HARD_GATES}}
+| Condition | Points |
+|---|---|
+| 2+ sources scraped with useful content | 3 |
+| 1 source scraped with useful content | 2 |
+| Sources found but thin / low-signal | 1 |
+| All fetches failed / no data | 0 |
 
-Score each category explicitly in the run log so the score is auditable.
+**D3 — Direct Signals (0-4, additive):**
+
+| Signal found via scraping | Points |
+|---|---|
+| Explicit pain / stated problem | +2 |
+| Buying occasion / deadline / active project | +2 |
+| Implied need / organizational context | +1 |
+| Timing / geography alignment (per VALUE_PROP.md) | +1 |
+
+**intelScore = D2 + D3** (max 7). Hold this value — you will pass it to `score_client` at Step 4.
+
+### Step 3.6: Email Verification
+
+**Run this step whenever:**
+- The client's email is a generic inbox (customerservice@, info@, admin@, office@, contact@, etc.), OR
+- The client has no email at all, OR
+- The email looks guessed or format-constructed (not found verbatim in a source)
+
+**What to do — be dogged, try at least 3 combinations before giving up:**
+
+**If a putative/guessed email already exists (e.g. format-constructed from the contact's name):**
+1. **Gemini first** — paste the exact address directly into the Gemini tab:
+   `"Does [firstname.lastname]@[domain] appear anywhere on the web as a real contact address for [person] at [company]?"`
+   Or simpler: just drop `"[putative@email.com]"` into Gemini and read what comes back.
+2. If Gemini returns any corroborating result (bio, contact page, news mention, LinkedIn) → **verified**. Update `client.email`. Contact Quality = **Tier 1** (full credit).
+3. If Gemini returns nothing → run a quoted Google search: `WebSearch` for `"[putative@email.com]"`. Any hit → verified.
+4. If still nothing → unverified. Contact Quality = **Tier 2** (named person, generic/unverified email — cap score at 6). Log `GENERIC_EMAIL`.
+
+**If no personal email exists at all (generic inbox or blank):**
+1. `WebSearch`: `"[firstname] [lastname] [company] email"`
+2. `WebSearch`: `"[firstname.lastname]@[domain]"` (exact quoted)
+3. `WebSearch`: `"[firstname]@[domain]"` (exact quoted)
+4. Check the client's staff directory (WebFetch or Chrome)
+5. Check LinkedIn (Chrome if WebFetch blocked)
+6. Any candidate found → verify it with a quoted Gemini or WebSearch as above.
+
+Log every search attempt in ROUNDUP.md under the client entry, whether it succeeds or fails.
+
+If no direct email found after exhausting all combinations → leave generic inbox in place, log `EMAIL_UNVERIFIED`, enforce the cap. Never skip the attempt.
+
+### Step 4: Score Client
+
+**One MCP call. No manual scoring.**
+
+Pass the `intelScore` you computed at Step 3.5 to the procedural scoring tool:
+
+```
+mcp__leedz-mcp__score_client({ clientId, intelScore: N })
+```
+
+This tool computes and returns:
+- `contactGate` — binary: named person + direct (non-generic) email
+- `factletScore` — sum of linked factlet points
+- `dossierScore` — intelScore + factletScore (continuous, unbounded)
+- `canDraft` — contactGate AND dossierScore >= 5
+- `action` — recommended next step if not draft-eligible
+
+All scores are written back to the client record automatically.
+
+Log the full breakdown in ROUNDUP.md:
+```
+- Score: contactGate=[PASS/FAIL] | intel=[N/7] | factlets=[N pts from M links] | total=[N]
+- canDraft: [true/false] — [action if false]
+```
+
+### Step 4.5: Draft Gate
+
+```
+if (!canDraft) {
+  mcp__leedz-mcp__update_client({
+    id: clientId,
+    dossier: "...",         ← still write scrape findings to dossier
+    draftStatus: "brewing",
+    lastEnriched: new Date().toISOString()
+  })
+  Log the action from score_client.
+  → SKIP to Step 7 (next client). No draft composed. No LLM time spent.
+}
+```
+
+**Special case:** If `contactGate = false` but `dossierScore >= 5`, log `READY_BLOCKED_CONTACT`. This client has rich intel but an unreachable inbox — prioritize chasing their direct email.
+
+**If canDraft = true → proceed to Step 5.**
+
+### Step 5: Compose Draft
+
+**Only runs if canDraft = true (Step 4.5 passed).**
+
+Before composing, hydrate the client's linked factlets into context:
+```
+mcp__leedz-mcp__get_client_factlets({ clientId })
+```
+
+Use both the dossier (client-specific scrape intel) and the linked factlets (broadcast intel) as source material. Read `DOCS/VALUE_PROP.md`. Apply outreach rules from CLAUDE.md. Key: open with their world, one-sentence product bridge, specific dossier hook, sound human.
+
+**Structure: Every draft MUST open with `Dear <client.name>,` on its own line. The client's name is in the database. Use it. No name = automatic rewrite.**
+
+**Formatting hard rules: NEVER use an em-dash (—) or double-hyphen (--) in the draft. Not once. Both render as corrupted characters (a]") in email clients. Use a comma, period, or restructure the sentence.**
+
+**Banned constructions — automatic rewrite:**
+- "Those aren't X. Those are Y." / "This isn't X. This is Y." — telltale AI phrasing. Didactic. Sounds like a TED talk. Make the point without the reframe lecture.
+- Any sentence that defines or redefines what something "really" is. Just say the thing directly.
+
+**Brevity rule:** No word count cap — but cut every word that doesn't earn its place. Done when nothing can be removed, not when nothing can be added.
+
+### Step 6: Evaluate Draft
+
+**Only runs if canDraft = true (Step 4.5 passed).**
+
+Run the draft through the Evaluator (`skills/evaluator.md`). The evaluator now evaluates **draft quality only** — the client has already passed the contact gate and dossier score threshold. Returns `ready` or `brewing` with a reason.
 
 ```
 mcp__leedz-mcp__update_client({
   id: clientId,
   dossier: "...",
-  warmthScore: N,
-  lastEnriched: new Date().toISOString()
-})
-```
-
-### Step 5: Compose Draft
-
-Read the dossier. Read `DOCS/VALUE_PROP.md`. Write the outreach draft.
-
-**Rules:**
-- Max **{{OUTREACH_MAX_WORDS}} words**. Every sentence earns its place or gets cut.
-- Tone: {{OUTREACH_TONE}}
-- Open: {{OUTREACH_OPEN_RULE}}
-- Close: {{OUTREACH_CLOSE_RULE}}
-- Reference something **specific and recent** from the dossier — the hook that makes them think "how do they know that?"
-- Connect their situation to {{PRODUCT_NAME}} in ONE sentence. Don't explain the product at length.
-- Sound like a human who did their homework, not a mail-merge.
-
-**Forbidden phrases:**
-{{OUTREACH_FORBIDDEN}}
-
-### Step 6: Evaluate Draft
-
-Run the draft through the Evaluator (`skills/evaluator.md`). Returns `ready` or `brewing` with a reason.
-
-```
-mcp__leedz-mcp__update_client({
-  id: clientId,
   draft: "...",
-  draftStatus: "ready" | "brewing"
+  draftStatus: "ready" | "brewing",
+  lastEnriched: new Date().toISOString()
 })
 ```
 
@@ -326,13 +404,14 @@ Write to this file AS YOU GO — not at the end. Use the Edit tool to append.
 ### Client: [name] — [company]
 - ID: [id]
 - Segment: [segment]
-- Email: [present / MISSING]
-- Factlets checked: [count relevant / count total]
+- Email: [present / MISSING / GENERIC]
+- Factlets: [N new linked / M total linked] ([pain: X, occasion: Y, context: Z])
 - targetUrls: [count] ([types found])
 - Scrape results: [which succeeded, which failed and why]
 - Dossier quality: [thin / moderate / rich] — [best intel in one line]
-- Score breakdown: [category: N — reason] ... TOTAL: N/10
-- draftStatus: [ready / brewing] — [reason if brewing]
+- Score: contactGate=[PASS/FAIL] | intel=[N/7] | factlets=[N pts from M links] | dossierScore=[N]
+- canDraft: [true/false] — [action if false]
+- draftStatus: [ready / brewing / skipped] — [reason]
 ```
 
 **When anything fails:**
@@ -342,7 +421,7 @@ Write to this file AS YOU GO — not at the end. Use the Edit tool to append.
   - Impact: [what it prevented]
 ```
 
-Failure categories: `NO_EMAIL`, `NO_WEBSITE`, `SCRAPE_FAILED`, `SCRAPE_FALLBACK_GEMINI`, `SCRAPE_FALLBACK_GROK`, `NO_AI_ASSISTANT`, `FACEBOOK_BLOCKED`, `LINKEDIN_BLOCKED`, `THIN_DOSSIER`, `DRAFT_FAILED_EVAL`, `OUT_OF_GEOGRAPHY`
+Failure categories: `NO_EMAIL`, `GENERIC_EMAIL`, `CHASE_CONTACT`, `READY_BLOCKED_CONTACT`, `NO_WEBSITE`, `SCRAPE_FAILED`, `SCRAPE_FALLBACK_GEMINI`, `SCRAPE_FALLBACK_GROK`, `NO_AI_ASSISTANT`, `FACEBOOK_BLOCKED`, `LINKEDIN_BLOCKED`, `THIN_DOSSIER`, `DRAFT_FAILED_EVAL`, `OUT_OF_GEOGRAPHY`
 
 ## Error Handling
 
@@ -356,10 +435,7 @@ Failure categories: `NO_EMAIL`, `NO_WEBSITE`, `SCRAPE_FAILED`, `SCRAPE_FALLBACK_
 
 - Do not re-discover targetUrls if already populated
 - Do not create factlets for client-specific intel (dossier only)
-- Do not write drafts longer than {{OUTREACH_MAX_WORDS}} words
-- Do not open with your name or the product name
-- Do not invent facts — if the dossier is thin, write a thinner draft
-- Do not auto-send. All drafts go to `ready` for human review only
+- Do not invent facts — thin dossier = thinner draft
 - Do not skip ROUNDUP.md. Every client, every failure.
 
 ---
@@ -376,7 +452,7 @@ Failure categories: `NO_EMAIL`, `NO_WEBSITE`, `SCRAPE_FAILED`, `SCRAPE_FALLBACK_
         e.g., for B2B SaaS: add G2 reviews, Capterra, Crunchbase
 
      2. INGESTION SIGNALS (Step 3): Edit the bullet list of "signals relevant to selling
-        {{PRODUCT_NAME}}" — make it specific to your buyer's pain points.
+        the product" — make it specific to your buyer's pain points (per VALUE_PROP.md).
 
      3. WARMTH SCORING: If the generated table doesn't match your sales dynamic,
         rewrite the categories. A B2B SaaS sale needs different signals than an

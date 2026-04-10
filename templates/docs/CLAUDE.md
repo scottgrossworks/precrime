@@ -1,4 +1,4 @@
-# CLAUDE.md — {{DEPLOYMENT_NAME}}
+# CLAUDE.md — Pre-Crime Outreach Engine
 
 This file provides guidance to Claude Code when working in this repository.
 
@@ -10,7 +10,7 @@ Read in order before touching any file:
 
 1. `DOCS/CLAUDE.md` — This file. Binding rules.
 2. `DOCS/STATUS.md` — Full session handoff: state, file map, schema, design decisions.
-3. `DOCS/VALUE_PROP.md` — What is being sold and to whom. Read before composing any draft.
+3. `DOCS/VALUE_PROP.md` — **What is being sold and to whom. Read this before composing ANY draft. This is the product identity. Do not use any other source.**
 
 ---
 
@@ -24,12 +24,17 @@ All skill files, config, and templates are already present as local files in thi
 
 ---
 
-## PROJECT: {{DEPLOYMENT_NAME}}
+## PRODUCT IDENTITY — READ VALUE_PROP.md
 
-Contextual outreach engine for **{{SELLER_COMPANY}}** ({{SELLER_NAME}}).
-Product being sold: **{{PRODUCT_NAME}}** — {{PRODUCT_DESCRIPTION}}
-Target audience: {{AUDIENCE_DESCRIPTION}}
-Geography: {{GEOGRAPHY}}
+**`DOCS/VALUE_PROP.md` is the sole source of truth for what is being sold, who is selling it, and who the audience is.**
+
+Do NOT infer product identity from:
+- The workspace folder name
+- The database filename
+- Any template or placeholder text
+- Prior sessions or other deployments
+
+If VALUE_PROP.md is incomplete or contains placeholder text ("Your Name", "Your Company"), STOP and tell the user to complete it before running the pipeline.
 
 Runs locally on Windows. Claude is the orchestrator — no local LLM.
 
@@ -37,9 +42,9 @@ Runs locally on Windows. Claude is the orchestrator — no local LLM.
 
 ## DATABASE — SINGLE SOURCE OF TRUTH
 
-**`{{DB_RELATIVE_PATH}}`** (relative to workspace root)
+**Read `server/mcp/mcp_server_config.json` → `database.path` for the active DB path.**
 
-DO NOT use any other .sqlite file.
+That is the single place the DB is configured. Do not hardcode any path here. Do not use any `.sqlite` file other than the one `mcp_server_config.json` points to.
 
 Key columns: `dossier`, `targetUrls`, `draft`, `draftStatus`, `warmthScore`, `lastEnriched`, `lastQueueCheck`, `segment`
 
@@ -59,6 +64,7 @@ Key columns: `dossier`, `targetUrls`, `draft`, `draftStatus`, `warmthScore`, `la
 - If you say you'll do something, DO IT in the same response.
 - If failing, STOP. Don't compound mistakes with more attempts.
 - Never argue with or contradict the user.
+- **Never use any wiki skill or write to any wiki path.** This deployment has no wiki.
 
 ---
 
@@ -111,25 +117,27 @@ When the user says any of these: "start precrime", "start the precrime workflow"
 
 ## OUTREACH WRITING RULES
 
-- Max **{{OUTREACH_MAX_WORDS}} words**.
-- Tone: {{OUTREACH_TONE}}
-- Open: {{OUTREACH_OPEN_RULE}}
-- Close: {{OUTREACH_CLOSE_RULE}}
+**Read `DOCS/VALUE_PROP.md` for word limit, tone, open/close rules, and forbidden phrases specific to this deployment.**
+
+Universal rules (always apply):
 - Reference something specific and recent from the dossier.
-- Connect their pain to {{PRODUCT_NAME}} in ONE sentence.
+- Connect their pain to the product in ONE sentence.
 - No filler. Every sentence sells or gets cut.
+- **Brevity is the goal.** No word count cap — but cut every word that doesn't earn its place. If a sentence can be shorter without losing meaning, make it shorter. The draft is done when nothing can be removed, not when nothing can be added.
 - Do NOT auto-send. All drafts go to `ready` for human review.
 
-Forbidden phrases:
-{{OUTREACH_FORBIDDEN}}
+**Banned phrasing — automatic rewrite if found:**
+- "Those aren't X. Those are Y." and "This isn't X. This is Y." — AI tell. Sounds like a reframe lecture. Make the point without teaching the reader what words mean.
+- Any sentence that redefines what something "really" is. Say the thing. Don't editorialize the ontology.
 
 ---
 
 ## WHAT NOT TO DO
 
-- Do NOT use any `.sqlite` file other than the one listed above
+- Do NOT use any `.sqlite` file other than the one in `server/mcp/mcp_server_config.json → database.path`
 - Do NOT create an HTTP server
 - Do NOT add new npm packages without checking server/package.json first
 - Do NOT modify server/src/* files (reference only)
-- Do NOT write drafts longer than {{OUTREACH_MAX_WORDS}} words
+- Do NOT write drafts longer than the word limit in VALUE_PROP.md
 - Do NOT invent facts — if the dossier is thin, the draft should be thinner
+- **DO NOT create, edit, or read any wiki files.** There is no wiki in this deployment. Do not use any wiki skill, wiki tool, or wiki-ops capability. If a wiki skill appears available, ignore it completely. NEVER write to any `DOCS/wiki/` path under any circumstances.

@@ -29,6 +29,24 @@ You scan configured news feeds and create factlets — short, broadly applicable
 
 ## Procedure
 
+### Step 0: Read VALUE_PROP.md
+
+Read `DOCS/VALUE_PROP.md` before running. Note:
+- **PRODUCT_NAME**: what is being sold
+- **AUDIENCE_DESCRIPTION**: who the buyers are
+- **RELEVANT_TOPICS**: what topics matter to this audience (see relevance signals section in VALUE_PROP.md)
+- **NOT_RELEVANT_TOPICS**: topics to exclude
+
+Use these in all prompts and relevance checks below.
+
+### Step 0.5: Discover AI Assistant (optional but recommended)
+
+Check for a Gemini or Grok tab:
+```
+mcp__Claude_in_Chrome__tabs_context_mcp({ createIfEmpty: false })
+```
+Scan tabs for `gemini.google.com` or `grok.com`. Store as `SESSION_AI = { gemini: <tabId> | null, grok: <tabId> | null }`. If Chrome isn't connected, set `SESSION_AI = null` and skip Gemini steps.
+
 ### Step 1: Fetch Articles
 
 ```
@@ -40,23 +58,37 @@ Returns scored articles: url, title, pubDate, feedName, category, score, snippet
 ### Step 2: Check Existing Factlets
 
 ```
-mcp__leedz-mcp__get_new_factlets({ since: "{{TODAY}}T00:00:00Z" })
+mcp__leedz-mcp__get_new_factlets({ since: "{{TODAY}}T00:00:00Z", limit: 100 })
 ```
 
 Use a 30-day lookback. If an article covers the same topic as an existing factlet, skip it.
-Adjust the date window as needed (longer lookback = stronger dedup, more processing).
+
+### Step 2.5: Bulk Relevance Pre-filter via Gemini (if SESSION_AI available)
+
+**Skip to Step 3 if SESSION_AI is null.**
+
+Offload the bulk relevance pass to Gemini — zero Claude tokens for the filtered-out articles.
+
+1. Compile a numbered list of all articles: `[N] [title] — [snippet, first 20 words]`
+2. Navigate to Gemini tab and paste:
+   > "We sell [PRODUCT_NAME] to [AUDIENCE_DESCRIPTION]. From this numbered article list, return ONLY the numbers of articles that are relevant buying signals, industry trends, or pain points for this audience. Comma-separated numbers only, no explanation."
+   (Fill [PRODUCT_NAME] and [AUDIENCE_DESCRIPTION] from DOCS/VALUE_PROP.md)
+3. Wait 5 seconds. Read response via `get_page_text`.
+4. Parse the comma-separated list. Only run Step 3 full evaluation on those numbered articles. Skip all others.
+5. Log: `Gemini pre-filter: [N total] → [M passed]`
 
 ### Step 3: Evaluate Each Article
 
-For each article, answer three questions:
+For each article (pre-filtered if Gemini was available), answer three questions:
 
-**Q1: Is this relevant to selling {{PRODUCT_NAME}} to {{AUDIENCE_DESCRIPTION}}?**
+**Q1: Is this relevant to selling [PRODUCT_NAME] to [AUDIENCE_DESCRIPTION]?**
+(Use product name and audience from DOCS/VALUE_PROP.md)
 
 RELEVANT topics:
-{{FACTLET_RELEVANT_TOPICS}}
+(See "Relevance Signals — Relevant" section in DOCS/VALUE_PROP.md)
 
 NOT RELEVANT:
-{{FACTLET_NOT_TOPICS}}
+(See "Relevance Signals — Not Relevant" section in DOCS/VALUE_PROP.md)
 
 If not relevant: skip. Move to next article.
 
@@ -67,27 +99,11 @@ BROAD (proceed to Q3):
 - Statistics or studies that apply across your entire audience
 - Competitor moves that all your clients should know about
 
-SPECIFIC to one org/person → classify into exactly one path:
-
-1. Is this org/person already in the DB?
-   ```
-   mcp__leedz-mcp__search_clients({ company: "[org name]" })
-   ```
-   - **YES → Dossier:** Append to their dossier via `update_client({ dossier: "[date] RSS: [finding]" })`. Skip this article — do not create a factlet.
-   - **NO → step 2**
-
-2. Does this item contain booking details? (trade + date + location/zip)
-   - **YES AND `leadCaptureEnabled = true` → Lead Capture (hot):**
-     ```
-     create_client({ name, company, email, dossier: "[date] RSS:[feedName]: [context]", draftStatus: "brewing" })
-     create_booking({ clientId, trade, startDate, location, zip, source: "rss:[feedName]", sourceUrl, status: "leed_ready" })
-     ```
-     Then run Evaluator Booking Completeness Check.
-   - **NO AND `leadCaptureEnabled = true` → Lead Capture (thin):**
-     ```
-     create_client({ name or company, dossier: "[date] RSS:[feedName]: [context]", draftStatus: "brewing" })
-     ```
-   - **`leadCaptureEnabled = false` → skip.** Log: `LEAD_CAPTURE_OFF — [org name]`
+SPECIFIC to one org/person → four-path classification:
+- Already in DB? `search_clients({ company: "[name]", limit: 1 })` → YES: append to dossier, no factlet. NO: continue.
+- Has trade + date + location/zip AND `leadCaptureEnabled`? → Lead HOT: `create_client` + `create_booking(status:"leed_ready")`, run Booking Completeness Check.
+- Missing booking details AND `leadCaptureEnabled`? → Lead THIN: `create_client` only, dossier note.
+- `leadCaptureEnabled = false`? → skip. Log: `LEAD_CAPTURE_OFF — [org]`
 
 **Q3: Is this recent enough to matter?**
 
@@ -109,16 +125,16 @@ mcp__leedz-mcp__create_factlet({
 **Factlet content rules:**
 - 2–3 sentences. No more.
 - Sentence 1: What happened. Include numbers, dates, names where available.
-- Sentence 2: Why it matters for {{TARGET_ROLES}} specifically.
+- Sentence 2: Why it matters for the target decision-makers (per VALUE_PROP.md) specifically.
 - Sentence 3 (optional): Implication for buying or urgency.
 - No opinion. No editorializing. Facts only.
-- No mention of {{PRODUCT_NAME}} in the factlet. The factlet is intelligence. The Composer connects it to the product later.
+- No mention of the product in the factlet. The factlet is intelligence. The Composer connects it to the product later.
 
 **Good factlet example:**
 "[Industry body] reported a 34% increase in [relevant trend] across [geography] in Q1 2026. Organizations that have not addressed [pain point] face [consequence] by [deadline]. [Implication for the buying decision]."
 
 **Bad factlet:**
-"There's a new trend in [industry]. Organizations should look into tools like {{PRODUCT_NAME}}." (Too vague. Editorializing. Mentions product.)
+"There's a new trend in [industry]. Organizations should look into tools like [the product]." (Too vague. Editorializing. Mentions product.)
 
 ### Step 5: Report
 

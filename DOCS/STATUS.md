@@ -111,9 +111,9 @@ All paths relative to PRECRIME source root.
 
 ---
 
-## What's Done (sessions 1-8)
+## What's Done (sessions 1-9)
 
-- All 15 MCP tools in `mcp_server.js` including `share_booking`
+- All 15 MCP tools in `mcp_server.js` including `share_booking`; `search_clients` extended with `warmthScore` / `minWarmthScore` / `maxWarmthScore` filters
 - All skill templates: init-wizard, enrichment-agent, evaluator, share-skill, factlet-harvester, fb-factlet-harvester, reddit-factlet-harvester, ig-factlet-harvester, relevance-judge
 - `deploy.js` with `--no-install` flag and correct path resolution
 - `build.bat` — zero args, handles staging/zipping/cleanup
@@ -125,15 +125,16 @@ All paths relative to PRECRIME source root.
 - The Leedz MCP Phase 1: getTrades, getStats, getLeedz, getUser, createLeed
 - JWT generation in init-wizard Step 5a
 - Booking completeness evaluator with four output paths
+- **End-to-end test passed**: unzip → `precrime` → MCP connected, init-wizard ran, enrichment launched
+- **`share_booking` verified**: `leed_ready` Booking → `shared` + `leedId` set — leed posted to marketplace
+- **The Leedz MCP `createLeed` verified** with session JWT
 
 ---
 
 ## Pending
 
-- **End-to-end test**: unzip fresh → `cd precrime` → `precrime` → verify Claude starts, MCP connects, init-wizard runs config walkthrough, enrichment launches. This has NOT been tested clean yet.
-- **`share_booking` test**: create `leed_ready` Booking with tennis trade, call `share_booking`, verify status → `shared` + `leedId` set. Use non-production trade.
-- **The Leedz MCP**: retest `getUser`, test `createLeed` with session JWT.
-- **`deploy.js` console output**: still prints old "SCAFFOLD COMPLETE" manual steps and "initialize this deployment" language. Cosmetic — only developer sees it. Low priority.
+- **Fine-tuning**: workflow live. Ongoing refinement only.
+- **Token optimization**: strategies 1–7 implemented (session 9). Strategy 8 (Gemini bulk pre-filter) partially implemented in factlet-harvester. See `DOCS/OPTIMIZATION.md`.
 
 ---
 
@@ -150,3 +151,5 @@ All paths relative to PRECRIME source root.
 5. **No engineer language in user-facing text.** Never say "initialization", "wizard", "configure", "deployment", "infrastructure", "bootstrap". The CLAUDE.md and init-wizard.md enforce this. Claude mirrors the language it reads.
 
 6. **Init wizard Step -1 does NOT diagnose.** If `get_config()` fails for any reason, it says "run precrime again" and stops. One sentence. No reading files, no checking paths, no running npm.
+
+7. **Fix the source. Never fix deployments.** `PRECRIME\` is the source. `TDS\`, and any other deployed instance, are deployments. Bug fixes go in `PRECRIME\server\` only. Deployments are rebuilt from source via `build.bat`. Never edit a deployment directory — not even when the error message shows a deployment file path as diagnostic context.

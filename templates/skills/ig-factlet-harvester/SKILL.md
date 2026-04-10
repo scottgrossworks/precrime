@@ -28,7 +28,6 @@ You harvest Instagram posts from curated business accounts and hashtags using `t
 | `mcp__leedz-mcp__search_clients` | Check if a person/org is already a client |
 | `mcp__leedz-mcp__update_client` | Append to existing client's dossier |
 | `mcp__leedz-mcp__create_booking` | Create a booking for Lead Capture hot path |
-| `mcp__leedz-mcp__get_config` | Read deployment config (check leadCaptureEnabled) |
 
 ## Configuration
 
@@ -91,7 +90,7 @@ For every post in every JSON file, answer the classification questions IN ORDER.
 **2. Is this person/org already in the DB?**
 
 ```
-mcp__leedz-mcp__search_clients({ search: "{name or org}" })
+mcp__leedz-mcp__search_clients({ search: "{name or org}", limit: 1 })
 ```
 
 - **YES (match found)** → **Dossier** update (Step 4B)
@@ -111,13 +110,14 @@ Check for ALL THREE:
 
 Apply the three-question relevance filter:
 
-**Q1: Relevant to selling {{PRODUCT_NAME}} to {{AUDIENCE_DESCRIPTION}}?**
+**Q1: Relevant to selling [PRODUCT_NAME] to [AUDIENCE_DESCRIPTION]?**
+(Use product name and audience from DOCS/VALUE_PROP.md)
 
 RELEVANT topics:
-{{FACTLET_RELEVANT_TOPICS}}
+(See "Relevance Signals — Relevant" section in DOCS/VALUE_PROP.md)
 
 NOT RELEVANT:
-{{FACTLET_NOT_TOPICS}}
+(See "Relevance Signals — Not Relevant" section in DOCS/VALUE_PROP.md)
 
 **Q2: Broadly applicable to multiple clients?**
 
@@ -134,12 +134,12 @@ If all three pass:
 
 ```
 mcp__leedz-mcp__create_factlet({
-  content: "[2-3 sentences. What. Why it matters for {{TARGET_ROLES}}. Implication.]",
+  content: "[2-3 sentences. What. Why it matters for the target decision-makers. Implication.]",
   source: "https://www.instagram.com/p/{post.id}/"
 })
 ```
 
-Rules: 2-3 sentences. No opinions. No mention of {{PRODUCT_NAME}}.
+Rules: 2-3 sentences. No opinions. No mention of the product.
 One factlet per distinct topic — not one per post. If two posts cover the same news, write one factlet.
 
 ### Step 4B: Dossier Path
@@ -208,16 +208,6 @@ Output path breakdown:
   Too old skipped:      N
   Empty/error skipped:  N
 ```
-
-## CLI Reference
-
-| Flag | Default | Purpose |
-|------|---------|---------|
-| `--account, -a` | — | Instagram username (without @) |
-| `--hashtag, -t` | — | Hashtag to fetch (without #) |
-| `--limit, -n` | 20 | Max posts per target |
-| `--config, -c` | — | Path to ig_config.json (batch mode) |
-| `--output, -o` | ./scrapes | Output directory |
 
 ## Rules
 

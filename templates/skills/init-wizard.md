@@ -34,9 +34,36 @@ Try calling `get_config()`.
 
 ---
 
-## Step 0: Check Existing Config
+## Step 0: Detect Returning User
 
-Call `get_config()`. Report what's already set and what's missing:
+Call both in sequence:
+```
+get_config()
+get_stats()
+```
+
+**Inspect `get_stats()` output:**
+
+If `clients > 0` AND (`enrichedClients > 0` OR `brewingDrafts > 0` OR `readyDrafts > 0`):
+
+> "Welcome back. Here's where things stand:
+> - Clients in DB: {clients}
+> - Already enriched: {enrichedClients}
+> - Drafts ready to review: {readyDrafts}
+> - Still in queue: {brewingDrafts + unenriched}
+>
+> Resume the enrichment queue, or start fresh? (resume / fresh)"
+
+- **Resume** → skip to Step 7 (summary) and then Step 8 (launch). Do NOT re-ask config questions that are already set. Factlets in the DB are intact — the enrichment agent will check for new ones since each client's last queue check.
+- **Fresh** → proceed to Step 1 below. (Config values already set will be shown but not re-asked.)
+
+If stats show `clients = 0` OR no enrichment data at all → this is a first-run. Proceed to Step 1 without asking.
+
+---
+
+## Step 0.5: Check Existing Config
+
+Call `get_config()` (already fetched above — reuse the result). Report what's already set and what's missing:
 
 > "I found your config. Here's what's already set:
 > - Company: {companyName or '(not set)'}
@@ -208,7 +235,7 @@ No question needed — always enabled.
 
 ## Step 7: Confirm and Summary
 
-Call `get_config()` one more time. Print a clean summary:
+Print a summary from what was set in previous steps (no need to call `get_config()` again):
 
 ```
 =================================================================

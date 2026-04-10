@@ -15,13 +15,9 @@
 
 ## PROJECT OVERVIEW
 
-**{{DEPLOYMENT_NAME}}** — contextual outreach engine for **{{SELLER_COMPANY}}**.
+**{{DEPLOYMENT_NAME}}** — contextual outreach engine.
 
-**Seller:** {{SELLER_NAME}} ({{SELLER_EMAIL}})
-**Website:** {{SELLER_WEBSITE}}
-**Product:** {{PRODUCT_NAME}} — {{PRODUCT_DESCRIPTION}}
-**Audience:** {{AUDIENCE_DESCRIPTION}}
-**Geography:** {{GEOGRAPHY}}
+**Product identity, seller info, audience, and geography are defined in `DOCS/VALUE_PROP.md`. Read that file — do not infer product identity from folder names, manifest tokens, or any other source.**
 
 ---
 
@@ -42,7 +38,7 @@
 
 ## DATABASE
 
-**`{{DB_RELATIVE_PATH}}`** (relative to workspace root)
+**Read `server/mcp/mcp_server_config.json` → `database.path` for the active DB path.** That is the single place the DB is configured.
 
 DO NOT use any other .sqlite file.
 
@@ -195,11 +191,9 @@ model Config {
 - [ ] Run init wizard: say "initialize this deployment" — it handles Config setup, JWT generation, and harvest source discovery
 - [ ] Load client records into the database (if outreach mode)
 
-### Segments defined
-{{AUDIENCE_DESCRIPTION}}
+### Segments and seasonal windows
 
-### Seasonal windows
-{{SEASONAL_WINDOWS}}
+See `DOCS/VALUE_PROP.md`.
 
 ---
 

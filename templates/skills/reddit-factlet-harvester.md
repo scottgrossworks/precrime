@@ -75,7 +75,7 @@ For every post, answer the classification questions IN ORDER:
 **2. Is this person/org already in the DB?**
 
 ```
-mcp__leedz-mcp__search_clients({ search: "{name or org}" })
+mcp__leedz-mcp__search_clients({ search: "{name or org}", limit: 1 })
 ```
 
 - **YES (match found)** → **Dossier** update (Step 4B)
@@ -95,13 +95,14 @@ Check for ALL THREE:
 
 Apply the three-question relevance filter:
 
-**Q1: Relevant to selling {{PRODUCT_NAME}} to {{AUDIENCE_DESCRIPTION}}?**
+**Q1: Relevant to selling [PRODUCT_NAME] to [AUDIENCE_DESCRIPTION]?**
+(Use product name and audience from DOCS/VALUE_PROP.md)
 
 RELEVANT topics:
-{{FACTLET_RELEVANT_TOPICS}}
+(See "Relevance Signals — Relevant" section in DOCS/VALUE_PROP.md)
 
 NOT RELEVANT:
-{{FACTLET_NOT_TOPICS}}
+(See "Relevance Signals — Not Relevant" section in DOCS/VALUE_PROP.md)
 
 **Q2: Broadly applicable to multiple clients?**
 
@@ -118,12 +119,12 @@ If all three pass:
 
 ```
 mcp__leedz-mcp__create_factlet({
-  content: "[2-3 sentences. What. Why it matters for {{TARGET_ROLES}}. Implication.]",
+  content: "[2-3 sentences. What. Why it matters for the target decision-makers. Implication.]",
   source: "https://reddit.com{permalink}"
 })
 ```
 
-Rules: 2-3 sentences. No opinions. No mention of {{PRODUCT_NAME}}.
+Rules: 2-3 sentences. No opinions. No mention of the product.
 
 ### Step 4B: Dossier Path
 
@@ -182,18 +183,6 @@ Output path breakdown:
   Irrelevant skipped:   N
   Too old skipped:      N
 ```
-
-## CLI Reference
-
-| Flag | Default | Purpose |
-|------|---------|---------|
-| `--subreddit, -r` | — | Subreddit name (without r/) |
-| `--keywords, -k` | — | Search keywords (quoted string) |
-| `--limit, -n` | 25 | Max posts per search |
-| `--sort, -s` | relevance | Sort: relevance, hot, top, new, comments |
-| `--time, -t` | month | Time filter: day, week, month, year, all |
-| `--config, -c` | — | Path to reddit_config.json (batch mode) |
-| `--output, -o` | ./scrapes | Output directory |
 
 ## Rules
 

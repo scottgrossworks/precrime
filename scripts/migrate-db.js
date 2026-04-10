@@ -133,6 +133,8 @@ const PC_SCHEMA = {
     ['leedPrice',        'INTEGER',  null],
     ['squarePaymentUrl', 'TEXT',     null],
     ['leedId',           'TEXT',     null],
+    ['bookingScore',     'INTEGER',  null],
+    ['contactQuality',   'TEXT',     null],
     ['createdAt',        'DATETIME', "CURRENT_TIMESTAMP"],
     ['updatedAt',        'DATETIME', "CURRENT_TIMESTAMP"],
   ],
