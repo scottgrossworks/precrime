@@ -23,8 +23,8 @@ You scan configured news feeds and create factlets — short, broadly applicable
 | Tool | Purpose |
 |------|---------|
 | `mcp__precrime-rss__get_top_articles` | Fetch top-scoring articles from configured RSS feeds |
-| `mcp__leedz-mcp__create_factlet` | Save a qualifying article as a factlet |
-| `mcp__leedz-mcp__get_new_factlets` | Check existing queue (avoid duplicates) |
+| `mcp__precrime-mcp__create_factlet` | Save a qualifying article as a factlet |
+| `mcp__precrime-mcp__get_new_factlets` | Check existing queue (avoid duplicates) |
 | `WebFetch` | Fetch full article content if snippet is insufficient |
 
 ## Procedure
@@ -58,7 +58,7 @@ Returns scored articles: url, title, pubDate, feedName, category, score, snippet
 ### Step 2: Check Existing Factlets
 
 ```
-mcp__leedz-mcp__get_new_factlets({ since: "{{TODAY}}T00:00:00Z", limit: 100 })
+mcp__precrime-mcp__get_new_factlets({ since: "{{TODAY}}T00:00:00Z", limit: 100 })
 ```
 
 Use a 30-day lookback. If an article covers the same topic as an existing factlet, skip it.
@@ -116,7 +116,7 @@ SPECIFIC to one org/person → four-path classification:
 For each article that passes all three questions:
 
 ```
-mcp__leedz-mcp__create_factlet({
+mcp__precrime-mcp__create_factlet({
   content: "[2-3 sentence summary]",
   source: "https://article-url.com/..."
 })

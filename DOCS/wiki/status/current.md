@@ -22,8 +22,8 @@ Manifest-driven agentic enrichment engine. Enriches contacts, scores warmth, com
 
 ## What's Done (Sessions 1-9)
 
-- All 15 MCP tools in `mcp_server.js` including `share_booking`
-- All skill templates: init-wizard, enrichment-agent, evaluator, share-skill, factlet-harvester, fb-factlet-harvester, reddit-factlet-harvester, ig-factlet-harvester, relevance-judge
+- All 19 MCP tools in `mcp_server.js`; registered as `precrime-mcp`
+- All skill templates: init-wizard, enrichment-agent, evaluator, factlet-harvester, fb-factlet-harvester, reddit-factlet-harvester, ig-factlet-harvester, relevance-judge
 - `deploy.js` with `--no-install` flag and correct path resolution
 - `build.bat` — zero args, handles staging/zipping/cleanup
 - `precrime.bat` — setup + Claude launch + auto-prompt + skip-permissions
@@ -35,7 +35,7 @@ Manifest-driven agentic enrichment engine. Enriches contacts, scores warmth, com
 - JWT generation in init-wizard Step 5a
 - Booking completeness evaluator with four output paths
 - **End-to-end test passed**: unzip → `precrime` → MCP connected, init-wizard ran, enrichment launched
-- **`share_booking` verified**: `leed_ready` Booking → `shared` + `leedId` set — leed posted to marketplace
+- Leedz marketplace sharing extracted to optional plugin (`plugins/leedz-share/`) — core ships clean
 - **The Leedz MCP `createLeed` verified** with session JWT
 
 ---

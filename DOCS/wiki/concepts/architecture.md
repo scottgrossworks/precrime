@@ -1,8 +1,8 @@
 ---
 title: Pre-Crime System Architecture
 tags: [architecture, mcp, prisma, sqlite, leedz, data-flow]
-source_docs: [DOCS/STATUS.md, DOCS/MCP_BRIEFING.md, DOCS/DEPLOYMENT.md]
-last_updated: 2026-04-04
+source_docs: [DOCS/STATUS.md, DOCS/MCP_BRIEFING.md, DOCS/DEPLOYMENT.md, DOCS/EMAIL_FINDER.md]
+last_updated: 2026-04-11
 staleness: none
 ---
 
@@ -18,10 +18,10 @@ Pre-Crime is a manifest-driven agentic enrichment engine. It enriches contacts, 
 | **File** | `server/mcp/mcp_server.js` | `FRONT_3\py\mcp_server\lambda_function.py` (AWS us-west-2) |
 | **Transport** | Local stdin/stdout JSON-RPC 2.0 | Remote `POST /mcp` on API Gateway |
 | **Backend** | Prisma 5 → SQLite | boto3 → existing Lambdas → DynamoDB |
-| **Tools** | 15 tools | createLeed + reads (getTrades, getStats, getLeedz, getUser) |
+| **Tools** | 19 tools | createLeed + reads (getTrades, getStats, getLeedz, getUser) |
 | **Design doc** | `PRECRIME\README.md` | `FRONT_3\DOCS\AGENTIC_FUTURE.md` |
 
-The bridge between them: when a Booking reaches `leed_ready`, Pre-Crime calls The Leedz MCP `createLeed` → `Booking.leedId` is set to the returned marketplace ID.
+Marketplace sharing is handled by the optional `plugins/leedz-share/` plugin — not in core. When a Booking reaches `leed_ready`, core Pre-Crime logs and stops. The plugin calls the Leedz API Gateway directly via HTTP.
 
 **CRITICAL NAMING:** The MCP tool is `createLeed`. It calls the `addLeed` Lambda. There is a separate SSR Lambda also named `createLeed` — never invoke that one.
 
@@ -34,7 +34,7 @@ Claude Code session
     |
     | stdin/stdout (JSON-RPC 2.0)
     |
-server/mcp/mcp_server.js   (798 lines, 15 tools)
+server/mcp/mcp_server.js   (19 tools, precrime-mcp)
     |
     | PrismaClient (Prisma 5)
     |
@@ -115,7 +115,7 @@ enrichment-agent.md skill: per-client enrichment loop
   → discover → scrape → warmth score → draft → evaluate
   → draftStatus: "ready" → outreach
     ↓
-share-skill.md: leed_ready Booking → share to marketplace
+leed_ready Booking → logged, stop (optional: plugins/leedz-share/)
 ```
 
 ---
@@ -129,12 +129,12 @@ All skills live in `templates/skills/` (source) and are copied/token-substituted
 | `init-wizard.md` | Startup — config walkthrough + auto-launch |
 | `enrichment-agent.md` | Full enrichment loop (runs after init-wizard) |
 | `evaluator.md` | Draft evaluator + Booking completeness gate |
-| `share-skill.md` | leed_ready → leedz_api / email_share / email_user |
 | `factlet-harvester.md` | RSS → factlet pipeline |
 | `fb-factlet-harvester/SKILL.md` | Facebook → factlet pipeline (needs Chrome) |
 | `reddit-factlet-harvester.md` | Reddit → factlet/lead pipeline (Python script) |
 | `ig-factlet-harvester.md` | Instagram → factlet/lead pipeline (TBD approach) |
 | `relevance-judge.md` | Scores relevance of harvested content |
+| `email-finder.md` | 5-phase direct-email hunt invoked by enrichment-agent Step 3.6 |
 
 ---
 
@@ -150,7 +150,7 @@ All skills live in `templates/skills/` (source) and are copied/token-substituted
 | `templates/precrime.bat` | User-facing launcher. The ONLY thing the user runs. |
 | `templates/setup.bat` | npm install + prisma generate. Called by precrime.bat. Never run manually. |
 | `templates/docs/CLAUDE.md` | What Claude reads in deployed workspace. Uses `{{TOKEN}}` substitution. |
-| `server/mcp/mcp_server.js` | Pre-Crime MCP — 15 tools, Prisma → SQLite |
+| `server/mcp/mcp_server.js` | Pre-Crime MCP — 19 tools, registered as `precrime-mcp`, Prisma → SQLite |
 | `server/prisma/schema.prisma` | Prisma 5 schema — Client, Booking, Factlet, Config |
 | `server/package.json` | npm deps: @prisma/client 5.22.0, dotenv |
 
@@ -160,6 +160,7 @@ All paths relative to PRECRIME source root.
 
 ## Related
 - [[ontology]] — entity definitions, output paths, design rules
-- [[mcp]] — all 15 MCP tools, configuration details
+- [[mcp]] — all 19 MCP tools, configuration details
 - [[deployment]] — build system, end-user flow, file inventory
+- [[email-finder]] — direct-email hunt sub-skill
 - [[current]] — current project state

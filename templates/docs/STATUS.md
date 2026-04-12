@@ -136,7 +136,7 @@ model Config {
 
 | Tool prefix | Server | Entry point |
 |-------------|--------|-------------|
-| `mcp__leedz-mcp__*` | leedz-mcp | `server/mcp/mcp_server.js` |
+| `mcp__precrime-mcp__*` | precrime-mcp | `server/mcp/mcp_server.js` |
 | `mcp__precrime-rss__*` | precrime-rss | `rss/rss-scorer-mcp/index.js` |
 | `mcp__gmail-sender__*` | gmail-sender | optional — requires separate MCP setup |
 
@@ -156,7 +156,6 @@ model Config {
 | `skills/fb-factlet-harvester/SKILL.md` | FB factlet harvester |
 | `skills/fb-factlet-harvester/fb_sources.md` | Curated FB page list |
 | `skills/init-wizard.md` | First-run setup wizard |
-| `skills/share-skill.md` | leed_ready → post/email action handler |
 | `server/mcp/mcp_server.js` | MCP server |
 | `server/mcp/mcp_server_config.json` | DB path config |
 | `rss/rss-scorer-mcp/index.js` | RSS scorer MCP |

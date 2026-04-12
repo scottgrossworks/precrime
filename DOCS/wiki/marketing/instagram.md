@@ -172,12 +172,12 @@ The four-path classification logic (Step 3) must match verbatim across ALL harve
 
 | Tool | Purpose |
 |------|---------|
-| `mcp__leedz-mcp__create_factlet` | Save broadly applicable intel |
-| `mcp__leedz-mcp__get_new_factlets` | Check existing queue (dedup) |
-| `mcp__leedz-mcp__search_clients` | Check if person/org exists |
-| `mcp__leedz-mcp__update_client` | Append to dossier |
-| `mcp__leedz-mcp__create_booking` | Create booking (hot lead path) |
-| `mcp__leedz-mcp__get_config` | Read deployment config (check leadCaptureEnabled) |
+| `mcp__precrime-mcp__create_factlet` | Save broadly applicable intel |
+| `mcp__precrime-mcp__get_new_factlets` | Check existing queue (dedup) |
+| `mcp__precrime-mcp__search_clients` | Check if person/org exists |
+| `mcp__precrime-mcp__update_client` | Append to dossier |
+| `mcp__precrime-mcp__create_booking` | Create booking (hot lead path) |
+| `mcp__precrime-mcp__get_config` | Read deployment config (check leadCaptureEnabled) |
 
 `create_booking` auto-evaluates Booking Action Criterion — no manual status setting needed.
 

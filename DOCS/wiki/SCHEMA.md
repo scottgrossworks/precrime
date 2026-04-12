@@ -22,6 +22,7 @@ PRECRIME\DOCS\wiki\
     mcp.md               <- MCP server details, all 19 tools, config
     scoring.md           <- Client scoring, contact gate, dossier score, draft eligibility
     headless-deployment.md <- Headless AWS deployment, EC2 + cron, Managed Agents comparison
+    email-finder.md      <- 5-phase direct-email hunt sub-skill invoked by enrichment Step 3.6
   status\
     current.md           <- Authoritative current project state (mirrors STATUS.md)
   marketing\

@@ -22,15 +22,15 @@ It contains: product name, seller info, pitch, differentiators, pricing, geograp
 
 | Tool | Purpose |
 |------|---------|
-| `mcp__leedz-mcp__get_next_client` | Atomic fetch-and-mark. Returns one client, stamps lastQueueCheck. |
-| `mcp__leedz-mcp__get_client` | Fetch a specific client by ID |
-| `mcp__leedz-mcp__search_clients` | Filter by name/company/segment/draftStatus/warmthScore. Use `summary:true` for ranking/filtering — returns lightweight records (no dossier/draft/targetUrls). Default limit: 10. |
-| `mcp__leedz-mcp__update_client` | Write dossier, targetUrls, draft, draftStatus, etc. |
-| `mcp__leedz-mcp__get_new_factlets` | Get factlets newer than a timestamp |
-| `mcp__leedz-mcp__create_factlet` | Add broadly applicable intel to broadcast queue |
-| `mcp__leedz-mcp__link_factlet` | Associate a factlet with a client (pain/occasion/context classification) |
-| `mcp__leedz-mcp__get_client_factlets` | Hydrate all linked factlets for a client with content + scores |
-| `mcp__leedz-mcp__score_client` | Procedural scoring: contactGate + dossierScore + canDraft. One call, no LLM. |
+| `mcp__precrime-mcp__get_next_client` | Atomic fetch-and-mark. Returns one client, stamps lastQueueCheck. |
+| `mcp__precrime-mcp__get_client` | Fetch a specific client by ID |
+| `mcp__precrime-mcp__search_clients` | Filter by name/company/segment/draftStatus/warmthScore. Use `summary:true` for ranking/filtering — returns lightweight records (no dossier/draft/targetUrls). Default limit: 10. |
+| `mcp__precrime-mcp__update_client` | Write dossier, targetUrls, draft, draftStatus, etc. |
+| `mcp__precrime-mcp__get_new_factlets` | Get factlets newer than a timestamp |
+| `mcp__precrime-mcp__create_factlet` | Add broadly applicable intel to broadcast queue |
+| `mcp__precrime-mcp__link_factlet` | Associate a factlet with a client (pain/occasion/context classification) |
+| `mcp__precrime-mcp__get_client_factlets` | Hydrate all linked factlets for a client with content + scores |
+| `mcp__precrime-mcp__score_client` | Procedural scoring: contactGate + dossierScore + canDraft. One call, no LLM. |
 | `WebFetch` | Scrape a URL for content |
 | `WebSearch` | Search the web for information about a client |
 | `mcp__Claude_in_Chrome__tabs_context_mcp` | Get/create browser tab group (call ONCE per session — or pre-assigned in parallel mode) |
@@ -71,7 +71,7 @@ There are two modes: **single-agent** (sequential, one client at a time) and **p
 
 #### Step B: Verify Core Tools
 
-6. Verify DB: `mcp__leedz-mcp__get_stats()` — if this fails, STOP
+6. Verify DB: `mcp__precrime-mcp__get_stats()` — if this fails, STOP
 7. Verify RSS: `mcp__precrime-rss__get_top_articles({ limit: 1 })` — if this fails, STOP
 
 If any step fails, report the error and stop. Do not proceed with broken tools.
@@ -104,7 +104,7 @@ Default limit is **10**. Increase only when you have a specific reason. Never ex
 ### Step 0: Load Client
 
 ```
-mcp__leedz-mcp__get_next_client({ company: "keyword", segment: "segment_id" })
+mcp__precrime-mcp__get_next_client({ company: "keyword", segment: "segment_id" })
 ```
 
 Pass any filter the user specified (segment, company keyword, draftStatus). Otherwise call with no filter for the globally oldest-touched record.
@@ -119,7 +119,7 @@ Check the broadcast queue BEFORE any scraping. Also hydrate previously linked fa
 
 **1a. Hydrate existing factlets:**
 ```
-mcp__leedz-mcp__get_client_factlets({ clientId })
+mcp__precrime-mcp__get_client_factlets({ clientId })
 ```
 This returns all previously linked factlets with their content, signalType, and points. Load these into context — they are the client's accumulated broadcast intelligence.
 
@@ -127,12 +127,12 @@ This returns all previously linked factlets with their content, signalType, and 
 
 If `lastQueueCheck` is null (never processed):
 ```
-mcp__leedz-mcp__get_new_factlets({ since: "1970-01-01T00:00:00Z", limit: 50 })
+mcp__precrime-mcp__get_new_factlets({ since: "1970-01-01T00:00:00Z", limit: 50 })
 ```
 
 If `lastQueueCheck` has a value:
 ```
-mcp__leedz-mcp__get_new_factlets({ since: client.lastQueueCheck })
+mcp__precrime-mcp__get_new_factlets({ since: client.lastQueueCheck })
 ```
 
 **1c. For each NEW factlet, evaluate: Is this relevant to THIS specific client?**
@@ -142,7 +142,7 @@ mcp__leedz-mcp__get_new_factlets({ since: client.lastQueueCheck })
 
 If relevant: **link it** with a per-client signal classification:
 ```
-mcp__leedz-mcp__link_factlet({
+mcp__precrime-mcp__link_factlet({
   clientId,
   factletId: factlet.id,
   signalType: "pain" | "occasion" | "context"
@@ -158,7 +158,7 @@ mcp__leedz-mcp__link_factlet({
 
 **1d. Update the queue cursor:**
 ```
-mcp__leedz-mcp__update_client({ id: clientId, lastQueueCheck: new Date().toISOString() })
+mcp__precrime-mcp__update_client({ id: clientId, lastQueueCheck: new Date().toISOString() })
 ```
 
 ### Step 2: Discovery
@@ -187,7 +187,7 @@ Fallback: Chrome → `facebook.com/search/pages/?q=[company name]`
 
 Write discovery results:
 ```
-mcp__leedz-mcp__update_client({
+mcp__precrime-mcp__update_client({
   id: clientId,
   targetUrls: JSON.stringify([
     { "url": "https://...", "type": "website", "label": "Main site" },
@@ -282,31 +282,27 @@ After ingestion, assess what you found. This is the **intel score** — the non-
 ### Step 3.6: Email Verification
 
 **Run this step whenever:**
-- The client's email is a generic inbox (customerservice@, info@, admin@, office@, contact@, etc.), OR
+- The client's email is a generic inbox (info@, contact@, hello@, support@, sales@, admin@, office@, customerservice@, orders@, memberservices@, etc.), OR
 - The client has no email at all, OR
 - The email looks guessed or format-constructed (not found verbatim in a source)
 
-**What to do — be dogged, try at least 3 combinations before giving up:**
+**Invoke the email-finder skill** (`skills/email-finder.md`). It runs a 5-phase playbook — domain discovery, email-format lookup via Google snippets from RocketReach/Prospeo/ContactOut/Lead411, personnel discovery via LinkedIn People tab, format application, and validation. Hand it these inputs:
 
-**If a putative/guessed email already exists (e.g. format-constructed from the contact's name):**
-1. **Gemini first** — paste the exact address directly into the Gemini tab:
-   `"Does [firstname.lastname]@[domain] appear anywhere on the web as a real contact address for [person] at [company]?"`
-   Or simpler: just drop `"[putative@email.com]"` into Gemini and read what comes back.
-2. If Gemini returns any corroborating result (bio, contact page, news mention, LinkedIn) → **verified**. Update `client.email`. Contact Quality = **Tier 1** (full credit).
-3. If Gemini returns nothing → run a quoted Google search: `WebSearch` for `"[putative@email.com]"`. Any hit → verified.
-4. If still nothing → unverified. Contact Quality = **Tier 2** (named person, generic/unverified email — cap score at 6). Log `GENERIC_EMAIL`.
+```
+target_name:   client.name
+company:       client.company
+domain:        <from client.email or client.website, if known>
+generic_email: <current client.email, if generic>
+role:          client.role         (if set)
+client_id:     client.id
+```
 
-**If no personal email exists at all (generic inbox or blank):**
-1. `WebSearch`: `"[firstname] [lastname] [company] email"`
-2. `WebSearch`: `"[firstname.lastname]@[domain]"` (exact quoted)
-3. `WebSearch`: `"[firstname]@[domain]"` (exact quoted)
-4. Check the client's staff directory (WebFetch or Chrome)
-5. Check LinkedIn (Chrome if WebFetch blocked)
-6. Any candidate found → verify it with a quoted Gemini or WebSearch as above.
+**Handle the returned `status`:**
+- `found` or `high_confidence` → the skill has already written `client.email` via `update_client`. Contact Quality = **Tier 1** (full credit). Proceed.
+- `guessed` → `client.email` NOT updated by the skill. Contact Quality = **Tier 2** (named person, unverified email — cap downstream score at 6). Log `GENERIC_EMAIL`.
+- `failed` → leave the existing inbox in place. Log `EMAIL_UNVERIFIED`. Enforce the cap. Never skip the attempt.
 
-Log every search attempt in ROUNDUP.md under the client entry, whether it succeeds or fails.
-
-If no direct email found after exhausting all combinations → leave generic inbox in place, log `EMAIL_UNVERIFIED`, enforce the cap. Never skip the attempt.
+Log every invocation in `logs/ROUNDUP.md` under the client entry, whether it succeeds or fails.
 
 ### Step 4: Score Client
 
@@ -315,7 +311,7 @@ If no direct email found after exhausting all combinations → leave generic inb
 Pass the `intelScore` you computed at Step 3.5 to the procedural scoring tool:
 
 ```
-mcp__leedz-mcp__score_client({ clientId, intelScore: N })
+mcp__precrime-mcp__score_client({ clientId, intelScore: N })
 ```
 
 This tool computes and returns:
@@ -337,7 +333,7 @@ Log the full breakdown in ROUNDUP.md:
 
 ```
 if (!canDraft) {
-  mcp__leedz-mcp__update_client({
+  mcp__precrime-mcp__update_client({
     id: clientId,
     dossier: "...",         ← still write scrape findings to dossier
     draftStatus: "brewing",
@@ -358,7 +354,7 @@ if (!canDraft) {
 
 Before composing, hydrate the client's linked factlets into context:
 ```
-mcp__leedz-mcp__get_client_factlets({ clientId })
+mcp__precrime-mcp__get_client_factlets({ clientId })
 ```
 
 Use both the dossier (client-specific scrape intel) and the linked factlets (broadcast intel) as source material. Read `DOCS/VALUE_PROP.md`. Apply outreach rules from CLAUDE.md. Key: open with their world, one-sentence product bridge, specific dossier hook, sound human.
@@ -380,7 +376,7 @@ Use both the dossier (client-specific scrape intel) and the linked factlets (bro
 Run the draft through the Evaluator (`skills/evaluator.md`). The evaluator now evaluates **draft quality only** — the client has already passed the contact gate and dossier score threshold. Returns `ready` or `brewing` with a reason.
 
 ```
-mcp__leedz-mcp__update_client({
+mcp__precrime-mcp__update_client({
   id: clientId,
   dossier: "...",
   draft: "...",

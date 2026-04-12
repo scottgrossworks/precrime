@@ -74,7 +74,7 @@ No HTTP server. MCP calls Prisma directly.
 
 ### MCP Tools
 
-**leedz-mcp** (15 tools): `get_next_client`, `get_client`, `search_clients`, `update_client`, `get_ready_drafts`, `get_stats`, `create_factlet`, `get_new_factlets`, `delete_factlet`, `get_config`, `update_config`, `create_booking`, `get_bookings`, `get_client_bookings`, `update_booking`
+**precrime-mcp** (19 tools): `get_next_client`, `get_client`, `search_clients`, `create_client`, `update_client`, `get_ready_drafts`, `get_stats`, `create_factlet`, `get_new_factlets`, `delete_factlet`, `link_factlet`, `get_client_factlets`, `get_config`, `update_config`, `create_booking`, `get_bookings`, `get_client_bookings`, `update_booking`, `score_booking`, `score_client`
 
 **precrime-rss** (1 tool): `get_top_articles`
 
@@ -111,7 +111,6 @@ When the user says any of these: "start precrime", "start the precrime workflow"
 | `skills/factlet-harvester.md` | RSS → factlet pipeline |
 | `skills/relevance-judge.md` | Relevance filter for all intel |
 | `skills/fb-factlet-harvester/SKILL.md` | Facebook → factlet pipeline (needs Chrome) |
-| `skills/share-skill.md` | leed_ready → post/email action handler |
 
 ---
 

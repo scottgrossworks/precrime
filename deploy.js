@@ -396,7 +396,6 @@ console.log('\nSkill playbooks:');
   ['skills/source-discovery.md',              'skills/source-discovery.md'],
   ['skills/source-discovery/discovered_directories.md', 'skills/source-discovery/discovered_directories.md'],
   ['skills/init-wizard.md',                   'skills/init-wizard.md'],
-  ['skills/share-skill.md',                   'skills/share-skill.md'],
 ].forEach(([src, dst]) => copyTemplate(src, dst, tokens));
 
 // 8. Copy + substitute doc stubs

@@ -30,8 +30,8 @@ Only scrape URLs listed in that file. Never add new pages mid-run.
 | `mcp__Claude_in_Chrome__navigate` | Navigate to each FB page |
 | `mcp__Claude_in_Chrome__computer` | Wait, scroll |
 | `mcp__Claude_in_Chrome__get_page_text` | Extract post text |
-| `mcp__leedz-mcp__create_factlet` | Save qualifying posts |
-| `mcp__leedz-mcp__get_new_factlets` | Check existing queue (dedup) |
+| `mcp__precrime-mcp__create_factlet` | Save qualifying posts |
+| `mcp__precrime-mcp__get_new_factlets` | Check existing queue (dedup) |
 
 ## Procedure
 
@@ -106,7 +106,7 @@ Recency is a bonus, not a gate. Only skip if pre-2023 AND superseded by newer da
 ### Step 4: Create Factlets
 
 ```
-mcp__leedz-mcp__create_factlet({
+mcp__precrime-mcp__create_factlet({
   content: "[2-3 sentences. What. Why it matters for the target decision-makers. Implication.]",
   source: "[Facebook page URL]"
 })

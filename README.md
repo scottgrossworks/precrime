@@ -167,14 +167,13 @@ precrime\
 ├── data\
 │   └── myproject.sqlite      ← Pre-built database (schema already applied)
 ├── server\
-│   ├── mcp\mcp_server.js     ← Pre-Crime MCP server (15 tools)
+│   ├── mcp\mcp_server.js     ← Pre-Crime MCP server (19 tools, precrime-mcp)
 │   ├── prisma\schema.prisma  ← DB schema
 │   └── package.json          ← Node deps (@prisma/client 5.22.0)
 ├── skills\
 │   ├── init-wizard.md        ← Startup config + launch sequence
 │   ├── enrichment-agent.md   ← Full enrichment loop
 │   ├── evaluator.md          ← Draft evaluator + booking completeness gate
-│   ├── share-skill.md        ← leed_ready → marketplace action
 │   ├── factlet-harvester.md  ← RSS → factlet pipeline
 │   └── fb-factlet-harvester\
 │       ├── SKILL.md          ← Facebook → factlet pipeline
@@ -199,7 +198,7 @@ precrime\
 | **File** | `server/mcp/mcp_server.js` | Remote Lambda |
 | **Transport** | Local stdin/stdout | Remote `POST /mcp` on API Gateway |
 | **Backend** | Prisma 5 → SQLite | DynamoDB |
-| **Tools** | 15 tools | createLeed + reads |
+| **Tools** | 19 tools | createLeed + reads |
 
 ### Why `precrime.bat` Must Run Before Claude
 
@@ -209,7 +208,7 @@ Claude Code reads `.mcp.json` at startup and connects MCP servers immediately. O
 
 ## MCP Tools Reference
 
-15 tools available in every enrichment session:
+19 tools available in every enrichment session:
 
 | Tool | Purpose |
 |------|---------|
@@ -229,6 +228,10 @@ Claude Code reads `.mcp.json` at startup and connects MCP servers immediately. O
 | `create_factlet` | Add a factlet to the broadcast queue |
 | `get_new_factlets` | Fetch recent factlets (with optional since filter) |
 | `delete_factlet` | Remove a factlet from the queue |
+| `link_factlet` | Associate a factlet with a client |
+| `get_client_factlets` | Fetch all factlets linked to a client |
+| `score_client` | Compute dossierScore + contactGate + canDraft for a client |
+| `score_booking` | Evaluate booking completeness and set leed_ready status |
 
 The Leedz MCP (remote Lambda) provides: `getTrades`, `getStats`, `getLeedz`, `getUser`, `createLeed`.
 

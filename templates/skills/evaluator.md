@@ -102,7 +102,7 @@ Any time a Booking is created or any field is changed. One MCP call — no LLM e
 ### How to Call
 
 ```
-mcp__leedz-mcp__score_booking({ id: booking.id })
+mcp__precrime-mcp__score_booking({ id: booking.id })
 ```
 
 Returns: `score`, `shareReady`, `contactQuality`, `breakdown` (per-category), `action`.
@@ -132,7 +132,7 @@ Two conditions must BOTH be true:
 BOOKING VERDICT: leed_ready
 SCORE: [N]/100 — trade=[trade], date=[date], location=[loc]
 ```
-→ Set `Booking.status = "leed_ready"`. Pass to Share Skill.
+→ Set `Booking.status = "leed_ready"`. Log the verdict. Stop — sharing is handled by the optional `leedz-share` plugin, not core Pre-Crime.
 
 **`shareReady: false`:**
 ```
@@ -144,11 +144,14 @@ ACTION: [action from score_booking response]
 
 ---
 
-### After `leed_ready`: Hand Off to Share Skill
+### After `leed_ready`
 
-Once a Booking reaches `leed_ready`, pass it to `skills/share-skill.md`.
+Booking is complete. Your job is done. Append to `logs/ROUNDUP.md`:
+```
+LEED_READY: {trade} / {startDate} / {location} — status set, awaiting share action
+```
 
-The Share Skill handles all action paths: leedz_api, email_share, email_user, and the once-per-session user prompt. Do not duplicate that logic here.
+Sharing (marketplace post, email) is handled by the optional `leedz-share` plugin. If it is installed (`skills/share-skill.md` exists), pass the Booking to it now. If not, stop here.
 
 ---
 <!-- CUSTOMIZATION NOTES FOR DEPLOYER

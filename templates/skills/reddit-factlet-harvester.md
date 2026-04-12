@@ -21,11 +21,11 @@ You harvest Reddit posts using `tools/reddit_harvest.py` (public JSON endpoints,
 |------|---------|
 | `Bash` | Run reddit_harvest.py to fetch posts → JSON files |
 | `Read` | Read the output JSON files |
-| `mcp__leedz-mcp__create_factlet` | Save broadly applicable intel |
-| `mcp__leedz-mcp__get_new_factlets` | Check existing queue (dedup) |
-| `mcp__leedz-mcp__search_clients` | Check if a person/org is already a client |
-| `mcp__leedz-mcp__update_client` | Append to existing client's dossier |
-| `mcp__leedz-mcp__create_booking` | Create a booking for Lead Capture hot path |
+| `mcp__precrime-mcp__create_factlet` | Save broadly applicable intel |
+| `mcp__precrime-mcp__get_new_factlets` | Check existing queue (dedup) |
+| `mcp__precrime-mcp__search_clients` | Check if a person/org is already a client |
+| `mcp__precrime-mcp__update_client` | Append to existing client's dossier |
+| `mcp__precrime-mcp__create_booking` | Create a booking for Lead Capture hot path |
 
 ## Configuration
 
@@ -58,7 +58,7 @@ Each file contains `scrape_settings` (metadata) and a `data` array of posts with
 ### Step 2: Load Existing Factlets (dedup)
 
 ```
-mcp__leedz-mcp__get_new_factlets({ since: "30 days ago ISO" })
+mcp__precrime-mcp__get_new_factlets({ since: "30 days ago ISO" })
 ```
 
 Build a list of existing factlet topics. Any post covering the same ground gets skipped.
@@ -75,7 +75,7 @@ For every post, answer the classification questions IN ORDER:
 **2. Is this person/org already in the DB?**
 
 ```
-mcp__leedz-mcp__search_clients({ search: "{name or org}", limit: 1 })
+mcp__precrime-mcp__search_clients({ search: "{name or org}", limit: 1 })
 ```
 
 - **YES (match found)** → **Dossier** update (Step 4B)
@@ -118,7 +118,7 @@ One person's question or one org's internal matter → NO.
 If all three pass:
 
 ```
-mcp__leedz-mcp__create_factlet({
+mcp__precrime-mcp__create_factlet({
   content: "[2-3 sentences. What. Why it matters for the target decision-makers. Implication.]",
   source: "https://reddit.com{permalink}"
 })
@@ -131,7 +131,7 @@ Rules: 2-3 sentences. No opinions. No mention of the product.
 This post is about an existing client. Append to their dossier:
 
 ```
-mcp__leedz-mcp__update_client({
+mcp__precrime-mcp__update_client({
   id: "{clientId}",
   dossier: "{existing dossier}\n[{today}] Reddit r/{subreddit}: {finding}"
 })

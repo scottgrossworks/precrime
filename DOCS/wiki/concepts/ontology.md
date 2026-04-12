@@ -14,7 +14,7 @@ Pre-Crime v2.0 expands from a pure client-enrichment engine (one entity, one out
 
 ## Core Design Rule
 
-**Leed = Client + Booking.** A leed is not a separate entity. It is what a Client becomes when booking details crystallize. A Booking becomes a leed when it reaches `leed_ready` status and gets posted to The Leedz marketplace via `share_booking`.
+**Leed = Client + Booking.** A leed is not a separate entity. It is what a Client becomes when booking details crystallize. A Booking becomes a leed when it reaches `leed_ready` status. Posting to the marketplace is handled by the optional `plugins/leedz-share/` plugin.
 
 ---
 
@@ -73,7 +73,7 @@ This check is applied automatically by `create_booking` AND by `update_booking` 
 | `trade` | Mapped Leedz trade name (e.g., "DJ", "Caterer") |
 | `zip` | For geo search on Leedz marketplace |
 | `leedPrice` | Price in cents for marketplace listing |
-| `leedId` | Marketplace ID after posting (set by `share_booking`) |
+| `leedId` | Marketplace ID after posting (set by leedz-share plugin) |
 | `sharedAt` | BigInt epoch ms of when posted |
 
 ### Factlet

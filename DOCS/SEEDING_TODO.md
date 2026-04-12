@@ -78,20 +78,20 @@ trade, zip, status ("new" | "leed_ready" | ...), source, sourceUrl
 
 | Tool | Purpose |
 |------|---------|
-| `mcp__leedz-mcp__search_clients` | Check if a client already exists (dedup by company/email). Use `summary: true`. |
-| `mcp__leedz-mcp__create_client` | Create a new client. Requires at least name or company. Defaults draftStatus to "brewing". Set `source` field. Returns client with ID. |
-| `mcp__leedz-mcp__update_client` | Update an existing client with new info found during seeding |
-| `mcp__leedz-mcp__get_config` | Read defaultTrade, leadCaptureEnabled, geography |
-| `mcp__leedz-mcp__get_stats` | Pipeline health check |
-| `mcp__leedz-mcp__score_client` | Score a client after creating/updating |
-| `mcp__leedz-mcp__link_factlet` | Link a factlet to a client |
-| `mcp__leedz-mcp__create_factlet` | Save broadly applicable intel |
+| `mcp__precrime-mcp__search_clients` | Check if a client already exists (dedup by company/email). Use `summary: true`. |
+| `mcp__precrime-mcp__create_client` | Create a new client. Requires at least name or company. Defaults draftStatus to "brewing". Set `source` field. Returns client with ID. |
+| `mcp__precrime-mcp__update_client` | Update an existing client with new info found during seeding |
+| `mcp__precrime-mcp__get_config` | Read defaultTrade, leadCaptureEnabled, geography |
+| `mcp__precrime-mcp__get_stats` | Pipeline health check |
+| `mcp__precrime-mcp__score_client` | Score a client after creating/updating |
+| `mcp__precrime-mcp__link_factlet` | Link a factlet to a client |
+| `mcp__precrime-mcp__create_factlet` | Save broadly applicable intel |
 | `WebSearch` | Search the web |
 | `WebFetch` | Scrape a URL for content |
 | `Read` | Read local files |
 | `Edit` | Append to local files |
 
-**Client creation tool:** `mcp__leedz-mcp__create_client` — requires at least `name` or `company`. Defaults `draftStatus` to `"brewing"`. Always set the `source` field (e.g., `"seeder:directory"`, `"seeder:exhibitor_list"`). Returns the created client with its ID.
+**Client creation tool:** `mcp__precrime-mcp__create_client` — requires at least `name` or `company`. Defaults `draftStatus` to `"brewing"`. Always set the `source` field (e.g., `"seeder:directory"`, `"seeder:exhibitor_list"`). Returns the created client with its ID.
 
 If Chrome MCP is available:
 | `mcp__Claude_in_Chrome__*` | Browser automation for scraping pages that block WebFetch |
@@ -194,7 +194,7 @@ search_clients({ email: "[email]", summary: true, limit: 1 })
 
 **2d. Score the client immediately after creation:**
 ```
-mcp__leedz-mcp__score_client({ clientId, intelScore: 0 })
+mcp__precrime-mcp__score_client({ clientId, intelScore: 0 })
 ```
 intelScore is 0 because the seeder hasn't scraped the client's OWN sources yet — that's the enrichment pipeline's job. But score_client will compute contactGate (does this client have a real email?) which is immediately useful.
 
@@ -235,12 +235,12 @@ While scraping, the skill will encounter broadly applicable intelligence:
 
 Capture these as factlets:
 ```
-mcp__leedz-mcp__create_factlet({ content: "...", source: "URL" })
+mcp__precrime-mcp__create_factlet({ content: "...", source: "URL" })
 ```
 
 Then link relevant factlets to the clients being created:
 ```
-mcp__leedz-mcp__link_factlet({ clientId, factletId, signalType: "context" })
+mcp__precrime-mcp__link_factlet({ clientId, factletId, signalType: "context" })
 ```
 
 ### Step 6: Booking Detection
@@ -408,6 +408,6 @@ triggers:
 5. **Follow links.** Every page scraped is an opportunity to discover more sources. Watch for directory links, member lists, related organizations.
 6. **Append, never overwrite.** Source config files grow. They never shrink.
 7. **No architectural changes.** Do not modify the MCP server, schema, or existing skills. You are creating ONE new skill file.
-8. **Use `create_client` to create new clients.** Tool: `mcp__leedz-mcp__create_client({ name, company, email, website, source, segment, draftStatus })`. Requires at least name or company.
+8. **Use `create_client` to create new clients.** Tool: `mcp__precrime-mcp__create_client({ name, company, email, website, source, segment, draftStatus })`. Requires at least name or company.
 9. **Set `source` field on every client.** Format: `seeder:[type]` (e.g., `seeder:directory`, `seeder:exhibitor_list`, `seeder:association`). This lets us track where clients came from.
 10. **Score immediately.** Call `score_client` right after creating a client. Even with intelScore=0, it computes contactGate which tells us if we got a real email.

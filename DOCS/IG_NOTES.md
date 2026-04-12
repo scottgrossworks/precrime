@@ -28,7 +28,7 @@ For each harvested item:
    YES → continue
 
 2. Is this person/org already in the DB?
-   Call: mcp__leedz-mcp__search_clients({ search: "{name or org}" })
+   Call: mcp__precrime-mcp__search_clients({ search: "{name or org}" })
    YES → DOSSIER update (append to existing client's dossier)
    NO  → continue
 
@@ -65,12 +65,12 @@ These are the tools your skill will use. They already exist in `server/mcp/mcp_s
 
 | Tool | Purpose | Key Args |
 |------|---------|----------|
-| `mcp__leedz-mcp__create_factlet` | Save broadly applicable intel | `content`, `source` |
-| `mcp__leedz-mcp__get_new_factlets` | Check existing queue (dedup) | `since` (ISO date) |
-| `mcp__leedz-mcp__search_clients` | Check if person/org exists | `search` (string) |
-| `mcp__leedz-mcp__update_client` | Append to dossier | `id`, `dossier` |
-| `mcp__leedz-mcp__create_booking` | Create booking (hot lead path) | `clientId`, `trade`, `startDate`, `location`/`zip`, etc. |
-| `mcp__leedz-mcp__get_config` | Read deployment config | (none) |
+| `mcp__precrime-mcp__create_factlet` | Save broadly applicable intel | `content`, `source` |
+| `mcp__precrime-mcp__get_new_factlets` | Check existing queue (dedup) | `since` (ISO date) |
+| `mcp__precrime-mcp__search_clients` | Check if person/org exists | `search` (string) |
+| `mcp__precrime-mcp__update_client` | Append to dossier | `id`, `dossier` |
+| `mcp__precrime-mcp__create_booking` | Create booking (hot lead path) | `clientId`, `trade`, `startDate`, `location`/`zip`, etc. |
+| `mcp__precrime-mcp__get_config` | Read deployment config | (none) |
 
 ### Booking Action Criterion (auto-evaluated by create_booking)
 When `create_booking` receives `trade` + `startDate` + (`location` OR `zip`), it auto-sets `status: "leed_ready"`. You don't need to set status manually.

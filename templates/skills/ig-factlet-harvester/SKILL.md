@@ -23,11 +23,11 @@ You harvest Instagram posts from curated business accounts and hashtags using `t
 |------|---------|
 | `Bash` | Run ig_harvest.py to fetch posts → JSON files |
 | `Read` | Read the output JSON files |
-| `mcp__leedz-mcp__create_factlet` | Save broadly applicable intel |
-| `mcp__leedz-mcp__get_new_factlets` | Check existing queue (dedup) |
-| `mcp__leedz-mcp__search_clients` | Check if a person/org is already a client |
-| `mcp__leedz-mcp__update_client` | Append to existing client's dossier |
-| `mcp__leedz-mcp__create_booking` | Create a booking for Lead Capture hot path |
+| `mcp__precrime-mcp__create_factlet` | Save broadly applicable intel |
+| `mcp__precrime-mcp__get_new_factlets` | Check existing queue (dedup) |
+| `mcp__precrime-mcp__search_clients` | Check if a person/org is already a client |
+| `mcp__precrime-mcp__update_client` | Append to existing client's dossier |
+| `mcp__precrime-mcp__create_booking` | Create a booking for Lead Capture hot path |
 
 ## Configuration
 
@@ -66,7 +66,7 @@ Use Chrome MCP as fallback. Navigate to `https://www.instagram.com/{username}/`,
 ### Step 2: Load Existing Factlets (dedup)
 
 ```
-mcp__leedz-mcp__get_new_factlets({ since: "30 days ago ISO" })
+mcp__precrime-mcp__get_new_factlets({ since: "30 days ago ISO" })
 ```
 
 Build a list of existing factlet topics. Any post covering the same ground gets skipped.
@@ -90,7 +90,7 @@ For every post in every JSON file, answer the classification questions IN ORDER.
 **2. Is this person/org already in the DB?**
 
 ```
-mcp__leedz-mcp__search_clients({ search: "{name or org}", limit: 1 })
+mcp__precrime-mcp__search_clients({ search: "{name or org}", limit: 1 })
 ```
 
 - **YES (match found)** → **Dossier** update (Step 4B)
@@ -133,7 +133,7 @@ One account's self-promotion, one org's internal event → NO.
 If all three pass:
 
 ```
-mcp__leedz-mcp__create_factlet({
+mcp__precrime-mcp__create_factlet({
   content: "[2-3 sentences. What. Why it matters for the target decision-makers. Implication.]",
   source: "https://www.instagram.com/p/{post.id}/"
 })
@@ -147,7 +147,7 @@ One factlet per distinct topic — not one per post. If two posts cover the same
 This post is about an existing client. Append to their dossier:
 
 ```
-mcp__leedz-mcp__update_client({
+mcp__precrime-mcp__update_client({
   id: "{clientId}",
   dossier: "{existing dossier}\n[{today}] Instagram @{post.author}: {finding}"
 })

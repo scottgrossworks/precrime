@@ -37,12 +37,13 @@ Wired via `.mcp.json` in the workspace root. Claude Code reads `.mcp.json` at st
 
 ## All 19 Tools
 
-### Client Tools (7)
+### Client Tools (8)
 
 | Tool | Args | Purpose |
 |------|------|---------|
 | `get_next_client` | `criteria?` | Atomic cursor fetch — stamps `lastQueueCheck`. Use for the enrichment loop. |
 | `get_client` | `id` | Fetch one client by CUID |
+| `create_client` | `fields` | Create a new client. Requires `name` OR `company`. Defaults `draftStatus` to `"brewing"`. Always set `source`. |
 | `search_clients` | `query` | Filter by name, company, segment, draftStatus |
 | `update_client` | `id, fields` | Write any Client columns. Use for dossier append, draftStatus change, etc. |
 | `get_ready_drafts` | — | All clients with `draftStatus=ready`, sorted by dossierScore desc |
@@ -104,17 +105,11 @@ Wired via `.mcp.json` in the workspace root. Claude Code reads `.mcp.json` at st
 - `intelScore` param (D2+D3, max 7) set by enrichment agent after scraping. Stored on client for recomputation.
 - See [[scoring]] for the full scoring system design.
 
-### Share Tool (1)
-
-| Tool | Args | Purpose |
-|------|------|---------|
-| `share_booking` | `id` | Post a leed_ready Booking to The Leedz marketplace via createLeed API |
-
 ---
 
-## JWT for The Leedz MCP
+## JWT for The Leedz MCP (leedz-share plugin only)
 
-`Config.leedzSession` stores a pre-generated HS256 JWT. Generated at workspace setup (init-wizard Step 5a).
+`Config.leedzSession` stores a pre-generated HS256 JWT. Only needed if the `plugins/leedz-share/` plugin is installed. Generated at workspace setup (init-wizard Step 5a).
 
 ```
 jwt.encode(
@@ -136,24 +131,25 @@ If the leedzEmail doesn't exist in Leedz_DB yet, `addLeed` will auto-create a st
 - Do NOT modify tool handler signatures or tool names. Skill files reference exact names.
 - Do NOT add new npm packages. Prisma + readline + fs + path is the full dependency list.
 - Do NOT touch the RSS scorer (`rss-scorer-mcp/`). Separate concern.
-- Do NOT wire marketplace posting in this server. The bridge to The Leedz MCP is a skill-file task (share-skill.md).
+- Do NOT wire marketplace posting in this server. Marketplace sharing is handled by the optional `plugins/leedz-share/` plugin.
 
 ---
 
 ## Skill References to Tool Names
 
-Skill files in `templates/skills/` reference tools using the `mcp__leedz-mcp__` prefix format when called from Claude:
+Skill files in `templates/skills/` reference tools using the `mcp__precrime-mcp__` prefix format when called from Claude:
 
 ```
-mcp__leedz-mcp__create_factlet
-mcp__leedz-mcp__get_new_factlets
-mcp__leedz-mcp__search_clients
-mcp__leedz-mcp__update_client
-mcp__leedz-mcp__create_booking
-mcp__leedz-mcp__get_config
-mcp__leedz-mcp__link_factlet
-mcp__leedz-mcp__get_client_factlets
-mcp__leedz-mcp__score_client
+mcp__precrime-mcp__create_client
+mcp__precrime-mcp__create_factlet
+mcp__precrime-mcp__get_new_factlets
+mcp__precrime-mcp__search_clients
+mcp__precrime-mcp__update_client
+mcp__precrime-mcp__create_booking
+mcp__precrime-mcp__get_config
+mcp__precrime-mcp__link_factlet
+mcp__precrime-mcp__get_client_factlets
+mcp__precrime-mcp__score_client
 ```
 
 ---
@@ -178,4 +174,4 @@ Not part of this server. Listed here to prevent conflation.
 - [[ontology]] — Booking entity, status values, field definitions
 - [[architecture]] — DB path resolution, Prisma version constraint
 - [[deployment]] — MCP config file locations, troubleshooting
-- [[current]] — pending tests: `share_booking`, `createLeed` with JWT
+- [[current]] — `createLeed` with JWT verified; `share_booking` removed (see `plugins/leedz-share/`)

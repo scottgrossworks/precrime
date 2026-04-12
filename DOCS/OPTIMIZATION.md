@@ -68,7 +68,7 @@ Options:
 
 `get_config()` is called:
 - Twice in `init-wizard.md` (Step 0 and Step 7)
-- In `share-skill.md` when only `leedzSession` is needed
+- In `plugins/leedz-share/share-skill.md` when only `leedzSession` is needed
 - Potentially multiple times in enrichment loop for email/trade fields
 
 It always returns the full Config record — JWT, all settings, trade, marketplace flags, etc. No field selection available.

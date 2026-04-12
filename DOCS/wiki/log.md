@@ -132,6 +132,47 @@ Leads: Lisa C. Williams/AAAE (May 3), N. Davis/NAMA (Apr 22), C. Spann/EDTA (Jun
 
 ---
 
+## [2026-04-11] feature | Email Finder Skill
+
+**New callable sub-skill added to the enrichment pipeline.** Created `templates/skills/email-finder.md` — a generic, deployment-agnostic skill (uses `{{DEPLOYMENT_NAME}}` token) that hunts down direct email addresses when the contact gate would otherwise fail. Edited `templates/skills/enrichment-agent.md` Step 3.6 to replace ~27 lines of inline Gemini/WebSearch verification procedure with a concise handoff to the new skill.
+
+**Key insight driving the design:** four commercial email aggregators (RocketReach, ContactOut, Prospeo, Lead411) expose email-format data directly in their Google search snippets without login. A targeted `site:rocketreach.co` query returns strings like `"uses 2 email formats: 1. first@domain.com (89.8%)"`. Reading the snippet sidesteps the paywall entirely. The skill explicitly forbids clicking through to these sites.
+
+**5-phase algorithm:**
+1. Domain Discovery (skip if domain provided) — `WebSearch` for company LinkedIn/knowledge panel
+2. Email Format Discovery — five snippet-only Google queries against the four aggregators + one fallback
+3. Personnel Discovery (fallback) — LinkedIn People tab, company staff pages, Facebook About, targeted Google
+4. Apply Format to target — handles hyphens, suffixes, non-ASCII
+5. Validation (optional) — quoted `WebSearch` of the constructed email
+
+**Hard cap:** 10 browser/search actions per run.
+
+**Returns:** `found | high_confidence | guessed | failed` plus `email`, `format`, `confidence`, `source`, `alt_contacts`, `notes`.
+
+**Write-back behavior:** on `found` / `high_confidence` and when `client_id` is provided, the skill calls `update_client` to write `email` + dossier notes — but never touches `warmthScore` or `dossierScore`. The enrichment agent re-runs `score_client` after the handoff returns.
+
+**Step 3.6 result handling in enrichment-agent:**
+- `found` / `high_confidence` → Tier 1, full credit, contact gate flips to PASS
+- `guessed` → Tier 2, cap downstream score at 6, log `GENERIC_EMAIL`
+- `failed` → leave inbox in place, log `EMAIL_UNVERIFIED`
+
+**Trigger conditions** (merged from both source specs): generic inboxes `info@, contact@, hello@, support@, sales@, admin@, office@, customerservice@, orders@, memberservices@`, missing email, or format-constructed guess not found verbatim.
+
+**File location decision:** `templates/skills/` is for per-deployment skills copied into each workspace by `deploy.js`. The root `skills/` folder is for framework-level skills like `deployment-wizard.md`. Email-finder is per-deployment.
+
+**Wiki pages created/updated:**
+- `concepts/email-finder.md` — NEW: full skill documentation (interface, algorithm, decision tree, integration)
+- `concepts/architecture.md` — added email-finder to skill files table, backlink, bumped last_updated and source_docs
+- `concepts/scoring.md` — added contact-gate upgrade path note under Contact Gate section, backlink, bumped last_updated and source_docs
+- `index.md` — new entry under Concepts, updated scoring.md summary, header date bump
+- `SCHEMA.md` — added email-finder.md to directory tree
+
+**Source doc:** `DOCS/EMAIL_FINDER.md` (implementation spec written earlier on 2026-04-10)
+
+**Conflicts flagged:** none
+
+---
+
 ## [2026-04-09] insight | Headless Deployment Architecture
 
 **Key architectural insight:** PRECRIME runs headlessly on AWS with zero changes. Claude Code IS the orchestration backbone (prompt → API → parse tool calls → execute locally → patch results → resend). Install it on an EC2, point at the PRECRIME folder, trigger via cron with `claude -p --dangerously-skip-permissions "run enrichment"`. Same .md skills, same MCP server (stdin/stdout), same SQLite DB. No transport adapter needed.

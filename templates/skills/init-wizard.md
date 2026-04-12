@@ -210,7 +210,7 @@ Substitute `LEEDZ_EMAIL` with the email they provided. Capture the printed token
 
 Then write both to Config in one call:
 ```
-mcp__leedz-mcp__update_config({ leedzEmail: "[email]", leedzSession: "[token]", marketplaceEnabled: true })
+mcp__precrime-mcp__update_config({ leedzEmail: "[email]", leedzSession: "[token]", marketplaceEnabled: true })
 ```
 
 Confirm:

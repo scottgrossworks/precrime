@@ -362,7 +362,7 @@ Tell the user:
 
 Or offer to do it directly if the tools are already available in the current session:
 > "I can set this now if the MCP tools are loaded. Want me to try?"
-> (If `mcp__leedz-mcp__update_config` is available: call it directly.)
+> (If `mcp__precrime-mcp__update_config` is available: call it directly.)
 
 ### Step 9e: Test Launch
 

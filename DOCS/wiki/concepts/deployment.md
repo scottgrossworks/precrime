@@ -111,7 +111,6 @@ precrime/
       relevance-judge.md
       factlet-harvester.md
       init-wizard.md
-      share-skill.md
       fb-factlet-harvester/
       reddit-factlet-harvester.md
       ig-factlet-harvester/

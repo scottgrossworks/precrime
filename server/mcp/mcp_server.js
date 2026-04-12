@@ -4,7 +4,7 @@
  * JSON-RPC server for Claude Desktop. Queries deployment SQLite
  * directly via PrismaClient. No HTTP server required.
  *
- * 20 tools: 12 original (+ create_client) + 4 booking + share_booking + 3 scoring (link_factlet, get_client_factlets, score_client)
+ * 19 tools: 12 original (+ create_client) + 4 booking + 3 scoring (link_factlet, get_client_factlets, score_client)
  *
  * @version 2.0.0
  */
@@ -12,11 +12,7 @@
 const readline = require('readline');
 const fs = require('fs');
 const path = require('path');
-const https = require('https');
 const { PrismaClient } = require('@prisma/client');
-
-// The Leedz marketplace MCP endpoint
-const LEEDZ_MCP_URL = 'https://jjz8op6uy4.execute-api.us-west-2.amazonaws.com/Leedz_Stage_1/mcp';
 
 // Load config
 const CONFIG_PATH = path.resolve(__dirname, 'mcp_server_config.json');
@@ -442,17 +438,6 @@ function handleToolsList(id) {
                     }
                 },
                 {
-                    name: 'share_booking',
-                    description: 'Post a leed_ready Booking to The Leedz marketplace. Fetches Booking + Client from DB, calls createLeed API (trade auto-lowercased), updates Booking with leedId and status=shared. Requires marketplaceEnabled=true and leedzSession in Config.',
-                    inputSchema: {
-                        type: 'object',
-                        properties: {
-                            id: { type: 'string', description: 'Booking ID' }
-                        },
-                        required: ['id']
-                    }
-                },
-                {
                     name: 'link_factlet',
                     description: 'Associate a factlet with a client. Classifies the factlet as pain/occasion/context for THIS client and assigns points (pain=2, occasion=2, context=1). Idempotent — calling again for the same client+factlet pair updates signalType/points.',
                     inputSchema: {
@@ -491,36 +476,6 @@ function handleToolsList(id) {
             ]
         }
     };
-}
-
-// ============================================================================
-// LEEDZ MARKETPLACE HTTP HELPER
-// ============================================================================
-
-function postToLeedzMcp(payload) {
-    return new Promise((resolve, reject) => {
-        const body = JSON.stringify(payload);
-        const url = new URL(LEEDZ_MCP_URL);
-        const req = https.request({
-            hostname: url.hostname,
-            path: url.pathname,
-            method: 'POST',
-            headers: {
-                'Content-Type': 'application/json',
-                'Content-Length': Buffer.byteLength(body)
-            }
-        }, (res) => {
-            let data = '';
-            res.on('data', chunk => data += chunk);
-            res.on('end', () => {
-                try { resolve(JSON.parse(data)); }
-                catch (e) { reject(new Error(`Invalid JSON from Leedz MCP: ${data.substring(0, 200)}`)); }
-            });
-        });
-        req.on('error', reject);
-        req.write(body);
-        req.end();
-    });
 }
 
 // ============================================================================
@@ -1135,78 +1090,6 @@ async function handleScoreBooking(id, params) {
     }, null, 2));
 }
 
-async function handleShareBooking(id, params) {
-    const bookingId = params.arguments?.id;
-    if (!bookingId) return createErrorResponse(id, -32602, 'Missing booking ID');
-
-    // Config: need leedzSession + marketplaceEnabled
-    const cfg = await prisma.config.findFirst({ orderBy: { createdAt: 'desc' } });
-    if (!cfg?.marketplaceEnabled) return createErrorResponse(id, -32602, 'marketplaceEnabled is false in Config');
-    if (!cfg?.leedzSession)       return createErrorResponse(id, -32602, 'leedzSession not set in Config — run init wizard Step 5a');
-
-    // Fetch booking + client
-    const booking = await prisma.booking.findUnique({ where: { id: bookingId }, include: { client: true } });
-    if (!booking)           return createErrorResponse(id, -32602, `Booking not found: ${bookingId}`);
-    if (!booking.trade)     return createErrorResponse(id, -32602, 'Booking missing trade');
-    if (!booking.startDate) return createErrorResponse(id, -32602, 'Booking missing startDate');
-    if (!booking.zip)       return createErrorResponse(id, -32602, 'Booking missing zip');
-
-    // Build createLeed params
-    const tn = booking.trade.toLowerCase();
-    const ti = (booking.title || `${tn} needed — ${booking.location || booking.zip}`).substring(0, 200);
-    const st = new Date(booking.startDate).getTime();
-
-    // lc must end with zip
-    let lc = (booking.location || '').trim();
-    if (lc && !lc.endsWith(booking.zip)) lc = `${lc} ${booking.zip}`;
-
-    const args = { session: cfg.leedzSession, tn, ti, zp: booking.zip, st, pr: booking.leedPrice || 0, sh: '*' };
-    if (booking.endDate)       args.et = new Date(booking.endDate).getTime();
-    if (lc)                    args.lc = lc.substring(0, 300);
-    if (booking.description)   args.dt = booking.description.substring(0, 1000);
-    if (booking.notes)         args.rq = booking.notes.substring(0, 1000);
-    if (booking.client?.name)  args.cn = booking.client.name;
-    if (booking.client?.email) args.em = booking.client.email;
-    if (booking.client?.phone) args.ph = booking.client.phone;
-
-    logInfo(`share_booking: bookingId=${bookingId} tn=${tn} zp=${booking.zip} st=${st}`);
-
-    // POST to The Leedz MCP
-    let rpcResponse;
-    try {
-        rpcResponse = await postToLeedzMcp({
-            jsonrpc: '2.0', id: '1', method: 'tools/call',
-            params: { name: 'createLeed', arguments: args }
-        });
-    } catch (err) {
-        logError(`share_booking HTTP error: ${err.message}`);
-        return createErrorResponse(id, -32603, `Leedz MCP request failed: ${err.message}`);
-    }
-
-    if (rpcResponse.error) {
-        logError(`share_booking RPC error: ${JSON.stringify(rpcResponse.error)}`);
-        return createErrorResponse(id, -32603, `createLeed failed: ${rpcResponse.error.message}`);
-    }
-
-    // Parse leed result from content[0].text
-    let leedResult;
-    try {
-        leedResult = JSON.parse(rpcResponse.result?.content?.[0]?.text);
-    } catch (e) {
-        return createErrorResponse(id, -32603, `Unexpected createLeed response format`);
-    }
-    if (!leedResult?.id) return createErrorResponse(id, -32603, `createLeed returned no ID: ${JSON.stringify(leedResult)}`);
-
-    // Update booking: mark shared
-    const updated = await prisma.booking.update({
-        where: { id: bookingId },
-        data: { leedId: leedResult.id, status: 'shared', shared: true, sharedTo: 'leedz_api', sharedAt: BigInt(Date.now()) }
-    });
-
-    logInfo(`share_booking success: leedId=${leedResult.id} bookingId=${bookingId}`);
-    return createSuccessResponse(id, safeJson({ leedId: leedResult.id, booking: updated }));
-}
-
 async function handleGetClientBookings(id, params) {
     const clientId = params.arguments?.clientId;
     if (!clientId) return createErrorResponse(id, -32602, 'Missing clientId');
@@ -1242,7 +1125,6 @@ async function handleToolCall(id, params) {
             case 'get_bookings':        return await handleGetBookings(id, params);
             case 'get_client_bookings': return await handleGetClientBookings(id, params);
             case 'score_booking':       return await handleScoreBooking(id, params);
-            case 'share_booking':       return await handleShareBooking(id, params);
             case 'link_factlet':        return await handleLinkFactlet(id, params);
             case 'get_client_factlets': return await handleGetClientFactlets(id, params);
             case 'score_client':        return await handleScoreClient(id, params);

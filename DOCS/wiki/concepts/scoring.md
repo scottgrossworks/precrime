@@ -1,8 +1,8 @@
 ---
 title: Client Scoring & Draft Gate
 tags: [scoring, factlet, contact, dossier, draft, enrichment, gate]
-source_docs: [DOCS/PLAN.md, server/mcp/mcp_server.js, templates/skills/enrichment-agent.md, templates/skills/evaluator.md]
-last_updated: 2026-04-08
+source_docs: [DOCS/PLAN.md, DOCS/EMAIL_FINDER.md, server/mcp/mcp_server.js, templates/skills/enrichment-agent.md, templates/skills/email-finder.md, templates/skills/evaluator.md]
+last_updated: 2026-04-11
 staleness: none
 ---
 
@@ -31,6 +31,8 @@ Procedural check using the existing `isGenericEmail()` function (same list used 
 | No named person | **FAIL** |
 
 FAIL = `draftStatus` stays `brewing`. No draft composed. Factlets still accumulate.
+
+**Upgrading a failing contact gate:** when the enrichment agent encounters a generic inbox, missing email, or pattern-constructed guess at Step 3.6, it hands off to the [[email-finder]] sub-skill before calling `score_client`. If the skill returns `found` or `high_confidence`, it writes `client.email` directly and the contact gate flips to PASS on the subsequent score call — no re-scraping needed. A `guessed` result leaves the email in place and caps downstream score at 6; `failed` leaves everything untouched and logs `EMAIL_UNVERIFIED`.
 
 ---
 
@@ -164,3 +166,4 @@ Special log category: `READY_BLOCKED_CONTACT` — client has dossierScore >= 5 b
 - [[mcp]] — tool definitions for link_factlet, get_client_factlets, score_client
 - [[ontology]] — Client, Factlet, ClientFactlet entity definitions
 - [[architecture]] — enrichment pipeline data flow
+- [[email-finder]] — sub-skill that upgrades failing contact gates at Step 3.6

@@ -102,10 +102,10 @@ https://www.facebook.com/WeddingPlannersOfLA
 
 | Tool | Purpose |
 |------|---------|
-| `mcp__leedz-mcp__get_config` | Read system config (trade, geography, business description) |
-| `mcp__leedz-mcp__get_stats` | Get client counts, factlet counts, score distributions |
-| `mcp__leedz-mcp__search_clients` | Search existing clients (check what segments/geographies are covered) |
-| `mcp__leedz-mcp__create_factlet` | Save broadly applicable intel to the factlet queue |
+| `mcp__precrime-mcp__get_config` | Read system config (trade, geography, business description) |
+| `mcp__precrime-mcp__get_stats` | Get client counts, factlet counts, score distributions |
+| `mcp__precrime-mcp__search_clients` | Search existing clients (check what segments/geographies are covered) |
+| `mcp__precrime-mcp__create_factlet` | Save broadly applicable intel to the factlet queue |
 | `WebSearch` | Search the web for source channels |
 | `WebFetch` | Scrape a URL for content |
 | `Read` | Read local files (source configs, VALUE_PROP.md) |
@@ -264,7 +264,7 @@ This is NOT a separate step. It happens during every scrape in Steps 2-5. The sk
 
 During discovery, the skill will encounter broadly applicable intelligence (industry trends, policy changes, market data). These should be captured as factlets:
 ```
-mcp__leedz-mcp__create_factlet({
+mcp__precrime-mcp__create_factlet({
   content: "2-3 sentence summary",
   source: "URL where found"
 })
@@ -341,7 +341,7 @@ triggers:
 ---
 ```
 
-The skill body follows the steps above. Reference MCP tools by their full names (`mcp__leedz-mcp__get_config`, etc.).
+The skill body follows the steps above. Reference MCP tools by their full names (`mcp__precrime-mcp__get_config`, etc.).
 
 ---
 

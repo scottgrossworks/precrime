@@ -1,6 +1,6 @@
 {
   "mcpServers": {
-    "leedz-mcp": {
+    "precrime-mcp": {
       "command": "node",
       "args": ["server/mcp/mcp_server.js"],
       "env": {}

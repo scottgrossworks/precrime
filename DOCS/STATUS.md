@@ -24,11 +24,11 @@ Manifest-driven agentic enrichment engine. Enriches contacts, scores warmth, com
 | **File** | `server/mcp/mcp_server.js` | Remote Lambda |
 | **Transport** | Local stdin/stdout | Remote `POST /mcp` on API Gateway |
 | **Backend** | Prisma 5 → SQLite | DynamoDB |
-| **Tools** | 15 tools | createLeed + reads |
+| **Tools** | 19 tools | createLeed + reads |
 
-The bridge: Pre-Crime calls The Leedz MCP `createLeed` when a Booking hits `leed_ready`. `Booking.leedId` stores the returned marketplace ID.
+Marketplace sharing is handled by the optional `plugins/leedz-share/` plugin — not shipped in core. When a Booking hits `leed_ready`, core Pre-Crime logs it and stops. The plugin skill calls the Leedz API Gateway directly via HTTP.
 
-**NAMING:** The MCP tool is `createLeed`. It calls the `addLeed` Lambda. There is a separate SSR Lambda also named `createLeed` — do not invoke it.
+**NAMING:** The Leedz marketplace tool is `createLeed`. It calls the `addLeed` Lambda. There is a separate SSR Lambda also named `createLeed` — do not invoke it.
 
 ### DB Path Resolution
 
@@ -96,11 +96,10 @@ Claude Code reads `.mcp.json` at startup and connects MCP servers immediately. O
 | `templates/skills/init-wizard.md` | Startup skill — config walkthrough, then launches harvesters + enrichment |
 | `templates/skills/enrichment-agent.md` | Full enrichment loop (runs AFTER init-wizard) |
 | `templates/skills/evaluator.md` | Draft evaluator + Booking completeness gate |
-| `templates/skills/share-skill.md` | leed_ready → leedz_api / email_share / email_user |
 | `templates/skills/factlet-harvester.md` | RSS → factlet pipeline |
 | `templates/skills/fb-factlet-harvester/SKILL.md` | Facebook → factlet pipeline (needs Chrome) |
 | **Server (source of truth)** | |
-| `server/mcp/mcp_server.js` | Pre-Crime MCP — 15 tools, Prisma → SQLite |
+| `server/mcp/mcp_server.js` | Pre-Crime MCP — 19 tools, registered as `precrime-mcp`, Prisma → SQLite |
 | `server/prisma/schema.prisma` | Prisma 5 schema — Client, Booking, Factlet, Config |
 | `server/package.json` | npm deps: @prisma/client 5.22.0, dotenv |
 | **Docs** | |
@@ -113,8 +112,8 @@ All paths relative to PRECRIME source root.
 
 ## What's Done (sessions 1-9)
 
-- All 15 MCP tools in `mcp_server.js` including `share_booking`; `search_clients` extended with `warmthScore` / `minWarmthScore` / `maxWarmthScore` filters
-- All skill templates: init-wizard, enrichment-agent, evaluator, share-skill, factlet-harvester, fb-factlet-harvester, reddit-factlet-harvester, ig-factlet-harvester, relevance-judge
+- All 19 MCP tools in `mcp_server.js`; `search_clients` extended with `warmthScore` / `minWarmthScore` / `maxWarmthScore` filters; MCP server registered as `precrime-mcp`
+- All skill templates: init-wizard, enrichment-agent, evaluator, factlet-harvester, fb-factlet-harvester, reddit-factlet-harvester, ig-factlet-harvester, relevance-judge
 - `deploy.js` with `--no-install` flag and correct path resolution
 - `build.bat` — zero args, handles staging/zipping/cleanup
 - `precrime.bat` — setup + Claude launch + auto-prompt + skip-permissions
@@ -126,7 +125,7 @@ All paths relative to PRECRIME source root.
 - JWT generation in init-wizard Step 5a
 - Booking completeness evaluator with four output paths
 - **End-to-end test passed**: unzip → `precrime` → MCP connected, init-wizard ran, enrichment launched
-- **`share_booking` verified**: `leed_ready` Booking → `shared` + `leedId` set — leed posted to marketplace
+- Leedz marketplace sharing extracted to optional plugin (`plugins/leedz-share/`) — core ships clean, no Leedz dependencies
 - **The Leedz MCP `createLeed` verified** with session JWT
 
 ---
