@@ -20,6 +20,7 @@ model Client {
   targetUrls     String?   // JSON: [{url, type, label}]
   draft          String?   // current best outreach draft
   draftStatus    String?   // "brewing" | "ready" | "sent"
+  sentAt         DateTime? // when draft was actually sent via Gmail
   warmthScore    Float?    // DEPRECATED — use dossierScore. Kept for backwards compat.
   dossierScore   Int?      // continuous, unbounded — computed by score_client
   contactGate    Boolean   @default(false) // binary: has real named contact + direct email

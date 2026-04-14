@@ -118,16 +118,32 @@ When the user says any of these: "start precrime", "start the precrime workflow"
 
 **Read `DOCS/VALUE_PROP.md` for word limit, tone, open/close rules, and forbidden phrases specific to this deployment.**
 
-Universal rules (always apply):
+### Mandatory Structure
+- **Opening:** `Dear <name>,` on its own line. ALWAYS. No exceptions.
+- **Closing:** Read `DOCS/VALUE_PROP.md` for the permitted closing line. If none specified, end with a simple meeting ask.
+- **NO em-dashes (—) or double-hyphens (--).** ZERO TOLERANCE. They render as corrupted characters in email. Use a comma, period, or rewrite.
+
+### Intel Minimum
+- Do NOT compose a draft unless you have at least ONE non-generic intel item in the dossier or linked factlets.
+- Generic = org name, city, address, contact role. This is directory data, not intel.
+- If you only have directory data, set brewing and move on. A thin draft is worse than no draft.
+
+### Tone: Warm and Collegial — NEVER Confrontational
+- Do NOT take something positive about the prospect and then question, challenge, or undermine it.
+- **BANNED:** "Your org does X. But what about Y?" / "This is true...but..." / "[Compliment]. But [criticism]." / Any positive-then-negative pivot.
+- **CORRECT:** Mention what you found. Connect to the product. Ask for the meeting. Three moves. No auditing. No lecturing.
+
+### Universal Rules
 - Reference something specific and recent from the dossier.
-- Connect their pain to the product in ONE sentence.
+- Connect their situation to the product in ONE sentence.
 - No filler. Every sentence sells or gets cut.
-- **Brevity is the goal.** No word count cap — but cut every word that doesn't earn its place. If a sentence can be shorter without losing meaning, make it shorter. The draft is done when nothing can be removed, not when nothing can be added.
+- **Brevity is the goal.** Cut every word that doesn't earn its place.
 - Do NOT auto-send. All drafts go to `ready` for human review.
 
-**Banned phrasing — automatic rewrite if found:**
-- "Those aren't X. Those are Y." and "This isn't X. This is Y." — AI tell. Sounds like a reframe lecture. Make the point without teaching the reader what words mean.
-- Any sentence that redefines what something "really" is. Say the thing. Don't editorialize the ontology.
+### Banned Phrasing — automatic rewrite if found
+- "Those aren't X. Those are Y." and "This isn't X. This is Y." — AI tell.
+- Any sentence that redefines what something "really" is.
+- Any "positive...but negative..." construction.
 
 ---
 

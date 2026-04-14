@@ -208,14 +208,14 @@ No changes to compose/evaluate logic. They just don't run unless the gate passes
 
 Delete:
 - Hard gate 1: "Generic inbox only → brewing" (replaced by contactGate)
-- Hard gate 2: "warmthScore < 5 → brewing" (replaced by dossierScore threshold)
+- Hard gate 2: "warmthScore < 9 → brewing" (warmth scoring rubric with two gates: verified email + event signal)
 
-The evaluator now only runs AFTER the enrichment gate passes. Its job simplifies to: **evaluate draft quality only**. The 5 criteria (Specificity, Recency, Bridge, Brevity, Reply Test) remain unchanged.
+The evaluator now only runs AFTER the enrichment gate passes (canDraft + warmthScore >= 9). Its job simplifies to: **evaluate draft quality only**. The 6 criteria (Intel Sufficiency, Specificity, Recency, Bridge, Tone/Format, Reply Test) remain unchanged.
 
 Update hard gate section to:
 ```
 Hard gate: If this evaluator is running, the client has already passed the
-contact gate and dossier score threshold. Evaluate the DRAFT, not the client.
+contact gate, dossier score threshold, and warmthScore >= 9. Evaluate the DRAFT, not the client.
 ```
 
 ### Update Booking Readiness section

@@ -111,6 +111,8 @@ Pass any filter the user specified (segment, company keyword, draftStatus). Othe
 
 The tool stamps `lastQueueCheck = NOW` before returning — this is the DB cursor. Do NOT call again for the same client.
 
+**Sent guard:** If the returned client has `draftStatus === "sent"`, skip it entirely — do not re-enrich, do not re-compose. Log `SKIPPED_ALREADY_SENT` in ROUNDUP.md and move to Step 7 (next client).
+
 ### Step 1: Factlet Queue Check
 
 Check the broadcast queue BEFORE any scraping. Also hydrate previously linked factlets into context.
@@ -203,28 +205,33 @@ Valid URL types: `website`, `linkedin`, `twitter`, `facebook`, `rss`, `news`, `e
 
 Scrape each URL in `targetUrls`. For each:
 
-1. **Choose the right tool:**
-   - Regular websites, news, directories → `WebFetch` first
-     - If WebFetch returns JS framework code, 404, or ECONNREFUSED → **Gemini fallback** (see below)
-   - Facebook pages → Chrome (Facebook blocks WebFetch)
-   - LinkedIn → `WebFetch` first, fall back to Chrome if blocked
+1. **Choose the right tool — INTERACTIVE MODE (Chrome available):**
 
-**Gemini research fallback procedure** (when WebFetch fails or returns JS-only content):
-1. Confirm `SESSION_AI.gemini` is set. If not, check `SESSION_AI.grok`. If neither, skip and log `SCRAPE_FAILED`.
-2. Find the input on the existing AI tab:
-   `mcp__Claude_in_Chrome__find({ tabId: SESSION_AI.gemini, query: "chat input prompt box" })`
-3. Click the input, then type a targeted research prompt:
-   ```
-   "[Company name] [city/region] — give me: size, recent news or initiatives,
-   any expressed pain points from public reviews, and anything relevant to
-   [selling context / product category]."
-   ```
-4. Press Enter. Wait 4 seconds. Read the response:
-   `mcp__Claude_in_Chrome__get_page_text({ tabId: SESSION_AI.gemini })`
-5. Extract intel. Treat it as a WebFetch result — synthesize into dossier.
-6. Log to ROUNDUP.md: `SCRAPE_FALLBACK_GEMINI — [company] — [what was extracted]`
+   Chrome and SESSION_AI (Gemini/Grok) are the **PRIMARY** tools. They cost zero Claude tokens for searches and handle JS-heavy pages, Facebook, LinkedIn, and everything else.
 
-**Do not open a new Gemini tab** — reuse the pre-assigned tab throughout the session. Each prompt replaces the previous one.
+   - **Web research / searches** → SESSION_AI (Gemini or Grok). ALWAYS. Never use `WebSearch` in interactive mode.
+   - **Page scraping** → Chrome `navigate` + `get_page_text`. ALWAYS. Never use `WebFetch` in interactive mode.
+   - **Facebook, LinkedIn, any social media** → Chrome directly.
+
+   **SESSION_AI research procedure (PRIMARY — not a fallback):**
+   1. Find the input on the AI tab:
+      `mcp__Claude_in_Chrome__find({ tabId: SESSION_AI.gemini, query: "chat input prompt box" })`
+   2. Click the input, then type a targeted research prompt:
+      ```
+      "[Company name] [city/region] — give me: size, recent news or initiatives,
+      any expressed pain points from public reviews, and anything relevant to
+      [selling context / product category]."
+      ```
+   3. Press Enter. Wait 4 seconds. Read the response:
+      `mcp__Claude_in_Chrome__get_page_text({ tabId: SESSION_AI.gemini })`
+   4. Extract intel. Synthesize into dossier.
+
+   **Do not open a new Gemini tab** — reuse the pre-assigned tab throughout the session. Each prompt replaces the previous one.
+
+   **HEADLESS MODE (no Chrome):**
+   - Web research → `WebSearch`
+   - Page scraping → `WebFetch`
+   - Facebook/LinkedIn → skip (not accessible headless), log `SCRAPE_SKIPPED_HEADLESS`
 
 2. **Look for signals relevant to selling the product (per DOCS/VALUE_PROP.md):**
    - Pain signals: problems they're experiencing, needs they've expressed
@@ -259,23 +266,29 @@ Scrape each URL in `targetUrls`. For each:
 
 After ingestion, assess what you found. This is the **intel score** — the non-factlet portion of the dossier score. Compute it from what scraping produced.
 
+**SCORING INTEGRITY RULE: Be brutally honest. A website that loads is NOT "useful content." Directory data (name, address, enrollment, grade levels, school type) is NOT a signal. Only count intel that would make a draft BETTER than a blind cold email. If in doubt, score LOWER.**
+
 **D2 — Intel Depth (0-3):**
 
 | Condition | Points |
 |---|---|
-| 2+ sources scraped with useful content | 3 |
-| 1 source scraped with useful content | 2 |
-| Sources found but thin / low-signal | 1 |
-| All fetches failed / no data | 0 |
+| 2+ sources scraped with ACTIONABLE content (specific programs, initiatives, concerns, events, posts) | 3 |
+| 1 source scraped with ACTIONABLE content | 2 |
+| Sources loaded but only produced directory-level info (enrollment, address, grade levels, mission statement boilerplate) | 1 |
+| All fetches failed / no data / only school name and location confirmed | 0 |
+
+**"Actionable" = something you can reference in a draft that proves you did research.** A school's About page saying "we serve grades K-8 in Los Angeles" is NOT actionable. A Facebook post about their new counseling program IS actionable.
 
 **D3 — Direct Signals (0-4, additive):**
 
 | Signal found via scraping | Points |
 |---|---|
-| Explicit pain / stated problem | +2 |
-| Buying occasion / deadline / active project | +2 |
-| Implied need / organizational context | +1 |
+| Explicit pain / stated problem (MUST be a direct quote, post, or article — not inferred from school type) | +2 |
+| Buying occasion / deadline / active project (MUST have a source — not assumed from segment) | +2 |
+| Organizational context BEYOND directory data (recent hire, program launch, award, policy change) | +1 |
 | Timing / geography alignment (per VALUE_PROP.md) | +1 |
+
+**Do NOT award D3 points for inferred needs.** "This is a school so they probably need student wellbeing tools" is not a signal. That's your product pitch. Signals come from THEIR words, THEIR posts, THEIR news.
 
 **intelScore = D2 + D3** (max 7). Hold this value — you will pass it to `score_client` at Step 4.
 
@@ -318,7 +331,7 @@ This tool computes and returns:
 - `contactGate` — binary: named person + direct (non-generic) email
 - `factletScore` — sum of linked factlet points
 - `dossierScore` — intelScore + factletScore (continuous, unbounded)
-- `canDraft` — contactGate AND dossierScore >= 5
+- `canDraft` — contactGate AND dossierScore >= 5 (minimum intel bar — NOT the ready threshold)
 - `action` — recommended next step if not draft-eligible
 
 All scores are written back to the client record automatically.
@@ -329,24 +342,64 @@ Log the full breakdown in ROUNDUP.md:
 - canDraft: [true/false] — [action if false]
 ```
 
-### Step 4.5: Draft Gate
+### Step 4.5: Warmth Scoring
 
+**Set warmthScore after procedural scoring. This is YOUR holistic assessment — not procedural.**
+
+Review the full picture: dossier, factlets, email verification status, event signals. Assign warmthScore 0-10:
+
+| Score | Criteria |
+|-------|----------|
+| 10 | Specific expressed need with date, location, and service request. Verified direct email to decision-maker. |
+| 9 | Strong signal of upcoming relevant event. Verified direct email. |
+| 8 | Good fit signals (books entertainment, same category, upcoming events). Email is pattern-inferred, not verified. |
+| 7 | General venue/planner fit. Named contact found. Pattern-inferred email. No specific event signal. |
+| 5-6 | Generic email only (info@, contact@, events@), or speculative fit. |
+| 1-4 | No contact, no fit signal, or wrong segment. |
+
+**Two hard gates for warmthScore 9+:**
+
+1. **Verified direct email** to a named decision-maker. Pattern-inferred emails (first.last@domain from RocketReach, ZoomInfo, LinkedIn guessing) are NOT verified. Cap at 8.
+2. **Specific event signal.** "They host events" is not a signal. "They are hosting a Mother's Day brunch on May 10" IS a signal. "Looking for entertainment vendors" IS a signal. General fit is not. Cap at 8.
+
+Without BOTH gates, warmthScore stays at 7-8 regardless of how perfect the venue looks. Be honest about what you actually know versus what you are inferring.
+
+Write warmthScore to the client:
 ```
-if (!canDraft) {
-  mcp__precrime-mcp__update_client({
-    id: clientId,
-    dossier: "...",         ← still write scrape findings to dossier
-    draftStatus: "brewing",
-    lastEnriched: new Date().toISOString()
-  })
-  Log the action from score_client.
-  → SKIP to Step 7 (next client). No draft composed. No LLM time spent.
-}
+mcp__precrime-mcp__update_client({ id: clientId, warmthScore: N })
 ```
+
+Log in ROUNDUP.md:
+```
+- warmthScore: [N] — [one-line justification citing which gates pass/fail]
+```
+
+### Step 4.6: Draft Gate
+
+Two conditions required for drafting:
+1. `canDraft = true` (from Step 4: contactGate + dossierScore >= 5)
+2. `warmthScore >= 9` (from Step 4.5)
+
+If EITHER fails:
+```
+mcp__precrime-mcp__update_client({
+  id: clientId,
+  dossier: "...",         ← still write scrape findings to dossier
+  draftStatus: "brewing",
+  lastEnriched: new Date().toISOString()
+})
+```
+
+Note in dossier what is missing to reach warmth 9:
+- Missing verified email? → append: "NEEDS: verified direct email (currently pattern-inferred)"
+- Missing event signal? → append: "NEEDS: specific event/buying signal (currently general fit only)"
+- Both missing? → Note both.
+
+Log the action from score_client. → SKIP to Step 7 (next client). No draft composed. No LLM time spent.
 
 **Special case:** If `contactGate = false` but `dossierScore >= 5`, log `READY_BLOCKED_CONTACT`. This client has rich intel but an unreachable inbox — prioritize chasing their direct email.
 
-**If canDraft = true → proceed to Step 5.**
+**If canDraft = true AND warmthScore >= 9 → proceed to Step 5.**
 
 ### Step 5: Compose Draft
 
@@ -357,17 +410,53 @@ Before composing, hydrate the client's linked factlets into context:
 mcp__precrime-mcp__get_client_factlets({ clientId })
 ```
 
-Use both the dossier (client-specific scrape intel) and the linked factlets (broadcast intel) as source material. Read `DOCS/VALUE_PROP.md`. Apply outreach rules from CLAUDE.md. Key: open with their world, one-sentence product bridge, specific dossier hook, sound human.
+Use both the dossier (client-specific scrape intel) and the linked factlets (broadcast intel) as source material. Read `DOCS/VALUE_PROP.md`. Apply outreach rules from CLAUDE.md.
 
-**Structure: Every draft MUST open with `Dear <client.name>,` on its own line. The client's name is in the database. Use it. No name = automatic rewrite.**
+#### PRE-COMPOSE CHECK — DO NOT SKIP
 
-**Formatting hard rules: NEVER use an em-dash (—) or double-hyphen (--) in the draft. Not once. Both render as corrupted characters (a]") in email clients. Use a comma, period, or restructure the sentence.**
+Before writing a single word, verify you have at least ONE non-generic intel item. "Non-generic" means something that could NOT be found in a school directory listing (name, city, enrollment, grade levels, school type are all generic). You need a specific initiative, program, stated concern, recent event, social media post, news mention, or linked factlet.
+
+**If you have ZERO non-generic intel: DO NOT COMPOSE. Set draftStatus = brewing. Log THIN_DOSSIER. Move to next client.**
+
+A thin draft is worse than no draft. It wastes the user's review time and burns the sender's credibility.
+
+#### MANDATORY STRUCTURE
+
+1. **Opening line:** `Dear <client.name>,` on its own line. ALWAYS. The client's name is in the database. No name = do not compose.
+
+2. **Body:** Reference what you found (dossier finding or factlet). Connect it to the product in ONE sentence. Be warm, collegial, and brief. Sound like a helpful peer, not a salesperson auditing their school.
+
+3. **Closing line:** `Can I show it to you over Zoom?` — This is the ONLY permitted closing. No variations. No alternatives. Not "Would you like to see a demo?" Not "Let me know if you'd like to learn more." Exactly: `Can I show it to you over Zoom?`
+
+#### HARD FORMATTING RULES
+
+**Em-dashes and double-hyphens: ZERO TOLERANCE.**
+Do NOT use — (em-dash) or -- (double-hyphen) ANYWHERE in the draft. Not once. Not ever. They render as corrupted characters in email clients. Use a comma, a period, or rewrite the sentence. After composing, scan every character. If you find one, rewrite that sentence before proceeding.
 
 **Banned constructions — automatic rewrite:**
-- "Those aren't X. Those are Y." / "This isn't X. This is Y." — telltale AI phrasing. Didactic. Sounds like a TED talk. Make the point without the reframe lecture.
+- "Those aren't X. Those are Y." / "This isn't X. This is Y." — telltale AI phrasing. Didactic. Sounds like a TED talk.
 - Any sentence that defines or redefines what something "really" is. Just say the thing directly.
 
-**Brevity rule:** No word count cap — but cut every word that doesn't earn its place. Done when nothing can be removed, not when nothing can be added.
+#### TONE: WARM AND COLLEGIAL — NEVER CONFRONTATIONAL
+
+**THIS IS THE #1 TONE RULE. VIOLATING IT = AUTOMATIC BREWING.**
+
+Do NOT take something positive about the school and then question it, challenge it, or undermine it. This is called "negging" and it is the fastest way to get deleted.
+
+**BANNED patterns:**
+- "Your school's focus on X is impressive. But what about Y?"
+- "You're doing great work with X. Have you considered that Y?"
+- "[Positive statement]. But [negative implication or gap]."
+- "[Compliment], but [criticism or challenge]."
+- Any "This is true...but..." or "...but what about..." construction
+- Any sentence that praises the school then pivots to what they're missing
+
+**CORRECT approach:** Mention what you found about them (warmly, without judgment). Connect it to the product naturally. Ask for the meeting. That's it. Three moves. No auditing. No lecturing. No negging.
+
+Example of WRONG tone: "Your commitment to student wellness is clear. But are you seeing the students who are slipping through the cracks?"
+Example of RIGHT tone: "I saw [specific thing]. Bloomsights helps schools like yours [specific capability]. Can I show it to you over Zoom?"
+
+**Brevity rule:** No word count cap, but cut every word that doesn't earn its place. Done when nothing can be removed, not when nothing can be added.
 
 ### Step 6: Evaluate Draft
 
@@ -384,6 +473,32 @@ mcp__precrime-mcp__update_client({
   lastEnriched: new Date().toISOString()
 })
 ```
+
+### Step 6.5: Send and Mark Sent
+
+When a draft has `draftStatus = "ready"` and the user approves sending (or auto-send is enabled):
+
+1. Send via Gmail MCP:
+```
+mcp__claude_ai_Gmail__send({
+  to: client.email,
+  subject: "<subject line from draft>",
+  body: client.draft
+})
+```
+
+2. **Immediately after send succeeds** — in the same step, no delay — mark it:
+```
+mcp__precrime-mcp__update_client({
+  id: clientId,
+  draftStatus: "sent",
+  sentAt: new Date().toISOString()
+})
+```
+
+**These two calls are atomic. Never call gmail send without the update_client that follows.** If gmail send fails, do NOT mark sent — leave as "ready" and log the failure.
+
+This prevents re-enrichment and re-composition in future sessions. `get_ready_drafts()` excludes sent clients automatically. If the user tells you a draft was sent manually (copy-paste, another email client), mark it now with `sentAt` set to the current time.
 
 ### Step 7: Next Client
 

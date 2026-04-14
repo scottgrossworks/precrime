@@ -36,7 +36,9 @@ PRECRIME/
 │   │   ├── init-wizard.md            ← bootstrap skill (runs on first launch)
 │   │   ├── enrichment-agent.md       ← main enrichment pipeline
 │   │   ├── factlet-harvester.md      ← RSS harvester
-│   │   ├── reddit-factlet-harvester.md ← Reddit harvester
+│   │   ├── reddit-factlet-harvester/
+│   │   │   ├── SKILL.md              ← Reddit harvester
+│   │   │   └── reddit_sources.md     ← one subreddit per line, # for comments
 │   │   ├── fb-factlet-harvester/
 │   │   │   ├── SKILL.md              ← Facebook harvester
 │   │   │   └── fb_sources.md         ← one FB URL per line, # for comments

@@ -1,6 +1,6 @@
 ---
 name: {{DEPLOYMENT_NAME}}-ig-factlet-harvester
-description: Harvest Instagram posts from curated accounts and hashtags, then create factlets or capture leads
+description: Scrape curated Instagram profiles and hashtags for relevant posts and create factlets
 triggers:
   - harvest instagram factlets
   - scrape instagram
@@ -11,123 +11,156 @@ triggers:
 
 # {{DEPLOYMENT_NAME}} — Instagram Factlet & Lead Harvester
 
-You harvest Instagram posts from curated business accounts and hashtags using `tools/ig_harvest.py` (Instaloader, no auth required for public profiles) and classify each post into one of four output paths. The script handles the fetch (zero Claude tokens). You handle the judgment.
+You scrape curated Instagram profiles and hashtag pages for broadly applicable news relevant to selling the product (per `DOCS/VALUE_PROP.md`) and create factlets for the broadcast queue.
 
-**Requires:** `pip install instaloader`
+**Before running: read `DOCS/VALUE_PROP.md`** for product name, audience, and relevance signals.
 
-**No API keys required.** Public profiles only. No login. No DMs, stories, or private accounts.
+**This skill REQUIRES Chrome.** If Chrome is not connected, STOP immediately and tell the user.
+
+## Source File
+
+`skills/ig-factlet-harvester/ig_sources.md`
+
+Only scrape accounts and hashtags listed in that file. Never add new sources mid-run.
 
 ## Tools
 
 | Tool | Purpose |
 |------|---------|
-| `Bash` | Run ig_harvest.py to fetch posts → JSON files |
-| `Read` | Read the output JSON files |
-| `mcp__precrime-mcp__create_factlet` | Save broadly applicable intel |
+| `mcp__Claude_in_Chrome__tabs_context_mcp` | Verify Chrome is connected (call ONCE) |
+| `mcp__Claude_in_Chrome__navigate` | Navigate to each IG profile/hashtag page |
+| `mcp__Claude_in_Chrome__computer` | Wait, scroll |
+| `mcp__Claude_in_Chrome__get_page_text` | Extract post captions and metadata |
+| `mcp__precrime-mcp__create_factlet` | Save qualifying posts as factlets |
 | `mcp__precrime-mcp__get_new_factlets` | Check existing queue (dedup) |
-| `mcp__precrime-mcp__search_clients` | Check if a person/org is already a client |
+| `mcp__precrime-mcp__search_clients` | Check if person/org is already a client |
 | `mcp__precrime-mcp__update_client` | Append to existing client's dossier |
-| `mcp__precrime-mcp__create_booking` | Create a booking for Lead Capture hot path |
-
-## Configuration
-
-Read `ig/ig_config.json` for the account list, hashtags, and limits.
-
-Source accounts and hashtags are also listed in `skills/ig-factlet-harvester/ig_sources.md` for human review.
+| `mcp__precrime-mcp__create_client` | Create new client (lead capture paths) |
+| `mcp__precrime-mcp__create_booking` | Create booking (hot lead path) |
+| `mcp__precrime-mcp__get_config` | Read config (check leadCaptureEnabled) |
 
 ## Procedure
 
-### Step 1: Fetch Posts
+### Step 0: Pre-flight
 
-**Option A — Config-driven (preferred):**
+1. `tabs_context_mcp({ createIfEmpty: true })` — if this fails, wait 3 seconds and retry once. If still failing, STOP.
+2. Read `skills/ig-factlet-harvester/ig_sources.md`. Parse all sources (skip lines starting with `#` or blank). Separate into ACCOUNTS (`@handle` lines) and HASHTAGS (`#tag` lines).
+3. `get_new_factlets({ since: "1970-01-01T00:00:00Z" })` — load full queue for dedup.
+4. `get_config()` — check `leadCaptureEnabled`.
 
-```bash
-python tools/ig_harvest.py --config ig/ig_config.json
-```
+### Step 0.5: Discover AI Assistant
 
-Runs all accounts and hashtags in one pass. Output lands in `./scrapes/{YYYY-MM-DD}/`.
+Scan open tabs for `gemini.google.com` or `grok.com`. Store as `SESSION_AI = { gemini: <tabId> | null, grok: <tabId> | null }`. If neither found, set `SESSION_AI = null`; Gemini steps below will be skipped.
 
-- Account files: `ig_account_{username}.json`
-- Hashtag files: `ig_hashtag_{tag}.json`
+### Step 1: Activity Screen (fast pass)
 
-**Option B — Single target:**
+Before deep-scraping any account, do a quick activity check:
 
-```bash
-python tools/ig_harvest.py --account {username} --limit 20
-python tools/ig_harvest.py --hashtag {tag} --limit 25
-```
+For each @account in ig_sources.md:
 
-Each JSON file contains `scrape_settings` (source, timestamp, count) and a `data` array.
-Each post in `data` has: `id`, `text`, `author`, `likes`, `comments`, `created_utc`, `created_iso`, `permalink`, `location`, `hashtags`, `is_video`.
+1. Navigate to `https://www.instagram.com/{handle}/`
+2. Wait 3 seconds (IG is heavily JS-rendered)
+3. `get_page_text` — scan for the most recent post date
+4. **If the page shows "login required" or redirects to login:** mark as BLOCKED, skip. Note in report.
+5. **If the profile is private or doesn't exist:** mark as PRIVATE/404, skip. Note in report.
+6. **If most recent post is older than 60 days:** mark as STALE, skip. Note in report.
+7. **If the profile has recent posts:** add to active list with a text sample. Proceed to Step 1.5.
 
-**If ig_harvest.py fails entirely** (instaloader broken, Instagram blocking):
-Use Chrome MCP as fallback. Navigate to `https://www.instagram.com/{username}/`, wait 3 seconds, scroll down twice, `get_page_text`. Extract post captions and timestamps from the page text. Log as `SCRAPE_FALLBACK_CHROME — @{username}` in the report.
+This prevents wasting tokens on dead or blocked profiles. Move fast, ~5 seconds per account.
 
-### Step 2: Load Existing Factlets (dedup)
+### Step 1.5: Bulk Relevance Pre-filter via Gemini (if SESSION_AI available)
 
-```
-mcp__precrime-mcp__get_new_factlets({ since: "30 days ago ISO" })
-```
+**Skip to Step 2 if SESSION_AI is null.**
 
-Build a list of existing factlet topics. Any post covering the same ground gets skipped.
+After the activity screen, you have a list of active accounts plus a short text sample from each.
 
-### Step 3: Classify Each Post — Four Output Paths
+1. Compile a numbered list: `[N] @{handle} -- [{first 50 words of activity-screen text}]`
+2. Navigate to Gemini tab and paste:
+   > "We sell [PRODUCT_NAME] to [AUDIENCE_DESCRIPTION]. From this numbered list of Instagram accounts, return ONLY the numbers of accounts likely to contain relevant buying signals, industry trends, or pain points for this audience. Comma-separated numbers only, no explanation."
+   (Fill [PRODUCT_NAME] and [AUDIENCE_DESCRIPTION] from DOCS/VALUE_PROP.md)
+3. Wait 5 seconds. Read response via `get_page_text`.
+4. Parse the comma-separated list. Only run Step 2 deep scrape on those accounts. Mark the rest as `GEMINI_FILTERED` in the report.
+5. Log: `Gemini pre-filter: [N active accounts] -> [M selected for deep scrape]`
 
-For every post in every JSON file, answer the classification questions IN ORDER.
+### Step 2: Deep Scrape Accounts (Gemini-selected only)
+
+For each selected account:
+
+1. Navigate to `https://www.instagram.com/{handle}/` (may already be there from activity screen)
+2. Scroll down twice: `scroll down 5 ticks` -> wait 1s -> `scroll down 5 ticks`
+3. `get_page_text` — capture full visible post feed
+4. Extract from each visible post: caption text, hashtags in caption, location tag (if any), approximate date, author handle
+
+### Step 3: Scrape Hashtag Pages
+
+For each #hashtag in ig_sources.md:
+
+1. Navigate to `https://www.instagram.com/explore/tags/{hashtag}/`
+2. Wait 3 seconds
+3. `get_page_text` — extract visible post previews
+4. **If the page shows "login required" or redirects:** mark as BLOCKED, skip. Note in report.
+5. Scroll down once: `scroll down 5 ticks` -> wait 1s
+6. `get_page_text` — capture additional posts
+7. Extract: caption text, author handle, location (if visible), approximate date, hashtags
+
+**Note:** Hashtag pages show top + recent posts. Focus on recent posts.
+
+### Step 4: Classify Each Post — Four Output Paths
+
+For every extracted post (from both accounts and hashtags), answer the classification questions IN ORDER.
 
 **Skip the post entirely if:**
-- `created_iso` is older than `recencyDays` in config (default: 30 days)
-- `text` is empty and no location or hashtags to evaluate
-- `scrape_settings.error` is set (file represents a failed scrape)
+- Post date is older than 30 days
+- Caption text is empty with no useful metadata
+- Post is clearly self-promotional spam (pure ad copy with no intel value)
 
 **For each remaining post:**
 
-**1. Is this about a specific person or organization?**
+**Q1: Is this about a specific person or organization?**
 
-- **NO** → evaluate as **Factlet** candidate (Step 4A)
-- **YES** → continue to question 2
+- **NO** -> evaluate as **Factlet** candidate (Step 5A)
+- **YES** -> continue to Q2
 
-**2. Is this person/org already in the DB?**
+**Q2: Is this person/org already in the DB?**
 
 ```
 mcp__precrime-mcp__search_clients({ search: "{name or org}", limit: 1 })
 ```
 
-- **YES (match found)** → **Dossier** update (Step 4B)
-- **NO** → continue to question 3
+- **YES (match found)** -> **Dossier** update (Step 5B)
+- **NO** -> continue to Q3
 
-**3. Does this post contain booking details?**
+**Q3: Does this post contain booking details AND is `leadCaptureEnabled` true?**
 
-Check for ALL THREE:
+Check `leadCaptureEnabled` from config (Step 0). If false -> skip. Log: `LEAD_CAPTURE_OFF -- [name/org]`
+
+If enabled, check for ALL THREE:
 - **Trade** — what service is needed? (maps to a Leedz trade name)
 - **Date** — when is the event?
 - **Location or zip** — where?
 
-- **YES (all three present)** → **Lead Capture HOT** (Step 4D)
-- **NO (missing any)** → **Lead Capture THIN** (Step 4C)
+- **YES (all three present)** -> **Lead Capture HOT** (Step 5D)
+- **NO (missing any)** -> **Lead Capture THIN** (Step 5C)
 
-### Step 4A: Factlet Path
+### Step 5A: Factlet Path
 
 Apply the three-question relevance filter:
 
 **Q1: Relevant to selling [PRODUCT_NAME] to [AUDIENCE_DESCRIPTION]?**
 (Use product name and audience from DOCS/VALUE_PROP.md)
 
-RELEVANT topics:
-(See "Relevance Signals — Relevant" section in DOCS/VALUE_PROP.md)
-
-NOT RELEVANT:
-(See "Relevance Signals — Not Relevant" section in DOCS/VALUE_PROP.md)
+RELEVANT: (See "Relevance Signals -- Relevant" section in DOCS/VALUE_PROP.md)
+NOT RELEVANT: (See "Relevance Signals -- Not Relevant" section in DOCS/VALUE_PROP.md)
 
 **Q2: Broadly applicable to multiple clients?**
 
-Industry-wide trends, policy changes, market shifts, sector news → YES.
-One account's self-promotion, one org's internal event → NO.
+Industry-wide trends, policy changes, market shifts, sector news -> YES.
+One account's self-promotion, one org's internal event -> NO.
 
 **Q3: Recent enough to matter?**
 
 - Posted within 7 days: strong candidate
-- 7–30 days: include if major trend
+- 7-30 days: include if major trend
 - 30+ days: skip
 
 If all three pass:
@@ -135,14 +168,14 @@ If all three pass:
 ```
 mcp__precrime-mcp__create_factlet({
   content: "[2-3 sentences. What. Why it matters for the target decision-makers. Implication.]",
-  source: "https://www.instagram.com/p/{post.id}/"
+  source: "instagram:@{account_handle}"
 })
 ```
 
 Rules: 2-3 sentences. No opinions. No mention of the product.
-One factlet per distinct topic — not one per post. If two posts cover the same news, write one factlet.
+One factlet per distinct topic, not one per post. If two posts cover the same news, write one factlet.
 
-### Step 4B: Dossier Path
+### Step 5B: Dossier Path
 
 This post is about an existing client. Append to their dossier:
 
@@ -153,103 +186,122 @@ mcp__precrime-mcp__update_client({
 })
 ```
 
-### Step 4C: Lead Capture THIN
+### Step 5C: Lead Capture THIN
 
-New potential client, vague — no concrete booking details.
-
-**Only if `leadCaptureEnabled` is true in config.** Skip otherwise.
-
-Note in the report: "Thin lead: @{author} — {summary}. Flagged for review."
-
-When lead capture is active, the orchestrator creates the client. This skill flags only.
-
-### Step 4D: Lead Capture HOT
-
-New client WITH booking details — trade + date + location all present.
-
-**Only if `leadCaptureEnabled` is true in config.** Skip otherwise.
-
-Note in the report with full details:
-- **Who:** {author or org name}
-- **Trade:** {what service they need}
-- **Date:** {when}
-- **Location:** {where}
-- **Source:** `https://www.instagram.com/p/{post.id}/`
-- **Snippet:** {relevant quote from caption}
-
-Source field format: `"instagram:@{username}"` or `"instagram:#{hashtag}"`
-SourceUrl format: `"https://www.instagram.com/p/{shortcode}/"`
-
-When lead capture is active, the orchestrator creates client + booking. Skill flags and reports.
-
-## Step 5: Report
-
-After processing all files:
+New potential client, no concrete booking details.
 
 ```
-Instagram Harvest Report — {date}
-====================================
-Accounts harvested: N
-Hashtags harvested: N
-Posts fetched: N
-Posts evaluated: N (after recency filter)
+mcp__precrime-mcp__create_client({
+  company: "{name or org}",
+  dossier: "[{today}] Discovered via Instagram @{source_account}: {summary}",
+  segment: "ig_lead"
+})
+```
 
-Scrape errors:
-  @{account}: {error} (if any)
-  #{hashtag}: {error} (if any)
+### Step 5D: Lead Capture HOT
+
+New client WITH booking details: trade + date + location all present.
+
+```
+mcp__precrime-mcp__create_client({
+  company: "{name or org}",
+  dossier: "[{today}] Discovered via Instagram @{source_account}: {summary}",
+  segment: "ig_lead"
+})
+```
+
+Then immediately:
+
+```
+mcp__precrime-mcp__create_booking({
+  clientId: "{new client id}",
+  trade: "{matched trade}",
+  startDate: "{ISO date}",
+  location: "{location}",
+  zip: "{zip if known}",
+  source: "instagram:@{source_account}",
+  sourceUrl: "https://www.instagram.com/p/{shortcode}/",
+  status: "leed_ready",
+  notes: "{relevant quote from caption}"
+})
+```
+
+Run Booking Completeness Check after creation.
+
+### Step 6: Report
+
+After processing all accounts and hashtags:
+
+```
+Instagram Harvest Report -- {date}
+====================================
+Accounts in source file:  N
+Hashtags in source file:  N
+
+Activity screen:
+  Active accounts:        N
+  Stale (60+ days):       N (list handles)
+  Private/404:            N (list handles)
+  Blocked (login req):    N (list handles/tags)
+
+Gemini pre-filter: N active -> M selected (or "Gemini not available -- all active accounts evaluated")
+
+Posts evaluated:          N
 
 Output path breakdown:
-  Factlets created:     N (with summaries)
-  Dossier updates:      N (client name + finding)
-  Lead Capture thin:    N (flagged for review)
-  Lead Capture hot:     N (flagged with full details)
-  Duplicates skipped:   N
-  Irrelevant skipped:   N
-  Too old skipped:      N
-  Empty/error skipped:  N
+  Factlets created:       N (with summaries)
+  Dossier updates:        N (client name + finding)
+  Lead Capture thin:      N (name + summary)
+  Lead Capture hot:       N (with booking details)
+  Duplicates skipped:     N
+  Irrelevant skipped:     N
+  Too old skipped:        N
+  Empty/spam skipped:     N
 ```
+
+## Performance Targets
+
+- Activity screen: ~5 seconds/account (IG renders slower than FB)
+- Deep scrape: ~10 seconds/account
+- Hashtag page: ~8 seconds/tag
+- Expected factlet yield: 2-5 per full run
 
 ## Rules
 
-- ig_harvest.py does the fetch. Claude does the judgment. Never use WebFetch for Instagram.
-- Only scrape accounts and hashtags listed in `ig/ig_config.json`.
-- One factlet per distinct topic — not one per post.
-- Do NOT interact with Instagram (no likes, follows, comments, DMs).
-- Do NOT follow external links in captions. Evaluate caption text + metadata only.
-- Do NOT scrape private accounts, stories, or reels audio.
-- Lead Capture is opt-in. If `leadCaptureEnabled` is false, flag but do not create records.
-- If a scrape returns `LOGIN_REQUIRED`, log it and skip — do not attempt to authenticate.
-- Dossier entries are timestamped prose. Include the account handle.
+- Reuse the same Chrome tab for every page, do NOT create new tabs
+- Do NOT scrape accounts or hashtags not in ig_sources.md
+- Do NOT create factlets for single-org events (dossier material)
+- Do NOT run without Chrome connected
+- Do NOT interact with Instagram (no likes, follows, comments, DMs)
+- Do NOT follow external links in captions, evaluate caption text + metadata only
+- Do NOT scrape private accounts, stories, or reels audio
+- If a page shows "login required", skip it. Never attempt to authenticate.
+- Source field format: `"instagram:@{handle}"` or `"instagram:#{hashtag}"`
 
 ---
 <!-- CUSTOMIZATION NOTES FOR DEPLOYER
      ================================
-     1. Edit ig/ig_config.json to add accounts and hashtags for your audience.
-        - accounts: public business Instagram pages in your industry
-          (associations, publications, competitor pages, community hubs)
-        - hashtags: tags your buyers use when discussing their events/needs
-          e.g. "#corporateevent", "#hiringSEL", "#teambuilding"
+     This skill is identical in structure across all deployments.
+     The only thing that changes is:
 
-     2. The four-way classification (factlet / dossier / lead thin / lead hot)
-        is identical across all harvesters. The relevance criteria (Q1) come
-        from your manifest.
+     1. ig_sources.md -- the list of Instagram accounts and hashtags to scrape.
+        Populate this with:
+        - Industry association accounts
+        - Trade publication accounts
+        - Competitor accounts (market intelligence)
+        - Community hub accounts where your buyers congregate
+        - Hashtags your buyers use for events/buying signals
 
-     3. Rate limits: Instagram allows ~100-200 public profile fetches per
-        session without login. The script adds 3s between accounts and 30s
-        between hashtags. For large account lists (20+), consider splitting
-        across multiple days or using --account in separate runs.
+     2. The relevance criteria (Q1) -- already substituted from your manifest.
+        Make sure they match your relevance-judge.md criteria.
 
-     4. Hashtag scraping is more heavily throttled than profile scraping.
-        Start with 3-5 hashtags. If you hit RATE_LIMITED errors consistently,
-        remove hashtags and rely on account-based scraping instead.
+     3. The STALE threshold (60 days) -- adjust if your audience posts less frequently.
 
-     5. Chrome MCP fallback: if instaloader is blocked for a session, you can
-        manually navigate to instagram.com/{username} in Chrome, scroll, and
-        use get_page_text to extract posts. Log as SCRAPE_FALLBACK_CHROME.
-        This is a last resort — it costs more tokens and is less structured.
+     CHROME REQUIREMENT: This skill requires the Claude-in-Chrome MCP extension.
+     The extension connects automatically if it is running in the browser.
+     No special claude launch flags are needed.
 
-     6. Lead capture use case: hashtag scraping is most useful for lead capture
-        (e.g., "#needaDJ", "#eventvendorneeded"). Account scraping is most
-        useful for factlets (industry associations, news accounts, trade bodies).
-        Adjust your config accordingly.
+     INSTAGRAM RATE LIMITS: Instagram may throttle or block repeated scraping.
+     Space runs 6+ hours apart. If you consistently get blocked, reduce the number
+     of hashtags (they trigger blocks more than profile pages).
 -->

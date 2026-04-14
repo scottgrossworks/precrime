@@ -12,24 +12,52 @@
 const readline = require('readline');
 const fs = require('fs');
 const path = require('path');
+
+const PRECRIME_ROOT = path.resolve(__dirname, '..', '..');
+
+// DATABASE_URL must be set BEFORE requiring PrismaClient.
+// PrismaClient's require() triggers dotenv loading which can set DATABASE_URL
+// from a stale .env file. Setting it here first prevents that.
+if (process.env.DATABASE_URL) {
+    // If env var exists but has a relative path, resolve from project root
+    let raw = process.env.DATABASE_URL.replace(/^"/, '').replace(/"$/, '');
+    const filePath = raw.replace(/^file:/, '');
+    if (!path.isAbsolute(filePath)) {
+        const resolved = path.resolve(PRECRIME_ROOT, filePath);
+        process.env.DATABASE_URL = 'file:' + resolved;
+    }
+} else {
+    // No env var at all — default to data/myproject.sqlite
+    process.env.DATABASE_URL = 'file:' + path.resolve(PRECRIME_ROOT, 'data', 'myproject.sqlite');
+}
+
+// Final safety: verify the resolved DB file actually exists
+const resolvedDbPath = process.env.DATABASE_URL.replace(/^file:/, '');
+if (!fs.existsSync(resolvedDbPath)) {
+    const fallback = path.resolve(PRECRIME_ROOT, 'data', 'myproject.sqlite');
+    console.error(`[MCP] WARNING: DB not found at ${resolvedDbPath}`);
+    if (fs.existsSync(fallback)) {
+        console.error(`[MCP] Falling back to ${fallback}`);
+        process.env.DATABASE_URL = 'file:' + fallback;
+    } else {
+        console.error(`[MCP] FATAL: No database found. Expected: ${resolvedDbPath}`);
+        process.exit(1);
+    }
+}
+
 const { PrismaClient } = require('@prisma/client');
 
-// Load config
+// Internal config (logging, MCP metadata)
 const CONFIG_PATH = path.resolve(__dirname, 'mcp_server_config.json');
-console.error(`[MCP] Loading config from: ${CONFIG_PATH}`);
-
 let config;
 try {
     config = JSON.parse(fs.readFileSync(CONFIG_PATH, 'utf8'));
-    console.error(`[MCP] Config loaded successfully`);
 } catch (error) {
-    console.error(`[MCP] FATAL: Failed to load config: ${error.message}`);
+    console.error(`[MCP] FATAL: mcp_server_config.json not found: ${error.message}`);
     process.exit(1);
 }
 
-// Initialize Prisma with database path from config
-const dbPath = path.resolve(__dirname, '..', config.database.path);
-process.env.DATABASE_URL = `file:${dbPath}`;
+const dbPath = process.env.DATABASE_URL.replace(/^file:/, '');
 const prisma = new PrismaClient();
 console.error(`[MCP] Database: ${dbPath}`);
 
@@ -243,6 +271,7 @@ function handleToolsList(id) {
                             targetUrls: { type: 'string', description: 'JSON array of discovered URLs: [{url, type, label}]' },
                             draft: { type: 'string' },
                             draftStatus: { type: 'string' },
+                            sentAt: { type: 'string', description: 'ISO datetime — when draft was sent' },
                             warmthScore: { type: 'number' },
                             lastEnriched: { type: 'string', description: 'ISO datetime' },
                             lastQueueCheck: { type: 'string', description: 'ISO datetime' }
@@ -570,7 +599,7 @@ async function handleUpdateClient(id, params) {
 
     const allowedFields = [
         'name', 'email', 'phone', 'company', 'website', 'clientNotes',
-        'dossier', 'targetUrls', 'draft', 'draftStatus', 'warmthScore',
+        'dossier', 'targetUrls', 'draft', 'draftStatus', 'sentAt', 'warmthScore',
         'dossierScore', 'contactGate', 'intelScore',
         'lastEnriched', 'lastQueueCheck'
     ];
@@ -578,7 +607,7 @@ async function handleUpdateClient(id, params) {
     const data = {};
     for (const field of allowedFields) {
         if (args[field] !== undefined) {
-            if (field === 'lastEnriched' || field === 'lastQueueCheck') {
+            if (field === 'lastEnriched' || field === 'lastQueueCheck' || field === 'sentAt') {
                 data[field] = new Date(args[field]);
             } else if (field === 'warmthScore') {
                 data[field] = parseFloat(args[field]);

@@ -210,7 +210,9 @@ const dirs = [
   path.join(outputDir, 'rss', 'rss-scorer-mcp'),
   path.join(outputDir, 'reddit'),
   path.join(outputDir, 'ig'),
+  path.join(outputDir, 'skills', 'reddit-factlet-harvester'),
   path.join(outputDir, 'skills', 'ig-factlet-harvester'),
+  path.join(outputDir, 'skills', 'x-factlet-harvester'),
   path.join(outputDir, 'skills', 'source-discovery'),
 ];
 dirs.forEach(mkdir);
@@ -327,11 +329,10 @@ if (!noInstall) {
   console.log('[--no-install] Skipping prisma db push + npm prune (run setup.bat on target)');
 }
 
-// 4. Generate mcp_server_config.json (DB path for MCP server)
+// 4. Generate mcp_server_config.json (logging + MCP metadata only — DB path is set via DATABASE_URL env var by precrime.bat)
 const mcpServerCfg = {
-  mcp:      { name: `${manifest.deployment.name}-mcp`, version: '2.0.0', protocolVersion: '2025-06-18' },
-  database: { path: path.relative(path.join(outputDir, 'server'), dbDest).replace(/\\/g, '/') },
-  logging:  { level: 'info', file: './mcp_server.log' }
+  mcp:     { name: `${manifest.deployment.name}-mcp`, version: '2.0.0', protocolVersion: '2025-06-18' },
+  logging: { level: 'info', file: './mcp_server.log' }
 };
 write(path.join(outputDir, 'server', 'mcp', 'mcp_server_config.json'), JSON.stringify(mcpServerCfg, null, 2));
 
@@ -390,9 +391,12 @@ console.log('\nSkill playbooks:');
   ['skills/factlet-harvester.md',             'skills/factlet-harvester.md'],
   ['skills/fb-factlet-harvester/SKILL.md',    'skills/fb-factlet-harvester/SKILL.md'],
   ['skills/fb-factlet-harvester/fb_sources.md','skills/fb-factlet-harvester/fb_sources.md'],
-  ['skills/reddit-factlet-harvester.md',      'skills/reddit-factlet-harvester.md'],
+  ['skills/reddit-factlet-harvester/SKILL.md',      'skills/reddit-factlet-harvester/SKILL.md'],
+  ['skills/reddit-factlet-harvester/reddit_sources.md','skills/reddit-factlet-harvester/reddit_sources.md'],
   ['skills/ig-factlet-harvester/SKILL.md',    'skills/ig-factlet-harvester/SKILL.md'],
   ['skills/ig-factlet-harvester/ig_sources.md','skills/ig-factlet-harvester/ig_sources.md'],
+  ['skills/x-factlet-harvester/SKILL.md',    'skills/x-factlet-harvester/SKILL.md'],
+  ['skills/x-factlet-harvester/x_sources.md','skills/x-factlet-harvester/x_sources.md'],
   ['skills/source-discovery.md',              'skills/source-discovery.md'],
   ['skills/source-discovery/discovered_directories.md', 'skills/source-discovery/discovered_directories.md'],
   ['skills/init-wizard.md',                   'skills/init-wizard.md'],
@@ -426,9 +430,10 @@ Next steps:
   2. Review and tune skill files in skills/
   3. Add RSS feeds: rss/rss-scorer-mcp/rss_config.json
   4. Add Facebook pages: skills/fb-factlet-harvester/fb_sources.md
-  5. Add Reddit subreddits/keywords: reddit/reddit_config.json
+  5. Add Reddit subreddits: skills/reddit-factlet-harvester/reddit_sources.md
   6. Add Instagram accounts/hashtags: ig/ig_config.json
-  7. Unzip on target machine → cd precrime → precrime
+  7. Add X/Twitter sources: skills/x-factlet-harvester/x_sources.md
+  8. Unzip on target machine → cd precrime → precrime
 
 ${'='.repeat(65)}
 `);

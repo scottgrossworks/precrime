@@ -25,7 +25,7 @@ You are getting Pre-Crime ready to run. Ask questions in order. One topic at a t
 
 Try calling `get_config()`.
 
-- **If it works** → proceed to Step 0.
+- **If it works** → proceed to Step 0 (Detect Returning User).
 - **If it fails for ANY reason** — MCP not connected, DB missing, table missing, any error at all — say:
 
 > "Something's not right. Close this window and run `precrime` again."
@@ -35,6 +35,8 @@ Try calling `get_config()`.
 ---
 
 ## Step 0: Detect Returning User
+
+The database is set by `precrime.bat` via the `DATABASE_URL` environment variable. The user's startup prompt includes `(database: <filename>)` — note it for display but no config file is needed.
 
 Call both in sequence:
 ```
@@ -57,7 +59,14 @@ If `clients > 0` AND (`enrichedClients > 0` OR `brewingDrafts > 0` OR `readyDraf
 - **Resume** → skip to Step 7 (summary) and then Step 8 (launch). Do NOT re-ask config questions that are already set. Factlets in the DB are intact — the enrichment agent will check for new ones since each client's last queue check.
 - **Fresh** → proceed to Step 1 below. (Config values already set will be shown but not re-asked.)
 
-If stats show `clients = 0` OR no enrichment data at all → this is a first-run. Proceed to Step 1 without asking.
+If stats show `clients = 0` OR no enrichment data at all → this is a first-run. Say:
+
+> "Starting fresh with an empty database. If you have a migrated database you'd like to use instead, close this window and run:
+> `precrime your_database_name`
+>
+> Otherwise — let's get started."
+
+Wait for the user to respond before proceeding to Step 1.
 
 ---
 
@@ -262,15 +271,17 @@ If VALUE_PROP.md still needs to be written: remind them once — "Fill in DOCS/V
 
 Ask:
 
-> "Where should the harvesters look for leads? I can monitor Facebook groups/pages, subreddits, or any public community.
+> "Where should the harvesters look for leads? I can monitor Facebook groups/pages, subreddits, X/Twitter accounts, Instagram profiles/hashtags, or any public community.
 >
-> Examples: 'LA Wedding Planning' Facebook group, r/weddingplanning, r/LAevents, a local events news feed.
+> Examples: 'LA Wedding Planning' Facebook group, r/weddingplanning, r/LAevents, @EventProNews on X, @VenueNameLA on Instagram, #LAevents, a local events news feed.
 >
 > List what you know — or say 'skip' and I'll start with a broad keyword search."
 
 For each source mentioned:
 - Facebook page or group URL → append to `skills/fb-factlet-harvester/fb_sources.md` (create if missing)
-- Subreddit name → note as session context (reddit harvest list)
+- Subreddit name → append to `skills/reddit-factlet-harvester/reddit_sources.md`
+- X handle or keyword → append to `skills/x-factlet-harvester/x_sources.md`
+- Instagram account or hashtag → append to `skills/ig-factlet-harvester/ig_sources.md`
 - RSS URL → note as session context (add to RSS config)
 
 If user says 'skip':
@@ -289,15 +300,25 @@ Say:
 > Watch `logs/ROUNDUP.md` for live progress."
 
 **If `leedzMode = true` OR `leadCaptureEnabled = true`:**
-1. Run `skills/fb-factlet-harvester/SKILL.md`
-2. Run `skills/factlet-harvester.md`
-3. Run `skills/enrichment-agent.md`
+1. Run `skills/source-discovery.md` — expand FB pages, subreddits, RSS feeds, IG accounts, directories from VALUE_PROP.md
+2. Run `skills/client-seeder.md` — scrape discovered sources for contacts, create thin client records
+3. Run `skills/fb-factlet-harvester/SKILL.md` — harvest Facebook factlets (also discovers clients)
+4. Run `skills/ig-factlet-harvester/SKILL.md` — harvest Instagram factlets (also discovers clients, requires Chrome)
+5. Run `skills/reddit-factlet-harvester/SKILL.md` — harvest Reddit factlets (also discovers clients)
+6. Run `skills/x-factlet-harvester/SKILL.md` — harvest X factlets (also discovers clients)
+7. Run `skills/factlet-harvester.md` — harvest RSS factlets (also discovers clients)
+8. Run `skills/enrichment-agent.md` — enrich all clients (new + old), score, draft emails
 
 **If outreach-only (`leedzMode = false`, `leadCaptureEnabled = false`):**
-1. Run `skills/factlet-harvester.md`
-2. Run `skills/enrichment-agent.md`
+1. Run `skills/source-discovery.md` — expand source list
+2. Run `skills/client-seeder.md` — scrape for contacts
+3. Run `skills/ig-factlet-harvester/SKILL.md` — harvest Instagram factlets (requires Chrome)
+4. Run `skills/reddit-factlet-harvester/SKILL.md` — harvest Reddit factlets
+5. Run `skills/x-factlet-harvester/SKILL.md` — harvest X factlets
+6. Run `skills/factlet-harvester.md` — harvest RSS factlets
+7. Run `skills/enrichment-agent.md` — enrich, score, draft
 
-Harvesters run first — their factlets enrich the first wave of clients.
+Source discovery and client seeding run first — they populate the source configs and seed the DB with contacts. Harvesters run next — their factlets enrich the client records. Enrichment runs last — it takes every client (new and old) through deep research, scoring, and draft composition.
 
 **CRITICAL: Run all steps sequentially regardless of intermediate results. Zero articles from RSS is not a failure. Zero factlets is not a failure. An empty DB is not a failure. Do NOT stop between steps to ask the user what to do. Do NOT present options. Execute all three steps and report at the end.**
 

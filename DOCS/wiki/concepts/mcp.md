@@ -101,7 +101,7 @@ Wired via `.mcp.json` in the workspace root. Claude Code reads `.mcp.json` at st
 
 **`score_client` details:**
 - Contact gate reuses `isGenericEmail()` — same 34-prefix list used by `score_booking`
-- Draft threshold: `dossierScore >= 5` (hardcoded, derived from evaluator minimum requirements)
+- Draft threshold: `dossierScore >= 5` (hardcoded, minimum intel bar). Full ready threshold also requires `warmthScore >= 9` (set by enrichment agent).
 - `intelScore` param (D2+D3, max 7) set by enrichment agent after scraping. Stored on client for recomputation.
 - See [[scoring]] for the full scoring system design.
 

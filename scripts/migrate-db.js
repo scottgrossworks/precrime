@@ -48,12 +48,14 @@ Usage:
 Options:
   --source <path>   SQLite file to migrate FROM (required, never modified)
   --target <path>   Output path (default: {source-name}-migrated.sqlite alongside source)
+  --exclude <list>  Comma-separated table names to skip (e.g., Booking,Config)
   --dry-run         Show migration plan without writing anything
   --help            This message
 
 Examples:
   node scripts/migrate-db.js --source data/leedz_3.24.2026.sqlite
   node scripts/migrate-db.js --source old.sqlite --target data/myproject.sqlite
+  node scripts/migrate-db.js --source old.sqlite --exclude Booking
   node scripts/migrate-db.js --source old.sqlite --dry-run
 `);
   process.exit(0);
@@ -78,6 +80,12 @@ const targetPath = getArg('--target')
 
 const dryRun = hasArg('--dry-run');
 
+// --exclude Booking,Config → skip those tables during migration
+const excludeArg = getArg('--exclude');
+const excludeSet = new Set(
+  excludeArg ? excludeArg.split(',').map(t => t.trim()) : []
+);
+
 // Locate template.sqlite relative to this script (PRECRIME/data/template.sqlite)
 const PRECRIME_ROOT = path.resolve(__dirname, '..');
 const templateDb    = path.join(PRECRIME_ROOT, 'data', 'template.sqlite');
@@ -96,14 +104,19 @@ const PC_SCHEMA = {
     ['company',        'TEXT',     null],
     ['website',        'TEXT',     null],
     ['clientNotes',    'TEXT',     null],
+    ['segment',        'TEXT',     null],
     ['dossier',        'TEXT',     null],
     ['targetUrls',     'TEXT',     null],
     ['draft',          'TEXT',     null],
     ['draftStatus',    'TEXT',     null],
+    ['sentAt',         'DATETIME', null],
     ['warmthScore',    'REAL',     null],
-    ['source',         'TEXT',     null],
+    ['dossierScore',   'INTEGER',  null],
+    ['contactGate',    'INTEGER',  '0'],
+    ['intelScore',     'INTEGER',  null],
     ['lastEnriched',   'DATETIME', null],
     ['lastQueueCheck', 'DATETIME', null],
+    ['source',         'TEXT',     null],
     ['createdAt',      'DATETIME', "CURRENT_TIMESTAMP"],
     ['updatedAt',      'DATETIME', "CURRENT_TIMESTAMP"],
   ],
@@ -131,7 +144,6 @@ const PC_SCHEMA = {
     ['sharedTo',         'TEXT',     null],
     ['sharedAt',         'INTEGER',  null],
     ['leedPrice',        'INTEGER',  null],
-    ['squarePaymentUrl', 'TEXT',     null],
     ['leedId',           'TEXT',     null],
     ['bookingScore',     'INTEGER',  null],
     ['contactQuality',   'TEXT',     null],
@@ -144,24 +156,33 @@ const PC_SCHEMA = {
     ['source',    'TEXT',     null],
     ['createdAt', 'DATETIME', "CURRENT_TIMESTAMP"],
   ],
+  ClientFactlet: [
+    ['id',         'TEXT',     null],
+    ['clientId',   'TEXT',     null],
+    ['factletId',  'TEXT',     null],
+    ['signalType', 'TEXT',     null],
+    ['points',     'INTEGER',  null],
+    ['appliedAt',  'DATETIME', "CURRENT_TIMESTAMP"],
+  ],
   Config: [
-    ['id',                  'TEXT',    null],
-    ['companyName',         'TEXT',    null],
-    ['companyEmail',        'TEXT',    null],
-    ['businessDescription', 'TEXT',    null],
-    ['activeEntities',      'TEXT',    null],
-    ['defaultTrade',        'TEXT',    null],
-    ['marketplaceEnabled',  'INTEGER', '0'],
-    ['leadCaptureEnabled',  'INTEGER', '0'],
-    ['llmApiKey',           'TEXT',    null],
-    ['llmProvider',         'TEXT',    null],
-    ['llmBaseUrl',          'TEXT',    null],
-    ['llmAnthropicVersion', 'TEXT',    null],
-    ['llmMaxTokens',        'INTEGER', '1024'],
-    ['leedzEmail',          'TEXT',    null],
-    ['leedzSession',        'TEXT',    null],
-    ['createdAt',           'DATETIME',"CURRENT_TIMESTAMP"],
-    ['updatedAt',           'DATETIME',"CURRENT_TIMESTAMP"],
+    ['id',                   'TEXT',    null],
+    ['companyName',          'TEXT',    null],
+    ['companyEmail',         'TEXT',    null],
+    ['businessDescription',  'TEXT',    null],
+    ['activeEntities',       'TEXT',    null],
+    ['defaultTrade',         'TEXT',    null],
+    ['defaultBookingAction', 'TEXT',    null],
+    ['marketplaceEnabled',   'INTEGER', '0'],
+    ['leadCaptureEnabled',   'INTEGER', '0'],
+    ['llmApiKey',            'TEXT',    null],
+    ['llmProvider',          'TEXT',    null],
+    ['llmBaseUrl',           'TEXT',    null],
+    ['llmAnthropicVersion',  'TEXT',    null],
+    ['llmMaxTokens',         'INTEGER', '1024'],
+    ['leedzEmail',           'TEXT',    null],
+    ['leedzSession',         'TEXT',    null],
+    ['createdAt',            'DATETIME',"CURRENT_TIMESTAMP"],
+    ['updatedAt',            'DATETIME',"CURRENT_TIMESTAMP"],
   ]
 };
 
@@ -187,9 +208,11 @@ const TABLE_ALIASES = {
   schools:  'Client',
   org:      'Client',
   orgs:     'Client',
-  factlet:  'Factlet',
-  factlets: 'Factlet',
-  facts:    'Factlet',
+  factlet:        'Factlet',
+  factlets:       'Factlet',
+  facts:          'Factlet',
+  clientfactlet:  'ClientFactlet',
+  clientfactlets: 'ClientFactlet',
   booking:  'Booking',
   bookings: 'Booking',
   gig:      'Booking',
@@ -227,6 +250,7 @@ console.log(`${'═'.repeat(62)}`);
 console.log(`  Source  : ${sourcePath}`);
 console.log(`  Target  : ${targetPath}`);
 console.log(`  Mode    : ${dryRun ? 'DRY RUN (no writes)' : 'LIVE'}`);
+if (excludeSet.size > 0) console.log(`  Exclude : ${[...excludeSet].join(', ')}`);
 console.log(`${'═'.repeat(62)}\n`);
 
 // ---------------------------------------------------------------------------
@@ -243,6 +267,24 @@ if (sourcePath === targetPath) {
   console.error(`ERROR: --source and --target cannot be the same file.`);
   console.error(`       The source is NEVER modified. Use a different --target path.`);
   process.exit(1);
+}
+
+// ---------------------------------------------------------------------------
+// Step 0: Checkpoint source WAL (flush any unflushed writes before reading)
+// ---------------------------------------------------------------------------
+
+const shmFile = sourcePath + '-shm';
+const walFile = sourcePath + '-wal';
+if (fs.existsSync(shmFile) || fs.existsSync(walFile)) {
+  console.log(`Checkpointing source WAL...`);
+  if (!dryRun) {
+    const ckDb = new DatabaseSync(sourcePath);
+    ckDb.exec('PRAGMA wal_checkpoint(TRUNCATE)');
+    ckDb.close();
+    console.log(`  WAL checkpointed — source is clean.`);
+  } else {
+    console.log(`  (dry-run) WAL files detected — would checkpoint before migrating.`);
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -298,6 +340,10 @@ const extraTables = []; // source tables that don't match any Pre-Crime table
 for (const sTable of sourceTables) {
   const pcTable = matchPcTable(sTable);
   if (pcTable) {
+    if (excludeSet.has(pcTable)) {
+      console.log(`  ✗ ${pcTable} — excluded by --exclude`);
+      continue;
+    }
     if (tableMap[pcTable]) {
       // Collision: two source tables map to same PC table — prefer exact match
       if (sTable === pcTable) tableMap[pcTable] = sTable;
@@ -406,6 +452,10 @@ try {
   console.error(`ERROR: Cannot open target database: ${e.message}`);
   process.exit(1);
 }
+
+// Disable FK checks during migration — Booking rows insert before Client rows
+// (alphabetical table order). Source DB already guarantees referential integrity.
+db.exec('PRAGMA foreign_keys = OFF');
 
 // ATTACH source (read-only, as 'src')
 const attachSql = `ATTACH DATABASE '${sqlitePath(sourcePath)}' AS src`;
@@ -525,7 +575,7 @@ try {
 }
 
 // ---------------------------------------------------------------------------
-// Step 7: Verify row counts (re-open target to confirm)
+// Step 6d: Verify row counts
 // ---------------------------------------------------------------------------
 
 console.log(`\nVerifying...`);
@@ -550,6 +600,26 @@ for (const [pcTable, counts] of Object.entries(report.rowsMigrated)) {
 }
 
 verify.close();
+
+// ---------------------------------------------------------------------------
+// Step 6e: Checkpoint WAL + switch to DELETE journal (no -shm/-wal artifacts)
+// ---------------------------------------------------------------------------
+
+console.log(`\nFinalizing output...`);
+const tgtCk = new DatabaseSync(targetPath);
+tgtCk.exec('PRAGMA wal_checkpoint(TRUNCATE)');
+tgtCk.exec('PRAGMA journal_mode = DELETE');
+tgtCk.close();
+
+const tgtShm = targetPath + '-shm';
+const tgtWal = targetPath + '-wal';
+if (fs.existsSync(tgtShm) || fs.existsSync(tgtWal)) {
+  try { if (fs.existsSync(tgtShm)) fs.unlinkSync(tgtShm); } catch (_) {}
+  try { if (fs.existsSync(tgtWal)) fs.unlinkSync(tgtWal); } catch (_) {}
+  console.log(`  Cleaned residual WAL files.`);
+} else {
+  console.log(`  Target is clean — single file, no WAL artifacts.`);
+}
 
 // ---------------------------------------------------------------------------
 // Final report

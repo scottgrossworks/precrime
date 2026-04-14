@@ -73,7 +73,7 @@ Attempted during development. Required Rust/Maturin to compile a native module (
 
 ## Skill
 
-`templates/skills/reddit-factlet-harvester.md` — skill playbook.
+`templates/skills/reddit-factlet-harvester/SKILL.md` — skill playbook. Subreddit list in `reddit_sources.md` (same folder).
 
 Follows the same four-path classification as all other harvesters. Output path for each classified item uses the standard MCP tools.
 

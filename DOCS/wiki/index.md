@@ -1,6 +1,6 @@
 # Pre-Crime Wiki — Master Catalog
 
-Last updated: 2026-04-11 (email-finder skill)
+Last updated: 2026-04-14 (warmth recalibration, X harvester, sentAt tracking)
 
 ---
 
@@ -29,8 +29,9 @@ An LLM agent entering a new session should:
 
 | File | Summary | Source docs | Staleness |
 |------|---------|-------------|-----------|
-| `status/current.md` | Authoritative current project state. Sessions 1-10 done list. 19 tools, precrime-mcp, leedz-share plugin separated. Workflow live — fine-tuning phase. Six critical design decisions. | STATUS.md | none |
+| `status/current.md` | Authoritative current project state. Sessions 1-14. 19 tools. Warmth recalibration (dual-gate: canDraft + warmthScore ≥ 9). Reddit restructured to folder pattern. X/Twitter harvester (Grok-first). sentAt draft tracking. Schema sync pending for sentAt. | STATUS.md | none |
 | `status/best-leads.md` | 6 bookings with named/personal contact emails (not info@, not null). Strongest outreach candidates: Lisa Williams (AAAE), N. Davis (NAMA), C. Spann (EVS39), Lauren Douglas (LA Sparks), GM Jin Ki Lim (TKD), Terri (LA Auto Show). | DB bookings | none |
+| `status/migration-disaster-2026-04-13.md` | 5+ hours burned on BLOOMLEEDZ deployment. Stale PC_SCHEMA, stale template DBs, no WAL checkpoint. 3 fuckups (#43-#45). Root cause: schema.prisma changes never propagated to migrate-db.js or template DBs. Binding rule: schema changes require 3-file sync. | Session log, FUCKUPS.md | none |
 
 ---
 
@@ -38,11 +39,11 @@ An LLM agent entering a new session should:
 
 | File | Summary | Source docs | Staleness |
 |------|---------|-------------|-----------|
-| `concepts/ontology.md` | Full v2.0 entity model (Client, Booking, Factlet, Config), four output paths with classification tree, conversion funnel, Booking Action Criterion, addLeed param mapping, seeded/unseeded deployments, three deployment archetypes, nine design rules. | ONTOLOGY.md, STATUS.md, IG_NOTES.md | suspected — ONTOLOGY.md header says "design spec not yet implemented" but STATUS.md says all tools are done |
+| `concepts/ontology.md` | Full v2.0 entity model (Client, Booking, Factlet, Config). Client fields updated: warmthScore (active, not deprecated), dossierScore, contactGate, sentAt. Dual-gate draft requirement documented. Four output paths including X/Twitter. Conversion funnel, Booking Action Criterion, addLeed param mapping, seeded/unseeded, three archetypes, nine design rules. | ONTOLOGY.md, STATUS.md, IG_NOTES.md | none |
 | `concepts/architecture.md` | System architecture: two MCP servers, local stdio vs remote API, DB path resolution, Prisma 5 version constraint, harvester token-zero pattern, data flow diagram, skill files table, key files reference. | STATUS.md, MCP_BRIEFING.md, DEPLOYMENT.md | none |
 | `concepts/deployment.md` | Build system and end-user flow: three-step user flow, precrime.bat mechanics, critical design decisions (blank DB, unconditional setup, skip-permissions), developer build flow, zip contents, deploy.js automated steps, manifest structure, troubleshooting table. | STATUS.md, DEPLOYMENT.md | suspected — DEPLOYMENT.md describes older flow (node deploy.js + manual steps) that predates v2.0 zip distribution |
 | `concepts/mcp.md` | All 19 MCP tools with args and purpose, transport config (3 config files), JWT details for leedzSession, what-not-to-do constraints, skill tool name format. Includes 3 scoring tools (link_factlet, get_client_factlets, score_client) added 2026-04-08. | STATUS.md, MCP_BRIEFING.md, DEPLOYMENT.md, PLAN.md | none |
-| `concepts/scoring.md` | Client scoring system: binary contact gate + continuous dossier score. Factlet storage model (join table, not prose duplication). Draft eligibility formula. Intel scoring rubric (D2+D3). score_client response format. Pipeline flow diagram. Step 3.6 hands off to email-finder to upgrade failing contact gates. | PLAN.md, EMAIL_FINDER.md, mcp_server.js, enrichment-agent.md, email-finder.md, evaluator.md | none |
+| `concepts/scoring.md` | Client scoring: binary contact gate + dossier score + warmth assessment (dual-gate system). warmthScore NOT deprecated — actively used, ≥ 9 required alongside canDraft. Two hard gates for 9+ (verified email + event signal). sentAt tracking for draft send audit trail. Full pipeline flow with 10 steps. | PLAN.md, EMAIL_FINDER.md, mcp_server.js, enrichment-agent.md, email-finder.md, evaluator.md | none |
 | `concepts/headless-deployment.md` | Headless PRECRIME on AWS: EC2 + Claude Code CLI + cron. Zero architecture changes. CLI flags for unattended execution. Pipeline as scheduled tasks. Comparison with Anthropic Managed Agents (orchestration-as-a-service). | PLAN.md, Claude Managed Agents docs | none |
 | `concepts/email-finder.md` | Callable sub-skill invoked by enrichment-agent Step 3.6 when a client has a generic inbox, missing email, or pattern-constructed guess. 5-phase playbook: domain discovery, email-format lookup via RocketReach/Prospeo/ContactOut/Lead411 Google snippets (snippet-only, no paywall click-through), personnel discovery via LinkedIn People tab, format application, validation. 10-action hard cap. Returns found/high_confidence/guessed/failed. | EMAIL_FINDER.md, email-finder.md, enrichment-agent.md | none |
 
@@ -60,7 +61,7 @@ An LLM agent entering a new session should:
 
 | File | Summary | Source docs | Staleness |
 |------|---------|-------------|-----------|
-| `marketing/reddit.md` | Reddit harvester setup. Working approach: public JSON endpoints (no auth), token-zero Python script. Official Reddit API credential setup captured but likely blocked (API killed Nov 2025). URS failure documented. | REDDIT_NOTES.md, IG_NOTES.md | suspected — REDDIT_NOTES.md describes official API setup that may be blocked |
+| `marketing/reddit.md` | Reddit harvester setup. Restructured to folder pattern (`reddit-factlet-harvester/SKILL.md` + `reddit_sources.md`). Working approach: public JSON endpoints (no auth), token-zero Python script. Official Reddit API credential setup captured but likely blocked (API killed Nov 2025). | REDDIT_NOTES.md, IG_NOTES.md | suspected — REDDIT_NOTES.md describes official API setup that may be blocked |
 | `marketing/instagram.md` | Full Instagram harvester integration spec. Scraping approaches in priority order (public JSON → Chrome MCP → instaloader → Playwright). Output JSON schema, DB source field formats, file placement, manifest addition, deploy.js changes required, skill playbook structure, 10 constraints, implementation checklist. | IG_NOTES.md, STATUS.md | none |
 
 ---

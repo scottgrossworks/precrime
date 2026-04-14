@@ -27,9 +27,13 @@ You harvest Reddit posts using `tools/reddit_harvest.py` (public JSON endpoints,
 | `mcp__precrime-mcp__update_client` | Append to existing client's dossier |
 | `mcp__precrime-mcp__create_booking` | Create a booking for Lead Capture hot path |
 
-## Configuration
+## Source File
 
-Read `reddit/reddit_config.json` for the subreddit list and keywords.
+`skills/reddit-factlet-harvester/reddit_sources.md`
+
+This is the human-readable subreddit list. Source-discovery and init-wizard populate it.
+
+The operational config (keywords, limits, scoring thresholds) lives in `reddit/reddit_config.json`.
 
 ## Procedure
 
@@ -125,6 +129,7 @@ mcp__precrime-mcp__create_factlet({
 ```
 
 Rules: 2-3 sentences. No opinions. No mention of the product.
+One factlet per distinct topic — not one per post. Two posts about the same news = one factlet.
 
 ### Step 4B: Dossier Path
 
@@ -196,18 +201,23 @@ Output path breakdown:
 ---
 <!-- CUSTOMIZATION NOTES FOR DEPLOYER
      ================================
-     1. Edit reddit/reddit_config.json to add subreddits and keywords for
-        your audience. Start with 3-5 subreddits where your buyers congregate.
+     1. Edit skills/reddit-factlet-harvester/reddit_sources.md to add subreddits
+        for your audience. Start with 3-5 subreddits where your buyers congregate.
+        Source-discovery will also populate this file automatically.
 
-     2. The four-way classification (factlet / dossier / lead thin / lead hot)
+     2. Edit reddit/reddit_config.json for operational settings (keywords, limits,
+        scoring thresholds). The JSON config drives the Python script; the
+        reddit_sources.md file is the human-readable source list.
+
+     3. The four-way classification (factlet / dossier / lead thin / lead hot)
         is the same across all harvesters. The relevance criteria (Q1) come
         from your manifest.
 
-     3. No API keys needed. The script uses Reddit's public .json endpoints.
+     4. No API keys needed. The script uses Reddit's public .json endpoints.
         Rate limit: ~2 seconds between requests (built in). A harvest of
         5 subreddits runs in ~15 seconds. Safe to run multiple times per hour.
 
-     5. Use --sort relevance (default) for factlet harvesting. Use --sort hot
+     6. Use --sort relevance (default) for factlet harvesting. Use --sort hot
         or --sort top for initial exploration of a new subreddit to gauge
         relevance before adding it to the config.
 

@@ -25,7 +25,8 @@ You scan configured news feeds and create factlets — short, broadly applicable
 | `mcp__precrime-rss__get_top_articles` | Fetch top-scoring articles from configured RSS feeds |
 | `mcp__precrime-mcp__create_factlet` | Save a qualifying article as a factlet |
 | `mcp__precrime-mcp__get_new_factlets` | Check existing queue (avoid duplicates) |
-| `WebFetch` | Fetch full article content if snippet is insufficient |
+| Chrome `navigate` + `get_page_text` | Fetch full article content if snippet is insufficient (INTERACTIVE MODE — primary) |
+| `WebFetch` | Fetch full article content (HEADLESS MODE ONLY — never use in interactive mode) |
 
 ## Procedure
 

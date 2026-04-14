@@ -2,8 +2,8 @@
 title: Pre-Crime Ontology v2.0
 tags: [ontology, entities, booking, client, factlet, leed, output-paths]
 source_docs: [DOCS/ONTOLOGY.md, DOCS/STATUS.md, DOCS/IG_NOTES.md]
-last_updated: 2026-04-04
-staleness: suspected
+last_updated: 2026-04-14
+staleness: none
 ---
 
 Pre-Crime v2.0 expands from a pure client-enrichment engine (one entity, one output path) into a marketplace supply engine. The same scraping infrastructure that finds factlets also finds gig opportunities — these crystallize as Bookings, which can be posted to The Leedz marketplace.
@@ -26,7 +26,10 @@ Primary enrichment target. Represents a business or person who could become a cu
 
 **Key fields:**
 - `draftStatus` — tracks position in the conversion funnel (see below)
-- `warmthScore` — integer. Score ≥ 5 → eligible for draft composition
+- `warmthScore` — float, 0-10. Holistic agent assessment. Score ≥ 9 required (alongside `canDraft`) for draft composition.
+- `dossierScore` — int, unbounded. Procedural score (intelScore + factletScore). Must be ≥ 5 for `canDraft`.
+- `contactGate` — boolean. Named person + direct email = true. Generic inbox or no contact = false.
+- `sentAt` — datetime, nullable. Timestamp of when the draft was actually sent via Gmail. Set alongside `draftStatus = "sent"`.
 - `dossier` — timestamped prose. Format: `[date] Source: finding.`
 - `targetUrls` — JSON: `[{url, type, label}]`
 - `bookings` — relation to Booking[]
@@ -35,11 +38,15 @@ Primary enrichment target. Represents a business or person who could become a cu
 
 | Value | Meaning |
 |-------|---------|
-| `brewing` | Not enough intel. Needs more enrichment. |
+| `brewing` | Not enough intel, or gates not met. Needs more enrichment. |
 | `ready` | Draft passes evaluator. Ready for review/send. |
-| `sent` | Outreach email sent. |
+| `sent` | Outreach email sent. `sentAt` records when. |
 | `responded` | Client replied. Conversation active. |
 | `booked` | Booking created. Action phase. |
+
+**Draft composition requires TWO gates:**
+1. `canDraft = contactGate AND (dossierScore >= 5)` — procedural
+2. `warmthScore >= 9` — agent holistic assessment (two hard gates: verified email + specific event signal)
 
 ### Booking
 
@@ -104,7 +111,7 @@ Single-row table (id = "config"). Deployment-wide settings.
 
 ## Four Output Paths
 
-Every harvested item (Reddit post, Instagram caption, RSS article, Facebook post) is classified into exactly one path. Classification is centralized — identical logic across all harvesters.
+Every harvested item (Reddit post, Instagram caption, RSS article, Facebook post, X/Twitter post) is classified into exactly one path. Classification is centralized — identical logic across all harvesters.
 
 | Path | What it is | MCP action | Example |
 |------|-----------|-----------|---------|
@@ -235,5 +242,6 @@ Unseeded is first-class. An empty DB is not broken — it's the normal starting 
 
 ## Related
 - [[architecture]] — system architecture, MCP servers, data flow
-- [[mcp]] — all 15 MCP tools, configuration
+- [[scoring]] — dual-gate scoring, warmth rubric, sentAt tracking
+- [[mcp]] — all 19 MCP tools, configuration
 - [[current]] — what's done, what's pending

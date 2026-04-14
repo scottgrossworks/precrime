@@ -1,0 +1,439 @@
+{
+  "_comment": "BloomLeedz deployment manifest — Bloomsights K-12 outreach to 318 school principals/admins in Los Angeles.",
+
+  "deployment": {
+    "name": "BloomLeedz",
+    "version": "1.0",
+    "rootDir": "C:\\Users\\Scott\\Desktop\\WKG\\BLOOMLEEDZ\\precrime",
+    "dbFile": "data/temp_dummy.sqlite",
+    "_dbFile_note": "DUMMY PATH — deploy.js writes blank.sqlite here. After deploy, patch server/.env and server/mcp/mcp_server_config.json to point at ../../data/ca_schools.sqlite"
+  },
+
+  "seller": {
+    "name": "Adam Rockenbach",
+    "company": "Bloomsights",
+    "email": "adam@bloomsights.com",
+    "website": "https://bloomsights.com",
+    "phone": "970.413.4535"
+  },
+
+  "product": {
+    "name": "Bloomsights",
+    "description": "Bloomsights is a student behavioral health platform for K-12 schools. Students self-report their emotional wellbeing, social connectedness, and peer relationships through adaptive check-ins every 4-6 weeks. Educators get dashboards, sociograms, 16 behavioral health indicators, MTSS-aligned tiered support tools, and intervention logs. Not a survey tool — a continuous measurement system that makes the invisible visible: who's connected, who's isolated, who's struggling, and what school climate actually looks like from the student's perspective.",
+    "differentiators": [
+      "Sociograms — auto-generated social maps showing isolated vs. connected students. Isolation is visible before it becomes a behavioral incident.",
+      "16 behavioral health indicators built from longitudinal student data — more reliable than any single question or annual climate survey.",
+      "MTSS-aligned: tiered intervention tools map directly to Tier 1/2/3 support workflows principals already use.",
+      "Adaptive check-ins prevent survey fatigue — questions rotate by priority, personalized per student.",
+      "Shows which students are falling through the cracks before they fall — lagging indicators (grades, attendance, discipline) are too late."
+    ],
+    "geography": "Los Angeles metro area — K-12 schools (public, charter, private, religious)",
+    "pricing": "Contact adam@bloomsights.com for district and school pricing."
+  },
+
+  "audience": {
+    "segments": [
+      {
+        "id": "principals",
+        "label": "K-12 School Principals and Administrators",
+        "targetRoles": [
+          "Principal",
+          "Head of School",
+          "Assistant Principal",
+          "Dean of Students",
+          "Custodian of Records",
+          "School Administrator"
+        ],
+        "events": [
+          "student wellness initiative launch",
+          "MTSS implementation",
+          "SEL program evaluation",
+          "district strategic plan adoption",
+          "counselor capacity review",
+          "mental health grant application",
+          "LCAP goal alignment"
+        ],
+        "seasonalWindows": [
+          {
+            "name": "Back-to-School Planning",
+            "months": [5, 6, 7],
+            "event_months": [8, 9],
+            "lead_weeks": 8
+          },
+          {
+            "name": "Spring Budget Cycle",
+            "months": [1, 2, 3],
+            "event_months": [4, 5, 6],
+            "lead_weeks": 6
+          }
+        ]
+      }
+    ]
+  },
+
+  "relevanceSignals": {
+    "high": [
+      "student mental health",
+      "student wellbeing",
+      "student loneliness",
+      "social emotional learning",
+      "SEL program",
+      "student connectedness",
+      "bullying prevention",
+      "school climate survey",
+      "MTSS implementation",
+      "tiered support",
+      "counselor caseload",
+      "behavioral health",
+      "student isolation",
+      "belonging at school"
+    ],
+    "medium": [
+      "student wellness",
+      "whole child",
+      "mental health resources",
+      "student support services",
+      "school climate",
+      "LCAP goals",
+      "intervention team",
+      "at-risk students",
+      "chronic absenteeism",
+      "school safety",
+      "restorative practices"
+    ],
+    "timing": [
+      "implementing",
+      "launching",
+      "evaluating",
+      "applying for",
+      "grant funded",
+      "this school year",
+      "new program",
+      "pilot program",
+      "starting next year"
+    ],
+    "not": [
+      "test prep",
+      "academic tutoring",
+      "curriculum review",
+      "sports program",
+      "facilities renovation",
+      "technology upgrade unrelated to SEL",
+      "fundraiser"
+    ]
+  },
+
+  "factletTopics": [
+    "student mental health K-12 Los Angeles",
+    "school counselor shortage California",
+    "MTSS implementation trends",
+    "social emotional learning SEL research",
+    "student loneliness isolation schools",
+    "LAUSD student wellness initiative",
+    "California student behavioral health",
+    "school climate survey trends",
+    "tiered intervention MTSS",
+    "student belonging research",
+    "chronic absenteeism mental health connection",
+    "Catholic school student wellbeing",
+    "Jewish day school student mental health",
+    "charter school SEL program",
+    "private school counseling resources"
+  ],
+
+  "factletNotTopics": [
+    "sports scores or athletics",
+    "school construction or facilities",
+    "academic test scores unrelated to wellbeing",
+    "teacher contract negotiations",
+    "school board politics unrelated to student health",
+    "curriculum adoption unrelated to SEL"
+  ],
+
+  "warmthScoring": {
+    "categories": [
+      {
+        "name": "Contact Quality",
+        "max": 2,
+        "criteria": {
+          "0": "No contact found or no email",
+          "1": "Generic inbox (info@, office@, admin@) or role unclear",
+          "2": "Named decision-maker (principal, head of school, dean) with direct email"
+        }
+      },
+      {
+        "name": "Wellbeing Signal",
+        "max": 2,
+        "criteria": {
+          "0": "No evidence of student wellbeing focus or SEL initiative",
+          "1": "General wellness language on website or in bio (mentions SEL, counseling, whole child)",
+          "2": "Active signal: announced program, grant, initiative, or public statement about student mental health"
+        }
+      },
+      {
+        "name": "Pain Indicator",
+        "max": 2,
+        "criteria": {
+          "0": "No evidence of unmet need — school appears resourced or problem not visible",
+          "1": "Indirect evidence: counselor vacancy, high caseloads, vague climate language",
+          "2": "Direct evidence: stated gap, incident response, grant application, public concern about student mental health"
+        }
+      },
+      {
+        "name": "Intel Depth",
+        "max": 1,
+        "criteria": {
+          "0": "No useful intel (no social, no site, no news beyond directory listing)",
+          "1": "Scraped something useful — program details, staff bios, news coverage, social posts"
+        }
+      },
+      {
+        "name": "Specificity",
+        "max": 1,
+        "criteria": {
+          "0": "Only generic info — no differentiating facts about this school or person",
+          "1": "At least one fact unique to THIS school or contact (named initiative, specific challenge, recent post)"
+        }
+      },
+      {
+        "name": "Draft Hook Available",
+        "max": 1,
+        "criteria": {
+          "0": "Nothing specific enough to open with — draft would be generic",
+          "1": "Clear hook exists — specific program, stated need, recent news, or school characteristic"
+        }
+      },
+      {
+        "name": "Geography/Sector Match",
+        "max": 1,
+        "criteria": {
+          "0": "Outside LA / not a K-12 school (preschool-only, tutoring center, adult ed)",
+          "1": "LA metro K-12 school — serviceable"
+        }
+      }
+    ],
+    "hardGates": [
+      "No email at all → warmthScore = 0, draftStatus = brewing, do not compose",
+      "Generic inbox only (customerservice@, info@, office@, admin@, contact@, hello@, webmaster@, support@, or any role/department address) with no verified direct personal email → warmthScore cap = 5 maximum, regardless of dossier richness. Score Contact Quality = 1. Do not round up.",
+      "Not a K-12 school (preschool-only, tutoring center, adult ed) → warmthScore = 0, mark brewing, log OUT_OF_SCOPE",
+      "warmthScore < 9 → draftStatus = brewing always"
+    ]
+  },
+
+  "evaluatorCriteria": [
+    {
+      "name": "Specificity",
+      "description": "Does the draft reference something specific to THIS school or principal — not 'schools like yours'?",
+      "passExample": "References a named program, specific challenge, recent news, or observable school characteristic unique to them",
+      "failExample": "'Schools today face unprecedented challenges with student mental health...' / 'Principals like you are seeing...' — generic, could go to anyone"
+    },
+    {
+      "name": "Recency",
+      "description": "Is the hook based on something observable or current — not just static directory data?",
+      "passExample": "References a recent announcement, news item, grant, program launch, or social post (2020 or later)",
+      "failExample": "Draft is based only on school address and name — no research visible"
+    },
+    {
+      "name": "Pain-to-Product Bridge",
+      "description": "Does the draft connect a visible gap at THIS school to what Bloomsights specifically does?",
+      "passExample": "One sentence: their specific challenge (counselor overload, invisible isolation, MTSS gap) → Bloomsights fills it precisely",
+      "failExample": "Describes Bloomsights features without connecting to their stated or observable problem"
+    },
+    {
+      "name": "Brevity",
+      "description": "Under 150 words. Every sentence earns its place.",
+      "passExample": "Tight, punchy, nothing wasted. No filler phrases.",
+      "failExample": "Over 150 words, or contains any forbidden phrase"
+    },
+    {
+      "name": "Reply Test",
+      "description": "Would a busy principal reply or forward this to their counselor or district?",
+      "passExample": "They screenshot it and send it to their dean of students",
+      "failExample": "Finger on delete by sentence two — feels like a sales blast"
+    }
+  ],
+
+  "outreachRules": {
+    "maxWords": 150,
+    "tone": "direct, knowledgeable, collegial — sounds like someone who understands schools, not a vendor pitching software",
+    "openWith": "Lead with something specific about THIS school — their program, their challenge, their students. Never open with your company name or a product pitch.",
+    "closeWith": "Close with a concrete ask: 'Would 20 minutes this week make sense?' or 'Can I send you a one-pager?' — not 'let me know if you're interested'",
+    "forbidden": [
+      "I hope this finds you well",
+      "I'm reaching out because",
+      "I would love the opportunity",
+      "Please don't hesitate",
+      "At your earliest convenience",
+      "My name is [as opening sentence]",
+      "unique and memorable experience",
+      "revolutionary",
+      "game-changer",
+      "cutting-edge",
+      "leverage",
+      "ecosystem",
+      "unprecedented challenges",
+      "in today's world"
+    ]
+  },
+
+  "rssConfig": {
+    "additionalKeywords": [
+      "student mental health",
+      "student wellbeing",
+      "SEL social emotional learning",
+      "school counselor",
+      "MTSS tiered support",
+      "student belonging",
+      "school climate",
+      "K-12 behavioral health",
+      "student isolation loneliness",
+      "LAUSD wellness"
+    ],
+    "feeds": [
+      {
+        "url": "https://www.eschoolnews.com/feed/",
+        "name": "eSchool News",
+        "category": "education_tech",
+        "keywords": ["mental health", "SEL", "student wellbeing", "counseling"]
+      },
+      {
+        "url": "https://www.k12dive.com/feeds/news/",
+        "name": "K-12 Dive",
+        "category": "education_policy",
+        "keywords": ["mental health", "student wellbeing", "MTSS", "SEL", "counselor"]
+      }
+    ]
+  },
+
+  "fbSources": [
+    "https://www.facebook.com/nceaorg/",
+    "https://www.facebook.com/CatholicNewsAgency/",
+    "https://www.facebook.com/NCRonline/",
+    "https://www.facebook.com/NCRegister/",
+    "https://www.facebook.com/americamag/",
+    "https://www.facebook.com/USCatholic/",
+    "https://www.facebook.com/catholicedla/",
+    "https://www.facebook.com/lacatholics/",
+    "https://www.facebook.com/togethermissionla/",
+    "https://www.facebook.com/AngelusNews/",
+    "https://www.facebook.com/catholiceducationfoundation/",
+    "https://www.facebook.com/OCCatholicNews/",
+    "https://www.facebook.com/OCCatholicSchools/",
+    "https://www.facebook.com/southerncrossnewspaper/",
+    "https://www.facebook.com/CACatholicConference/",
+    "https://www.facebook.com/catholicmom/",
+    "https://www.facebook.com/PrizmahCJDS/",
+    "https://www.facebook.com/ChabadOrg/",
+    "https://www.facebook.com/AgudathIsraelofAmerica/",
+    "https://www.facebook.com/mymef",
+    "https://www.facebook.com/eJPhil",
+    "https://www.facebook.com/timesofisrael/",
+    "https://www.facebook.com/Imamother/",
+    "https://www.facebook.com/YeshivaWorldNews/",
+    "https://www.facebook.com/BJELosAngeles/",
+    "https://www.facebook.com/JFedLA/",
+    "https://www.facebook.com/JewishJournal/",
+    "https://www.facebook.com/COLlive",
+    "https://www.facebook.com/jcflosangeles/",
+    "https://www.facebook.com/TeachCoalitionCA/",
+    "https://www.facebook.com/TeachCoalitionOfficial/",
+    "https://www.facebook.com/acsi17/",
+    "https://www.facebook.com/christianschoolsinternational/",
+    "https://www.facebook.com/SCCAdventists/",
+    "https://www.facebook.com/seceducation.org/",
+    "https://www.facebook.com/SoCalRegion7/",
+    "https://www.facebook.com/CCSCamarillo/",
+    "https://www.facebook.com/calvarychapelschools/",
+    "https://www.facebook.com/SFCSEagles/",
+    "https://www.facebook.com/christianunifiedschools/",
+    "https://www.facebook.com/OaksChristianSchool/",
+    "https://www.facebook.com/VillageChristianSchool/",
+    "https://www.facebook.com/WarriorsofHeritage/",
+    "https://www.facebook.com/losangeleschristianschool/",
+    "https://www.facebook.com/MerdinianSchool/",
+    "https://www.facebook.com/TrinityClassicalAcademy/",
+    "https://www.facebook.com/vcschools/",
+    "https://www.facebook.com/cccsdowney/",
+    "https://www.facebook.com/CCRialtoChristianSchool/",
+    "https://www.facebook.com/goodshepherdschoolLA90042/",
+    "https://www.facebook.com/BethlehemLutheranSchoolGranadaHills/",
+    "https://www.facebook.com/sfscsbraves/",
+    "https://www.facebook.com/WhittierChristianHighSchool/",
+    "https://www.facebook.com/capovalleychristian/",
+    "https://www.facebook.com/BrethrenChristian/"
+  ],
+
+  "bookingConfig": {
+    "defaultTrade": "K-12 Student Wellbeing Platform",
+    "defaultBookingAction": "email_user",
+    "leadCaptureEnabled": false,
+    "marketplaceEnabled": false
+  },
+
+  "redditConfig": {
+    "subreddits": [
+      {
+        "name": "K12",
+        "keywords": ["student mental health", "SEL", "school counselor", "student wellbeing", "MTSS"],
+        "category": "intelligence"
+      },
+      {
+        "name": "education",
+        "keywords": ["student mental health", "social emotional learning", "school climate", "counselor shortage"],
+        "category": "intelligence"
+      },
+      {
+        "name": "LosAngeles",
+        "keywords": ["LAUSD mental health", "school counselor", "student wellbeing", "LA schools"],
+        "category": "intelligence"
+      },
+      {
+        "name": "Teachers",
+        "keywords": ["student mental health", "SEL program", "counselor", "student isolation", "school climate"],
+        "category": "intelligence"
+      }
+    ],
+    "additionalKeywords": [
+      "student mental health K-12",
+      "school counselor shortage",
+      "MTSS implementation",
+      "SEL social emotional learning",
+      "student belonging schools"
+    ]
+  },
+
+  "igConfig": {
+    "accounts": [
+      {
+        "username": "bloomsights",
+        "category": "product"
+      },
+      {
+        "username": "caselorg",
+        "category": "education_industry"
+      },
+      {
+        "username": "naesp",
+        "category": "education_industry"
+      }
+    ],
+    "hashtags": [
+      "studentwellbeing",
+      "SEL",
+      "schoolclimate",
+      "studentmentalhealth",
+      "k12education",
+      "schoolcounselor",
+      "MTSSframework",
+      "socialemotionallearning",
+      "lausd",
+      "LAschools"
+    ],
+    "additionalKeywords": [
+      "student mental health",
+      "school counselor",
+      "SEL program",
+      "student wellbeing K-12"
+    ]
+  }
+}

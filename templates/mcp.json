@@ -2,13 +2,11 @@
   "mcpServers": {
     "precrime-mcp": {
       "command": "node",
-      "args": ["server/mcp/mcp_server.js"],
-      "env": {}
+      "args": ["server/mcp/mcp_server.js"]
     },
     "precrime-rss": {
       "command": "node",
-      "args": ["rss/rss-scorer-mcp/index.js"],
-      "env": {}
+      "args": ["rss/rss-scorer-mcp/index.js"]
     }
   }
 }

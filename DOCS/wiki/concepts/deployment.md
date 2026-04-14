@@ -112,8 +112,9 @@ precrime/
       factlet-harvester.md
       init-wizard.md
       fb-factlet-harvester/
-      reddit-factlet-harvester.md
+      reddit-factlet-harvester/
       ig-factlet-harvester/
+      x-factlet-harvester/
   scripts/
     migrate-db.js
 ```
@@ -174,7 +175,7 @@ These steps from `DEPLOYMENT.md` are for direct `deploy.js` deployments, NOT the
 | MCP tools not available in Claude | Launch Claude from `{rootDir}` (where `.mcp.json` lives). Not `claude -p` (headless). |
 | `get_stats()` fails / DB errors | Check `server/mcp/mcp_server_config.json` DB path. Check `server/.env` DATABASE_URL. Run `npx prisma generate` in `server/`. |
 | RSS scorer returns nothing | Verify `rss/rss-scorer-mcp/index.js` exists. Check `rss_config.json` has feeds defined. |
-| All drafts stay brewing | warmthScore < 5 = always brewing. Check ROUNDUP.md for THIN_DOSSIER entries. Check `targetUrls` populated after discovery. |
+| All drafts stay brewing | warmthScore < 9 = always brewing. Two gates for 9+: verified direct email AND specific event signal. Check ROUNDUP.md for THIN_DOSSIER entries. Check `targetUrls` populated after discovery. |
 | Facebook scraping not working | Requires Claude Code desktop app (not standalone CLI). Chrome MCP extension must be installed and connected. |
 
 ---

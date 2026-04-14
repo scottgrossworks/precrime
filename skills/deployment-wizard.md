@@ -175,7 +175,7 @@ Hard gates (always include all three):
 "hardGates": [
   "No email at all → warmthScore = 0, draftStatus = brewing, do not compose",
   "Client outside service geography → warmthScore = 0, mark brewing, note as OUT_OF_GEOGRAPHY",
-  "Score < 5 → draftStatus = brewing always"
+  "warmthScore < 9 → draftStatus = brewing always"
 ]
 ```
 

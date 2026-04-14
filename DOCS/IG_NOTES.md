@@ -92,7 +92,7 @@ When `create_booking` receives `trade` + `startDate` + (`location` OR `zip`), it
 - Same four-path classification
 - **Instagram will likely follow this pattern** since IG also needs browser-based scraping
 
-### 3. Reddit Factlet Harvester (`templates/skills/reddit-factlet-harvester.md`)
+### 3. Reddit Factlet Harvester (`templates/skills/reddit-factlet-harvester/SKILL.md`)
 - Uses a standalone Python script (`tools/reddit_harvest.py`) that fetches via public JSON endpoints
 - Script outputs JSON to `./scrapes/{date}/` directory. Claude reads the JSON and classifies.
 - **Zero tokens on the fetch.** Claude only processes the output.
@@ -329,7 +329,7 @@ Before writing any code, read these files in the PRECRIME directory:
 | `manifest.sample.json` | See existing config sections to match your additions |
 | `deploy.js` | See Reddit/RSS merge patterns to replicate for IG |
 | `templates/reddit_config.json` | Config template pattern to follow |
-| `templates/skills/reddit-factlet-harvester.md` | Closest skill pattern (script-based fetch) |
+| `templates/skills/reddit-factlet-harvester/SKILL.md` | Closest skill pattern (script-based fetch) |
 | `templates/skills/fb-factlet-harvester/SKILL.md` | Closest skill pattern (browser-based fetch) |
 | `tools/reddit_harvest.py` | Reference implementation for a token-zero fetch script |
 | `server/mcp/mcp_server.js` | All 15 MCP tools — read the `handleToolsList` function |

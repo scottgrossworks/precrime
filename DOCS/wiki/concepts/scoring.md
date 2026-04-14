@@ -1,12 +1,12 @@
 ---
 title: Client Scoring & Draft Gate
-tags: [scoring, factlet, contact, dossier, draft, enrichment, gate]
+tags: [scoring, factlet, contact, dossier, draft, enrichment, gate, warmth, sentAt]
 source_docs: [DOCS/PLAN.md, DOCS/EMAIL_FINDER.md, server/mcp/mcp_server.js, templates/skills/enrichment-agent.md, templates/skills/email-finder.md, templates/skills/evaluator.md]
-last_updated: 2026-04-11
+last_updated: 2026-04-14
 staleness: none
 ---
 
-The client scoring system determines when a client qualifies for automated outreach draft composition. It replaced the manual warmthScore (0-10, LLM-assessed each pass) with two procedural mechanisms: a binary contact gate and a continuous dossier score.
+The client scoring system determines when a client qualifies for automated outreach draft composition. Three mechanisms gate drafting: a binary contact gate, a continuous dossier score, and a holistic warmth assessment.
 
 ---
 
@@ -78,7 +78,11 @@ No cap. A client enriched across 5 sessions with 8 relevant factlets might accum
 
 ---
 
-## Draft Eligibility
+## Draft Eligibility — Two Independent Gates
+
+Draft composition requires BOTH gates to pass. Neither compensates for the other.
+
+### Gate 1: Procedural (canDraft)
 
 ```
 canDraft = contactGate AND (dossierScore >= 5)
@@ -90,6 +94,33 @@ The threshold (5) is not user-configurable. It is derived from the evaluator's m
 - Pain-to-Product Bridge requires a pain/occasion signal (needs >= 2 from D3 or D4)
 
 Minimum: 2 + 1 + 2 = 5.
+
+### Gate 2: Warmth Assessment (warmthScore >= 9)
+
+`warmthScore` is set by the enrichment agent at Step 4.5, not procedurally. It is a holistic 0-10 assessment of lead readiness. **This is NOT deprecated** — it is actively written and enforced alongside the procedural gate.
+
+| Score | Criteria |
+|-------|----------|
+| 10 | Specific expressed need with date, location, and service request. Verified direct email to decision-maker. |
+| 9 | Strong signal of upcoming relevant event. Verified direct email. |
+| 8 | Good fit signals (books entertainment, same category, upcoming events). Email is pattern-inferred, not verified. |
+| 7 | General venue/planner fit. Named contact. Pattern-inferred email. No specific event signal. |
+| 5-6 | Generic email only (info@, contact@, events@), or speculative fit. |
+| 1-4 | No contact, no fit signal, or wrong segment. |
+
+**Two hard gates for warmthScore 9+:**
+1. **Verified direct email** — pattern-inferred (RocketReach, ZoomInfo, LinkedIn guessing) caps at 8.
+2. **Specific event signal** — "They host events" is not a signal. "Hosting a Mother's Day brunch on May 10" is. General fit caps at 8.
+
+Both hard gates must pass for 9+. Most clients from a prospecting run will stay brewing. That is correct.
+
+### Combined Gate
+
+```
+eligible = canDraft AND (warmthScore >= 9)
+```
+
+If either fails → `draftStatus = "brewing"`, enrichment agent logs what's missing, skips to next client.
 
 ---
 
@@ -111,9 +142,11 @@ MCP tools:
 3. **Discovery + Ingestion** (Steps 2-3)
 4. **Intel scoring** — assess D2+D3 from scraping (Step 3.5)
 5. **Score client** — one `score_client` call (Step 4)
-6. **Draft gate** — if `canDraft = false`, set brewing, skip to next client (Step 4.5)
-7. **Compose draft** — only if gate passes (Step 5)
-8. **Evaluate draft** — quality check only, no upstream gates (Step 6)
+6. **Warmth assessment** — agent assigns 0-10 `warmthScore` (Step 4.5)
+7. **Draft gate** — if `canDraft = false` OR `warmthScore < 9`, set brewing, skip to next client (Step 4.6)
+8. **Compose draft** — only if both gates pass (Step 5)
+9. **Evaluate draft** — quality check only, no upstream gates (Step 6)
+10. **Send + mark sent** — gmail send → `update_client({ draftStatus: "sent", sentAt })` (Step 6.5)
 
 ---
 
@@ -156,9 +189,21 @@ Special log category: `READY_BLOCKED_CONTACT` — client has dossierScore >= 5 b
 
 ---
 
-## Deprecation
+## Draft Send Tracking — `sentAt`
 
-`warmthScore` (Float, 0-10) remains in the schema for backwards compatibility but is no longer written to by the enrichment pipeline. `dossierScore` replaces it for all ranking and gating purposes.
+When a draft is sent (via Gmail MCP or manually), the enrichment agent marks:
+
+```
+update_client({ id, draftStatus: "sent", sentAt: new Date().toISOString() })
+```
+
+- `sentAt` (DateTime, nullable) records the exact timestamp of send
+- Gmail send + update_client are treated as atomic — never send without marking
+- If gmail send fails, leave as "ready" and log the failure
+- `get_ready_drafts()` returns only `draftStatus === "ready"` — sent clients excluded automatically
+- The sent guard in enrichment-agent Step 0 skips any client with `draftStatus === "sent"` entirely
+
+**Full lifecycle:** `null` → `"brewing"` → `"ready"` → `"sent"` (with `sentAt` timestamp)
 
 ---
 

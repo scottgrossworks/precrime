@@ -52,7 +52,7 @@ Those same rules are duplicated verbatim in:
 The classification logic (existing client → dossier update / has booking details → lead hot / no details → lead thin / new org → create client) is written out in full in all four harvester files:
 - `factlet-harvester.md`
 - `fb-factlet-harvester/SKILL.md`
-- `reddit-factlet-harvester.md`
+- `reddit-factlet-harvester/SKILL.md`
 - `ig-factlet-harvester/SKILL.md`
 
 Options:

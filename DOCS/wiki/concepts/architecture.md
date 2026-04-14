@@ -131,8 +131,9 @@ All skills live in `templates/skills/` (source) and are copied/token-substituted
 | `evaluator.md` | Draft evaluator + Booking completeness gate |
 | `factlet-harvester.md` | RSS → factlet pipeline |
 | `fb-factlet-harvester/SKILL.md` | Facebook → factlet pipeline (needs Chrome) |
-| `reddit-factlet-harvester.md` | Reddit → factlet/lead pipeline (Python script) |
+| `reddit-factlet-harvester/SKILL.md` | Reddit → factlet/lead pipeline (Python script) |
 | `ig-factlet-harvester.md` | Instagram → factlet/lead pipeline (TBD approach) |
+| `x-factlet-harvester/SKILL.md` | X/Twitter → factlet/lead pipeline (Grok + Chrome) |
 | `relevance-judge.md` | Scores relevance of harvested content |
 | `email-finder.md` | 5-phase direct-email hunt invoked by enrichment-agent Step 3.6 |
 
