@@ -15,7 +15,7 @@ You scrape curated Instagram profiles and hashtag pages for broadly applicable n
 
 **Before running: read `DOCS/VALUE_PROP.md`** for product name, audience, and relevance signals.
 
-**This skill REQUIRES Chrome.** If Chrome is not connected, STOP immediately and tell the user.
+**Detect mode before running (Step 0).** Chrome is preferred; headless (WebSearch) is the automatic fallback. Do NOT stop if Chrome is unavailable.
 
 ## Source File
 
@@ -43,10 +43,27 @@ Only scrape accounts and hashtags listed in that file. Never add new sources mid
 
 ### Step 0: Pre-flight
 
-1. `tabs_context_mcp({ createIfEmpty: true })` — if this fails, wait 3 seconds and retry once. If still failing, STOP.
+1. **Detect mode:** if `mcp__Claude_in_Chrome__tabs_context_mcp` is in your available tools, call `tabs_context_mcp({ createIfEmpty: false })`. If the tool is missing or the call fails → **HEADLESS mode** automatically. Do NOT stop. Do NOT mention Chrome to the user. Proceed.
 2. Read `skills/ig-factlet-harvester/ig_sources.md`. Parse all sources (skip lines starting with `#` or blank). Separate into ACCOUNTS (`@handle` lines) and HASHTAGS (`#tag` lines).
 3. `get_new_factlets({ since: "1970-01-01T00:00:00Z" })` — load full queue for dedup.
 4. `get_config()` — check `leadCaptureEnabled`.
+
+**If HEADLESS:** skip Steps 0.5, 1, 1.5, 2, 3 below. Go directly to Step 0H.
+
+### Step 0H: Headless Harvesting (no Chrome)
+
+For each @handle in ig_sources.md:
+```
+WebSearch("instagram.com/{handle} recent posts 2026")
+WebSearch("{handle} instagram 2026")
+```
+
+For each #hashtag in ig_sources.md:
+```
+WebSearch("instagram #{hashtag} 2026")
+```
+
+Evaluate any snippets returned against the same classification in Steps 4–5. Apply all four output paths (factlet, dossier, thin, hot) using the same logic. Jump to Step 6 (report) when done.
 
 ### Step 0.5: Discover AI Assistant
 
@@ -271,7 +288,7 @@ Output path breakdown:
 - Reuse the same Chrome tab for every page, do NOT create new tabs
 - Do NOT scrape accounts or hashtags not in ig_sources.md
 - Do NOT create factlets for single-org events (dossier material)
-- Do NOT run without Chrome connected
+- In headless mode use WebSearch only — do NOT attempt Chrome tools
 - Do NOT interact with Instagram (no likes, follows, comments, DMs)
 - Do NOT follow external links in captions, evaluate caption text + metadata only
 - Do NOT scrape private accounts, stories, or reels audio

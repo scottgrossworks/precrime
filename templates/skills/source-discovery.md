@@ -374,14 +374,10 @@ Write a summary to `logs/DISCOVERY_LOG.md` using the Edit tool (append, do not o
 
 ## Parameterization
 
-**Headless (cron / -p flag):**
-```
-claude -p --dangerously-skip-permissions "run source discovery"
-```
-No user interaction. Read VALUE_PROP.md and config. Discover and append. Log results.
+**Headless mode** (no Chrome, no user — e.g. Docker/cron):
+No user interaction. Read VALUE_PROP.md and config. Discover and append. Log results. Skip all interactive-mode steps.
 
-**Interactive (CLI):**
-Same discovery flow, but:
+**Interactive mode** (Chrome available, user present):
 - At Step 0: ask user for starter URLs/pages/subreddits (once, optional)
 - At Step 5: show discovered directories and ask for confirmation
 - Otherwise, run autonomously

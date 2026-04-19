@@ -39,23 +39,29 @@ The operational config (keywords, limits, scoring thresholds) lives in `reddit/r
 
 ### Step 1: Fetch Posts
 
+Use the **terminal tool** (not execute_code) to run the harvest script. Always use absolute paths:
+
 **Option A — Config-driven (preferred):**
 
-```bash
-python tools/reddit_harvest.py --config reddit/reddit_config.json
-```
+Use the terminal tool to run: `python /precrime/tools/reddit_harvest.py --config /precrime/reddit/reddit_config.json`
 
 Runs all subreddit/keyword combos defined in the config in one pass.
 
-**Option B — Single subreddit:**
+**Option B — Headless fallback (if script fails or tools/reddit_harvest.py is missing):**
 
-```bash
-python tools/reddit_harvest.py --subreddit {subreddit} --keywords "{keywords}" --limit {maxPosts}
-```
+Use `WebFetch` directly on Reddit's public JSON API — no script, no auth needed:
+
+`WebFetch("https://www.reddit.com/r/{subreddit}/new.json?limit=25")` for each subreddit in reddit_sources.md.
+
+Parse the returned JSON for `data.children[].data` — each item has `title`, `selftext`, `permalink`, `created_utc`, `author`, `score`.
+
+**Option C — Single subreddit (terminal tool):**
+
+Use the terminal tool to run: `python /precrime/tools/reddit_harvest.py --subreddit {subreddit} --keywords "{keywords}" --limit {maxPosts}`
 
 Additional flags: `--sort {relevance|hot|top|new|comments}`, `--time {day|week|month|year|all}`.
 
-Output lands in `./scrapes/{YYYY-MM-DD}/{subreddit}_search_{keywords}.json`.
+Output lands in `/precrime/scrapes/{YYYY-MM-DD}/{subreddit}_search_{keywords}.json`.
 
 Each file contains `scrape_settings` (metadata) and a `data` array of posts with: `id`, `title`, `selftext`, `score`, `upvote_ratio`, `num_comments`, `created_utc`, `created_iso`, `author`, `permalink`, `url`, `subreddit`, `link_flair_text`, `is_self`, `over_18`.
 
@@ -191,7 +197,7 @@ Output path breakdown:
 
 ## Rules
 
-- reddit_harvest.py does the fetch. Claude does the judgment. Never use WebFetch for Reddit.
+- Prefer the terminal tool + reddit_harvest.py. If the script fails, fall back to WebFetch on Reddit JSON API. Do NOT stop.
 - One factlet per distinct topic — not one per post. Two posts about the same news = one factlet.
 - Dossier entries are timestamped prose. Include the subreddit and date.
 - Lead Capture is opt-in. If `leadCaptureEnabled` is false, flag but do not create records.

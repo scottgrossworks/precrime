@@ -16,7 +16,7 @@ triggers:
 
 You harvest X (Twitter) posts using Grok (via Chrome) and classify each post into one of four output paths. Grok searches X's full index — zero API keys, zero fetch scripts. You handle the judgment.
 
-**This skill REQUIRES Chrome with a Grok tab open.** If neither Grok nor X access is available, STOP and tell the user.
+**Detect mode at Step 0.** Chrome + Grok is preferred. If unavailable, use WebSearch as fallback. Do NOT stop.
 
 ## Source File
 
@@ -42,14 +42,25 @@ Three source types: `@accounts`, `#hashtags`, and `keyword:` searches. Source-di
 
 ### Step 0: Pre-flight
 
-1. `tabs_context_mcp({ createIfEmpty: true })` — if this fails, wait 3 seconds and retry once. If still failing, STOP.
-2. Scan open tabs for `grok.com` or `x.com/i/grok`. Store as `GROK_TAB = <tabId> | null`.
-3. If `GROK_TAB` is null, scan for `x.com`. Store as `X_TAB = <tabId> | null`.
-4. If BOTH `GROK_TAB` and `X_TAB` are null:
-   > "X harvester needs Grok (grok.com) or X (x.com) open in Chrome. Open one and say 'go'."
-   Wait for user. Re-scan.
-5. Read `x_sources.md`. Parse all entries (skip lines starting with `#` or blank). Separate into three lists: `accounts`, `hashtags`, `keywords`.
-6. `get_new_factlets({ since: "1970-01-01T00:00:00Z" })` — load full queue for dedup.
+1. **Detect mode:** if `mcp__Claude_in_Chrome__tabs_context_mcp` is in your available tools, call it. If the tool is missing or fails → **HEADLESS mode** automatically. Do NOT stop. Do NOT mention Chrome.
+2. Chrome only: scan open tabs for `grok.com` or `x.com/i/grok`. Store as `GROK_TAB = <tabId> | null`. Scan for `x.com` → `X_TAB = <tabId> | null`.
+3. Read `x_sources.md`. Parse all entries (skip lines starting with `#` or blank). Separate into: `accounts`, `hashtags`, `keywords`.
+4. `get_new_factlets({ since: "1970-01-01T00:00:00Z" })` — load full queue for dedup.
+
+**If HEADLESS:** skip Steps 1 (Grok path). Go directly to Step 1H.
+
+### Step 1H: Headless X Harvesting (WebSearch)
+
+For each `@account` in x_sources.md:
+`WebSearch("from:{account} site:x.com 2026")`
+
+For each `#hashtag`:
+`WebSearch("#{hashtag} site:x.com 2026")`
+
+For each `keyword:` entry:
+`WebSearch("{keyword phrase} site:x.com 2026")`
+
+Evaluate snippets using the same classification in Steps 3–4. Jump to Step 5 (report) when done.
 
 ### Step 1: Fetch Posts via Grok (Primary)
 

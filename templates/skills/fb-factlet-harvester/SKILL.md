@@ -14,7 +14,7 @@ You scrape curated Facebook pages for broadly applicable news relevant to sellin
 
 **Before running: read `DOCS/VALUE_PROP.md`** for product name, audience, and relevance signals.
 
-**This skill REQUIRES Chrome.** If Chrome is not connected, STOP immediately and tell the user.
+**Detect mode before running (Step 0).** Chrome is preferred; headless (WebSearch) is the automatic fallback. Do NOT stop if Chrome is unavailable.
 
 ## Source File
 
@@ -37,9 +37,22 @@ Only scrape URLs listed in that file. Never add new pages mid-run.
 
 ### Step 0: Pre-flight
 
-1. `tabs_context_mcp({ createIfEmpty: true })` — if this fails, wait 3 seconds and retry once. If still failing, STOP.
+1. **Detect mode:** if `mcp__Claude_in_Chrome__tabs_context_mcp` is in your available tools, call `tabs_context_mcp({ createIfEmpty: false })`. If the tool is missing or the call fails → **HEADLESS mode** automatically. Do NOT stop. Do NOT mention Chrome to the user. Proceed.
 2. Read `fb_sources.md`. Parse all URLs (skip lines starting with `#` or blank).
 3. `get_new_factlets({ since: "1970-01-01T00:00:00Z" })` — load full queue for dedup.
+
+**If HEADLESS:** skip Steps 0.5, 1, 1.5, 2 below. Go directly to Step 0H.
+
+### Step 0H: Headless Harvesting (no Chrome)
+
+For each URL in fb_sources.md, extract the page name from the URL (e.g. `facebook.com/SomeGroup` → "SomeGroup"). Then:
+
+```
+WebSearch("[page name] facebook recent posts 2026")
+WebSearch("[page name] facebook event news 2026")
+```
+
+Evaluate any snippets returned against the same relevance criteria in Steps 3–4. Create factlets for qualifying findings. Skip Steps 0.5–2 entirely. Jump to Step 5 (report) when done.
 
 ### Step 0.5: Discover AI Assistant
 
@@ -138,7 +151,7 @@ One factlet per distinct news item — not one per post.
 - Reuse the same Chrome tab for every page — do NOT create new tabs
 - Do NOT scrape pages not in fb_sources.md
 - Do NOT create factlets for single-org events (dossier material)
-- Do NOT run without Chrome connected
+- In headless mode use WebSearch only — do NOT attempt Chrome tools
 - Do NOT interact with the page (no likes, comments, shares)
 - Do NOT follow links to external articles — evaluate post text only
 

@@ -352,7 +352,11 @@ Say:
 
 Source discovery and client seeding run first — they populate the source configs and seed the DB with contacts. Harvesters run next — their factlets enrich the client records. Enrichment runs last — it takes every client (new and old) through deep research, scoring, and draft composition.
 
-**CRITICAL: Run all steps sequentially regardless of intermediate results. Zero articles from RSS is not a failure. Zero factlets is not a failure. An empty DB is not a failure. Do NOT stop between steps to ask the user what to do. Do NOT present options. Execute all three steps and report at the end.**
+**CRITICAL: Run all steps sequentially regardless of intermediate results. Zero articles from RSS is not a failure. Zero factlets is not a failure. An empty DB is not a failure. Do NOT stop between steps to ask the user what to do. Do NOT present options. Execute all steps and report at the end.**
+
+**PER-STEP TIME LIMIT: Each step has a maximum of 20 minutes. If a step is still running after 20 minutes, write whatever results exist to the log, mark the step TIMEOUT in the report, and move on to the next step. Never let one step block the rest of the pipeline.**
+
+**PER-URL TIME LIMIT: If any single WebFetch or WebSearch does not return within 30 seconds, log `SKIP_TIMEOUT: [url]` and move to the next URL. Do not wait indefinitely.**
 
 ---
 
