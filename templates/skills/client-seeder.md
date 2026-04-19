@@ -494,9 +494,9 @@ claude -p "seed clients from https://example.com/exhibitors"
      Things to review and tune manually:
 
      1. SOURCE TYPES (Step 1): Add source types specific to your audience.
-        e.g., for schools: add school_district_directory, board_of_education
         e.g., for events: add event_listing, venue_directory, eventbrite_search
         e.g., for B2B SaaS: add G2_directory, capterra_listing, crunchbase
+        e.g., for trade/services: add trade_association, chamber_of_commerce
 
      2. CONTACT EXTRACTION (Step 2b): Tune what counts as a "valid contact"
         for your specific trade. A DJ booking agent cares about different

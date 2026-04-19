@@ -5,15 +5,8 @@
     "maxPostsPerAccount": 20,
     "maxPostsPerHashtag": 25
   },
-  "accounts": [
-    {
-      "username": "example_industry_account",
-      "category": "industry"
-    }
-  ],
-  "hashtags": [
-    "examplehashtag"
-  ],
+  "accounts": [],
+  "hashtags": [],
   "recencyDays": 30,
   "minLikes": 0
 }

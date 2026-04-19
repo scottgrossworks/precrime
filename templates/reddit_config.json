@@ -4,21 +4,8 @@
     "outputDir": "./scrapes",
     "maxPostsPerSearch": 25
   },
-  "subreddits": [
-    {
-      "name": "news",
-      "keywords": ["policy", "funding", "regulation", "industry"],
-      "category": "general"
-    }
-  ],
-  "globalKeywords": [
-    "announcement",
-    "trend",
-    "hiring",
-    "funding",
-    "policy",
-    "deadline"
-  ],
+  "subreddits": [],
+  "globalKeywords": [],
   "recencyDays": 7,
   "minScore": 5
 }

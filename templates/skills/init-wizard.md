@@ -156,6 +156,37 @@ Note as session context: `leedzMode = false`. Skip Steps 4, 5, 5a, 6. Jump to St
 
 ---
 
+## Step 3.6: Run Mode
+
+**Skip if `leedzMode = false`** — B2B/outreach-only runs always produce drafts. Set `SESSION_RUN_MODE = "outreach"` silently and skip to Step 4.
+
+Ask:
+
+> "Last config question — what's the goal for this run?
+>
+> **1 — Outreach:** I research each contact and write a personalized email. Good for when you want to reach prospects directly.
+>
+> **2 — Marketplace only:** I find booking opportunities and share them to The Leedz. No outreach emails written. Good for generating leedz to share.
+>
+> **3 — Both:** Research contacts, write emails, AND share bookings.
+>
+> (1 / 2 / 3)"
+
+| Answer | SESSION_RUN_MODE | Effect |
+|--------|-----------------|--------|
+| 1 | `outreach` | Drafts ON. Booking share OFF. |
+| 2 | `marketplace` | **Zero emails written.** Booking share ON. |
+| 3 | `hybrid` | Drafts ON. Booking share ON. |
+
+Note the answer as session context: `SESSION_RUN_MODE = [outreach|marketplace|hybrid]`. Do NOT write to Config — this is a run-time decision, not a persistent setting.
+
+Confirm:
+- **outreach:** "Got it — I'll research contacts and write emails. No marketplace posts this run."
+- **marketplace:** "Got it — marketplace mode. I'll find and share bookings, but I will NOT write any outreach emails this run."
+- **hybrid:** "Got it — doing both: emails and marketplace posts."
+
+---
+
 ## Step 4: Default Trade
 
 **Skip if `leedzMode = false`.**
@@ -253,6 +284,7 @@ Configuration Set — {{DEPLOYMENT_NAME}}
 Company:          {companyName}
 Email:            {companyEmail}
 Mode:             {leedzMode ? 'gig/Leedz' : 'B2B/outreach'}
+Run mode:         {SESSION_RUN_MODE} — {outreach: 'emails only' | marketplace: 'NO DRAFTS — marketplace share only' | hybrid: 'emails + marketplace'}
 Trade:            {defaultTrade or '(not set)'}
 Booking action:   {defaultBookingAction or '(not set)'}
 Marketplace:      {marketplaceEnabled}
@@ -306,7 +338,7 @@ Say:
 4. Run `skills/ig-factlet-harvester/SKILL.md` — harvest Instagram factlets (also discovers clients, requires Chrome)
 5. Run `skills/reddit-factlet-harvester/SKILL.md` — harvest Reddit factlets (also discovers clients)
 6. Run `skills/x-factlet-harvester/SKILL.md` — harvest X factlets (also discovers clients)
-7. Run `skills/factlet-harvester.md` — harvest RSS factlets (also discovers clients)
+7. Run `skills/rss-factlet-harvester/SKILL.md` — harvest RSS factlets (also discovers clients)
 8. Run `skills/enrichment-agent.md` — enrich all clients (new + old), score, draft emails
 
 **If outreach-only (`leedzMode = false`, `leadCaptureEnabled = false`):**
@@ -315,7 +347,7 @@ Say:
 3. Run `skills/ig-factlet-harvester/SKILL.md` — harvest Instagram factlets (requires Chrome)
 4. Run `skills/reddit-factlet-harvester/SKILL.md` — harvest Reddit factlets
 5. Run `skills/x-factlet-harvester/SKILL.md` — harvest X factlets
-6. Run `skills/factlet-harvester.md` — harvest RSS factlets
+6. Run `skills/rss-factlet-harvester/SKILL.md` — harvest RSS factlets
 7. Run `skills/enrichment-agent.md` — enrich, score, draft
 
 Source discovery and client seeding run first — they populate the source configs and seed the DB with contacts. Harvesters run next — their factlets enrich the client records. Enrichment runs last — it takes every client (new and old) through deep research, scoring, and draft composition.

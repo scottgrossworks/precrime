@@ -76,6 +76,26 @@ There are two modes: **single-agent** (sequential, one client at a time) and **p
 
 If any step fails, report the error and stop. Do not proceed with broken tools.
 
+#### Step C: Read Run Mode
+
+This deployment's run mode is baked in at build time: **{{RUN_MODE}}**
+
+If the init-wizard ran this session and the user set a different mode (`SESSION_RUN_MODE` in session context), that overrides the manifest default. Resolution order:
+
+```
+runMode = SESSION_RUN_MODE (if set by init-wizard this session) || "{{RUN_MODE}}"
+```
+
+Print this banner ONCE before the loop starts, and repeat it in every ROUNDUP.md client entry:
+
+| runMode | Banner |
+|---------|--------|
+| `outreach` | `▶ MODE: outreach — drafts ON / marketplace share OFF` |
+| `marketplace` | `▶ MODE: marketplace — NO DRAFTS WRITTEN / booking share ON` |
+| `hybrid` | `▶ MODE: hybrid — drafts ON / booking share ON` |
+
+**If `runMode === "marketplace"`:** internalize this now — Steps 5, 6, and 6.5 are permanently OFF for this entire session. You will never compose, evaluate, or send a draft email. Factlet collection, scoring, URL discovery, and booking detection all run normally.
+
 ---
 
 ### PARALLEL-AGENT MODE
@@ -199,7 +219,34 @@ mcp__precrime-mcp__update_client({
 })
 ```
 
-Valid URL types: `website`, `linkedin`, `twitter`, `facebook`, `rss`, `news`, `event_listing`, `review`, `board_minutes`, `school_calendar`, `venue_page`
+Valid URL types: `website`, `linkedin`, `twitter`, `facebook`, `rss`, `news`, `event_listing`, `review`, `venue_page`, `org_calendar`, `directory_entry`
+
+### Step 2.5: Relationship Model Classification
+
+**Before scraping, determine the pay direction. One question: if this engagement happens, does Scott get paid — or does Scott pay them?**
+
+Classify using what you already know (company name, segment, dossier notes, website if already fetched):
+
+**GET_PAID** — They hire Scott. Their event, his services, they write the check.
+- Wedding planner, corporate HR, event coordinator, party host, bar/bat mitzvah family, quinceañera family, school activities director, university student union, senior center, venue manager hiring entertainment, brand activation team, etc.
+
+**VENDOR_OPPORTUNITY** — Scott pays them for access. They sell booth space, vendor spots, or exhibitor slots.
+- County fairs, state fairs, festivals with vendor applications, conventions selling exhibitor space, expos with booth packages, markets with vendor stall rental, trade shows with exhibitor fees.
+- Definitive signals: "vendor application," "exhibitor fees," "booth rental," "become a vendor," "vendor space available," "vendor permit required."
+
+**If VENDOR_OPPORTUNITY — stop immediately:**
+```
+mcp__precrime-mcp__update_client({
+  id: clientId,
+  dossier: "[date] VENDOR_OPPORTUNITY: [company] sells vendor/booth access — Scott would pay them, not get hired by them. No outreach.",
+  draftStatus: "brewing",
+  warmthScore: 0,
+  lastEnriched: new Date().toISOString()
+})
+```
+Log `VENDOR_OPPORTUNITY` in ROUNDUP.md. **Skip to Step 7 (next client). Do not scrape. Do not score. Do not compose.**
+
+**If GET_PAID or genuinely unclear:** proceed to Step 3.
 
 ### Step 3: Ingestion
 
@@ -266,7 +313,7 @@ Scrape each URL in `targetUrls`. For each:
 
 After ingestion, assess what you found. This is the **intel score** — the non-factlet portion of the dossier score. Compute it from what scraping produced.
 
-**SCORING INTEGRITY RULE: Be brutally honest. A website that loads is NOT "useful content." Directory data (name, address, enrollment, grade levels, school type) is NOT a signal. Only count intel that would make a draft BETTER than a blind cold email. If in doubt, score LOWER.**
+**SCORING INTEGRITY RULE: Be brutally honest. A website that loads is NOT "useful content." Directory data (name, address, category, contact role, generic About page boilerplate) is NOT a signal. Only count intel that would make a draft BETTER than a blind cold email. If in doubt, score LOWER.**
 
 **D2 — Intel Depth (0-3):**
 
@@ -274,21 +321,21 @@ After ingestion, assess what you found. This is the **intel score** — the non-
 |---|---|
 | 2+ sources scraped with ACTIONABLE content (specific programs, initiatives, concerns, events, posts) | 3 |
 | 1 source scraped with ACTIONABLE content | 2 |
-| Sources loaded but only produced directory-level info (enrollment, address, grade levels, mission statement boilerplate) | 1 |
-| All fetches failed / no data / only school name and location confirmed | 0 |
+| Sources loaded but only produced directory-level info (generic description, address, category, boilerplate About copy) | 1 |
+| All fetches failed / no data / only org name and location confirmed | 0 |
 
-**"Actionable" = something you can reference in a draft that proves you did research.** A school's About page saying "we serve grades K-8 in Los Angeles" is NOT actionable. A Facebook post about their new counseling program IS actionable.
+**"Actionable" = something you can reference in a draft that proves you did research.** A client's About page saying "we serve the Los Angeles area" is NOT actionable. A recent social post about an upcoming event IS actionable.
 
 **D3 — Direct Signals (0-4, additive):**
 
 | Signal found via scraping | Points |
 |---|---|
-| Explicit pain / stated problem (MUST be a direct quote, post, or article — not inferred from school type) | +2 |
+| Explicit pain / stated problem (MUST be a direct quote, post, or article — not inferred from segment) | +2 |
 | Buying occasion / deadline / active project (MUST have a source — not assumed from segment) | +2 |
 | Organizational context BEYOND directory data (recent hire, program launch, award, policy change) | +1 |
 | Timing / geography alignment (per VALUE_PROP.md) | +1 |
 
-**Do NOT award D3 points for inferred needs.** "This is a school so they probably need student wellbeing tools" is not a signal. That's your product pitch. Signals come from THEIR words, THEIR posts, THEIR news.
+**Do NOT award D3 points for inferred needs.** Category-level assumptions ("this org is in segment X so they probably need product Y") are NOT signals. That's your product pitch. Signals come from THEIR words, THEIR posts, THEIR news.
 
 **intelScore = D2 + D3** (max 7). Hold this value — you will pass it to `score_client` at Step 4.
 
@@ -350,19 +397,21 @@ Review the full picture: dossier, factlets, email verification status, event sig
 
 | Score | Criteria |
 |-------|----------|
-| 10 | Specific expressed need with date, location, and service request. Verified direct email to decision-maker. |
-| 9 | Strong signal of upcoming relevant event. Verified direct email. |
+| 10 | Specific expressed need with date, location, and service request. Verified direct email to decision-maker. GET_PAID relationship confirmed. |
+| 9 | Strong signal of upcoming relevant event. Verified direct email. GET_PAID confirmed. |
 | 8 | Good fit signals (books entertainment, same category, upcoming events). Email is pattern-inferred, not verified. |
 | 7 | General venue/planner fit. Named contact found. Pattern-inferred email. No specific event signal. |
 | 5-6 | Generic email only (info@, contact@, events@), or speculative fit. |
 | 1-4 | No contact, no fit signal, or wrong segment. |
+| 0 | VENDOR_OPPORTUNITY (they charge Scott to show up) or OUT_OF_GEOGRAPHY. |
 
-**Two hard gates for warmthScore 9+:**
+**Three hard gates for warmthScore 9+:**
 
-1. **Verified direct email** to a named decision-maker. Pattern-inferred emails (first.last@domain from RocketReach, ZoomInfo, LinkedIn guessing) are NOT verified. Cap at 8.
-2. **Specific event signal.** "They host events" is not a signal. "They are hosting a Mother's Day brunch on May 10" IS a signal. "Looking for entertainment vendors" IS a signal. General fit is not. Cap at 8.
+1. **Verified direct email** to a named decision-maker. Pattern-inferred emails cap at 8.
+2. **Specific event signal.** "They host events" is not a signal. "They are hosting a Mother's Day brunch on May 10" IS a signal. General fit is not. Cap at 8.
+3. **GET_PAID relationship confirmed.** If there is any indication the client would charge Scott rather than hire him (vendor fees, booth applications, exhibitor packages, "become a vendor" language) — warmthScore = 0, log VENDOR_OPPORTUNITY, stop.
 
-Without BOTH gates, warmthScore stays at 7-8 regardless of how perfect the venue looks. Be honest about what you actually know versus what you are inferring.
+Without ALL THREE gates passing, warmthScore stays at 7-8 regardless of how strong the lead looks. Be honest about what you actually know versus what you are inferring.
 
 Write warmthScore to the client:
 ```
@@ -376,7 +425,22 @@ Log in ROUNDUP.md:
 
 ### Step 4.6: Draft Gate
 
-Two conditions required for drafting:
+**runMode check — FIRST, before anything else:**
+
+If `runMode === "marketplace"`:
+```
+mcp__precrime-mcp__update_client({
+  id: clientId,
+  draftStatus: "brewing",
+  lastEnriched: new Date().toISOString()
+})
+```
+Log in ROUNDUP.md: `- Draft: SKIPPED — marketplace mode (no emails this run)`
+**Skip to Step 7 (next client). Do NOT check warmthScore. Do NOT compose. Do NOT evaluate. Do NOT send.**
+
+---
+
+Two conditions required for drafting (outreach and hybrid modes only):
 1. `canDraft = true` (from Step 4: contactGate + dossierScore >= 5)
 2. `warmthScore >= 9` (from Step 4.5)
 
@@ -414,7 +478,7 @@ Use both the dossier (client-specific scrape intel) and the linked factlets (bro
 
 #### PRE-COMPOSE CHECK — DO NOT SKIP
 
-Before writing a single word, verify you have at least ONE non-generic intel item. "Non-generic" means something that could NOT be found in a school directory listing (name, city, enrollment, grade levels, school type are all generic). You need a specific initiative, program, stated concern, recent event, social media post, news mention, or linked factlet.
+Before writing a single word, verify you have at least ONE non-generic intel item. "Non-generic" means something that could NOT be found in a basic directory listing (name, city, address, category, contact role are all generic). You need a specific initiative, program, stated concern, recent event, social media post, news mention, or linked factlet.
 
 **If you have ZERO non-generic intel: DO NOT COMPOSE. Set draftStatus = brewing. Log THIN_DOSSIER. Move to next client.**
 
@@ -424,9 +488,9 @@ A thin draft is worse than no draft. It wastes the user's review time and burns 
 
 1. **Opening line:** `Dear <client.name>,` on its own line. ALWAYS. The client's name is in the database. No name = do not compose.
 
-2. **Body:** Reference what you found (dossier finding or factlet). Connect it to the product in ONE sentence. Be warm, collegial, and brief. Sound like a helpful peer, not a salesperson auditing their school.
+2. **Body:** Reference what you found (dossier finding or factlet). Connect it to the product in ONE sentence. Be warm, collegial, and brief. Sound like a helpful peer, not a salesperson auditing them.
 
-3. **Closing line:** `Can I show it to you over Zoom?` — This is the ONLY permitted closing. No variations. No alternatives. Not "Would you like to see a demo?" Not "Let me know if you'd like to learn more." Exactly: `Can I show it to you over Zoom?`
+3. **Closing line:** Use the exact line defined in `DOCS/VALUE_PROP.md` under "Permitted closing line". Do not invent variations.
 
 #### HARD FORMATTING RULES
 
@@ -441,20 +505,20 @@ Do NOT use — (em-dash) or -- (double-hyphen) ANYWHERE in the draft. Not once. 
 
 **THIS IS THE #1 TONE RULE. VIOLATING IT = AUTOMATIC BREWING.**
 
-Do NOT take something positive about the school and then question it, challenge it, or undermine it. This is called "negging" and it is the fastest way to get deleted.
+Do NOT take something positive about the prospect and then question it, challenge it, or undermine it. This is called "negging" and it is the fastest way to get deleted.
 
 **BANNED patterns:**
-- "Your school's focus on X is impressive. But what about Y?"
+- "Your [org]'s focus on X is impressive. But what about Y?"
 - "You're doing great work with X. Have you considered that Y?"
 - "[Positive statement]. But [negative implication or gap]."
 - "[Compliment], but [criticism or challenge]."
 - Any "This is true...but..." or "...but what about..." construction
-- Any sentence that praises the school then pivots to what they're missing
+- Any sentence that praises them then pivots to what they're missing
 
 **CORRECT approach:** Mention what you found about them (warmly, without judgment). Connect it to the product naturally. Ask for the meeting. That's it. Three moves. No auditing. No lecturing. No negging.
 
-Example of WRONG tone: "Your commitment to student wellness is clear. But are you seeing the students who are slipping through the cracks?"
-Example of RIGHT tone: "I saw [specific thing]. Bloomsights helps schools like yours [specific capability]. Can I show it to you over Zoom?"
+Example of WRONG tone: "Your commitment to [cause] is clear. But are you seeing the [problem] slipping through the cracks?"
+Example of RIGHT tone: "I saw [specific thing]. [Product] helps [audience] [specific capability]. [Closing line from VALUE_PROP.md]"
 
 **Brevity rule:** No word count cap, but cut every word that doesn't earn its place. Done when nothing can be removed, not when nothing can be added.
 
@@ -532,7 +596,7 @@ Write to this file AS YOU GO — not at the end. Use the Edit tool to append.
   - Impact: [what it prevented]
 ```
 
-Failure categories: `NO_EMAIL`, `GENERIC_EMAIL`, `CHASE_CONTACT`, `READY_BLOCKED_CONTACT`, `NO_WEBSITE`, `SCRAPE_FAILED`, `SCRAPE_FALLBACK_GEMINI`, `SCRAPE_FALLBACK_GROK`, `NO_AI_ASSISTANT`, `FACEBOOK_BLOCKED`, `LINKEDIN_BLOCKED`, `THIN_DOSSIER`, `DRAFT_FAILED_EVAL`, `OUT_OF_GEOGRAPHY`
+Failure categories: `NO_EMAIL`, `GENERIC_EMAIL`, `CHASE_CONTACT`, `READY_BLOCKED_CONTACT`, `NO_WEBSITE`, `SCRAPE_FAILED`, `SCRAPE_FALLBACK_GEMINI`, `SCRAPE_FALLBACK_GROK`, `NO_AI_ASSISTANT`, `FACEBOOK_BLOCKED`, `LINKEDIN_BLOCKED`, `THIN_DOSSIER`, `DRAFT_FAILED_EVAL`, `OUT_OF_GEOGRAPHY`, `VENDOR_OPPORTUNITY`
 
 ## Error Handling
 
@@ -558,9 +622,9 @@ Failure categories: `NO_EMAIL`, `GENERIC_EMAIL`, `CHASE_CONTACT`, `READY_BLOCKED
      Things to review and tune manually:
 
      1. DISCOVERY STEPS (Step 2): Add or remove URL types specific to your audience.
-        e.g., for schools: add board_minutes, school_calendar
         e.g., for events: add event_listing, yelp_profile, venue_page
         e.g., for B2B SaaS: add G2 reviews, Capterra, Crunchbase
+        e.g., for trade/services: add trade_association, chamber_of_commerce
 
      2. INGESTION SIGNALS (Step 3): Edit the bullet list of "signals relevant to selling
         the product" — make it specific to your buyer's pain points (per VALUE_PROP.md).
@@ -575,7 +639,7 @@ Failure categories: `NO_EMAIL`, `GENERIC_EMAIL`, `CHASE_CONTACT`, `READY_BLOCKED
         "Is there an active seasonal window for this client's segment?"
         Inject the timing signal into the warmth score and the draft hook.
 
-     5. COMPOSE RULES: Tune max words, tone, open/close rules for your specific buyer.
-        A busy HR manager and a school principal need different email styles.
+     5. COMPOSE RULES: All compose rules live in DOCS/VALUE_PROP.md, not here.
+        Tune max words, tone, open/close, and forbidden phrases in that file.
         A 100-word email is not the same as a 150-word email.
 -->
