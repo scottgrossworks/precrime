@@ -71,13 +71,7 @@ Scan all returned tabs for AI assistant URLs:
 - **Gemini:** tab URL contains `gemini.google.com`
 - **Grok:** tab URL contains `grok.com` or `x.com/i/grok`
 
-Record session state:
-```
-SESSION_AI = {
-  gemini: <tabId> | null,
-  grok:   <tabId> | null
-}
-```
+Record which AI tabs were found as session context: `SESSION_AI.gemini` = the Gemini tab ID (or null if not found), `SESSION_AI.grok` = the Grok tab ID (or null if not found).
 
 - **If at least one found:** report and proceed. Prefer Gemini if both available.
   > Example: "Gemini detected (tab 433998513). Interactive mode active."
@@ -98,9 +92,7 @@ This deployment's run mode is baked in at build time: **{{RUN_MODE}}**
 
 If the init-wizard ran this session and the user set a different mode (`SESSION_RUN_MODE` in session context), that overrides the manifest default. Resolution order:
 
-```
-runMode = SESSION_RUN_MODE (if set by init-wizard this session) || "{{RUN_MODE}}"
-```
+Resolve run mode: use `SESSION_RUN_MODE` if the init-wizard set it this session; otherwise default to `"{{RUN_MODE}}"` (baked in for this deployment). Hold this as `runMode` for the rest of the session.
 
 Print this banner ONCE before the loop starts, and repeat it in every ROUNDUP.md client entry:
 
