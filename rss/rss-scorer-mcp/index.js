@@ -26,14 +26,37 @@ import { dirname, join } from 'path';
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
 
-// Load configuration
+// Load configuration (scoring params, keywords, blacklist)
 const CONFIG = JSON.parse(readFileSync(join(__dirname, 'rss_config.json'), 'utf8'));
 const parser = new Parser();
+
+// Load feeds from the skill's human-editable source list.
+// Single source of truth — never duplicate feed lists into JSON.
+// Format per line: <url> | <name> | <category>   (# comments ignored)
+function loadFeedsFromSkill() {
+  const SOURCES_PATH = join(__dirname, '../../skills/rss-factlet-harvester/rss_sources.md');
+  const raw = readFileSync(SOURCES_PATH, 'utf8');
+  const feeds = [];
+  for (const line of raw.split(/\r?\n/)) {
+    const trimmed = line.trim();
+    if (!trimmed || trimmed.startsWith('#')) continue;
+    const parts = trimmed.split('|').map(s => s.trim());
+    if (parts.length < 1 || !parts[0]) continue;
+    feeds.push({
+      url: parts[0],
+      name: parts[1] || parts[0],
+      category: parts[2] || 'general',
+      keywords: []  // per-feed keywords deprecated — global keywords handle scoring
+    });
+  }
+  return feeds;
+}
+CONFIG.feeds = loadFeedsFromSkill();
 
 console.error('='.repeat(60));
 console.error('Pre-Crime RSS Scorer MCP Server');
 console.error('='.repeat(60));
-console.error(`Feeds configured: ${CONFIG.feeds.length}`);
+console.error(`Feeds loaded from rss_sources.md: ${CONFIG.feeds.length}`);
 console.error(`Global keywords: ${CONFIG.keywords.global.length}`);
 console.error(`Relevance threshold: ${CONFIG.processing.relevanceThreshold} points`);
 console.error('='.repeat(60));
@@ -160,20 +183,43 @@ async function getTopArticles(limit = 6) {
   const allArticles = [];
   const totalFeeds = CONFIG.feeds.length;
 
-  console.error(`\nProcessing ${totalFeeds} feeds, target: ${limit} articles`);
+  // Diagnostics — populated so the caller can tell WHY 0 articles came back
+  // (threshold too high vs. feeds all fetch-failing vs. no feeds configured).
+  const diag = {
+    feedsTotal: totalFeeds,
+    feedsFetched: 0,
+    feedsFailed: 0,
+    itemsSeen: 0,
+    maxScoreSeen: 0,
+    maxScoreTitle: null,
+    maxScoreFeed: null
+  };
+
+  console.error(`\nProcessing ${totalFeeds} feeds, target: ${limit} articles (threshold=${CONFIG.processing.relevanceThreshold})`);
 
   for (let i = 0; i < CONFIG.feeds.length; i++) {
     const feedConfig = CONFIG.feeds[i];
     try {
       console.error(`[${i+1}/${totalFeeds}] ${feedConfig.name}...`);
       const feed = await fetchFeed(feedConfig);
-      if (!feed) continue;
+      if (!feed) { diag.feedsFailed++; continue; }
+      diag.feedsFetched++;
 
       const scoredItems = filterAndScoreItems(feed.items, feedConfig);
+      diag.itemsSeen += scoredItems.length;
+
+      // Track the single highest-scoring article across ALL feeds — even if it
+      // doesn't clear the threshold. This is the #1 signal for tuning.
+      if (scoredItems.length > 0 && scoredItems[0].score > diag.maxScoreSeen) {
+        diag.maxScoreSeen  = scoredItems[0].score;
+        diag.maxScoreTitle = (scoredItems[0].title || '').substring(0, 80);
+        diag.maxScoreFeed  = feedConfig.name;
+      }
+
       const relevantItems = scoredItems.filter(item => item.score >= CONFIG.processing.relevanceThreshold);
       allArticles.push(...relevantItems);
 
-      console.error(`  ✓ ${relevantItems.length} above threshold`);
+      console.error(`  ✓ ${relevantItems.length} above threshold (max=${scoredItems[0]?.score ?? 0})`);
 
       if (CONFIG.processing.earlyExitEnabled) {
         const top = allArticles.sort((a, b) => b.score - a.score).slice(0, CONFIG.processing.earlyExitCount);
@@ -184,6 +230,7 @@ async function getTopArticles(limit = 6) {
         }
       }
     } catch (error) {
+      diag.feedsFailed++;
       console.error(`  ✗ Error: ${error.message}`);
     }
   }
@@ -201,7 +248,31 @@ async function getTopArticles(limit = 6) {
   }
 
   const final = result.slice(0, limit);
-  console.error(`Done in ${((Date.now() - startTime)/1000).toFixed(1)}s — returning ${final.length} articles`);
+  const elapsed = ((Date.now() - startTime) / 1000).toFixed(1);
+  console.error(`Done in ${elapsed}s — returning ${final.length} articles`);
+
+  // When zero articles came back, print a concrete diagnostic line so the
+  // caller can tell whether to lower the threshold, fix dead feeds, or
+  // add keywords — instead of the generic "feeds may need new sources or
+  // the MCP server may need a restart" guess.
+  if (final.length === 0) {
+    const threshold = CONFIG.processing.relevanceThreshold;
+    console.error(`  ZERO_ARTICLES_DIAG: feeds=${diag.feedsFetched}/${diag.feedsTotal} fetched (${diag.feedsFailed} failed), items_scored=${diag.itemsSeen}, max_score=${diag.maxScoreSeen} (threshold=${threshold})`);
+    if (diag.feedsTotal === 0) {
+      console.error(`  LIKELY CAUSE: no feeds configured. Add entries to skills/rss-factlet-harvester/rss_sources.md and restart.`);
+    } else if (diag.feedsFetched === 0) {
+      console.error(`  LIKELY CAUSE: every feed failed to fetch. Check network, or feed URLs may have moved. See errors above.`);
+    } else if (diag.itemsSeen === 0) {
+      console.error(`  LIKELY CAUSE: feeds fetched but returned no items. Feeds may be empty or blocked by blacklist/recency filter.`);
+    } else if (diag.maxScoreSeen < threshold) {
+      console.error(`  LIKELY CAUSE: threshold too high. Top article scored ${diag.maxScoreSeen} ("${diag.maxScoreTitle}" from ${diag.maxScoreFeed}). Lower relevanceThreshold in rss_config.json or expand keywords.global.`);
+    } else {
+      console.error(`  LIKELY CAUSE: unknown — items passed threshold during loop but none survived maxArticlesPerFeed filter.`);
+    }
+  }
+
+  // Attach diag to the array as a non-enumerable property for the MCP response
+  Object.defineProperty(final, '_diag', { value: diag, enumerable: false });
   return final;
 }
 
@@ -227,6 +298,23 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
 server.setRequestHandler(CallToolRequestSchema, async (request) => {
   if (request.params.name === 'get_top_articles') {
     const articles = await getTopArticles(request.params.arguments?.limit || 6);
+    // If no articles came back, include the diag hint in the response so the
+    // agent can report a specific cause rather than guessing "feeds may need
+    // new sources or the MCP server may need a restart".
+    if (articles.length === 0 && articles._diag) {
+      const d = articles._diag;
+      const threshold = CONFIG.processing.relevanceThreshold;
+      let cause;
+      if (d.feedsTotal === 0)           cause = 'no feeds configured (edit skills/rss-factlet-harvester/rss_sources.md)';
+      else if (d.feedsFetched === 0)    cause = `all ${d.feedsTotal} feeds failed to fetch`;
+      else if (d.itemsSeen === 0)       cause = 'feeds fetched but produced no items (blacklist or recency filter rejected all)';
+      else if (d.maxScoreSeen < threshold) cause = `threshold too high — top article scored ${d.maxScoreSeen} (threshold=${threshold}). Lower relevanceThreshold in rss_config.json.`;
+      else                              cause = 'items passed threshold but were filtered by maxArticlesPerFeed';
+      return { content: [{ type: 'text', text: JSON.stringify({
+        articles: [],
+        diag: { ...d, threshold, cause }
+      }) }] };
+    }
     return { content: [{ type: 'text', text: JSON.stringify(articles) }] };
   }
   throw new Error(`Unknown tool: ${request.params.name}`);

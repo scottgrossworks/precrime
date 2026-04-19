@@ -107,9 +107,21 @@
       "At [company], we help [audience] to"
     ]
   },
+  "configSeed": {
+    "_comment": "OPTIONAL. Pre-populates the Config table at build time — enables headless install. Delete this block to leave Config empty and let init-wizard fill it interactively. If leedzEmail is set but leedzSession is omitted, deploy.js generates a 1-year HS256 JWT automatically.",
+    "companyName": "",
+    "companyEmail": "",
+    "businessDescription": "",
+    "defaultTrade": "",
+    "defaultBookingAction": "",
+    "marketplaceEnabled": false,
+    "leadCaptureEnabled": false,
+    "leedzEmail": "",
+    "leedzSession": ""
+  },
   "rssConfig": {
-    "additionalKeywords": [],
-    "feeds": []
+    "_comment": "Feeds live in skills/rss-factlet-harvester/rss_sources.md, not here. Only additionalKeywords is honored at deploy time.",
+    "additionalKeywords": []
   },
   "redditConfig": {
     "additionalKeywords": [],

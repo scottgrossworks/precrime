@@ -4,6 +4,26 @@ Append-only. One entry per source doc processed.
 
 ---
 
+## [2026-04-18] session | RSS scorer: lower default threshold, diagnose zero-article returns, kill dead feeds surface
+
+**Symptom:** PHOTOBOOTH precrime session reported `RSS: 0 articles returned - feeds may need new sources or the MCP server may need a restart` — generic and unactionable. Live probe of 4 PHOTOBOOTH feeds showed top-scoring articles coming in at 5–6 points against a threshold of 15. Zero passed.
+
+**Root cause:** `templates/rss_config.json → processing.relevanceThreshold = 15` was tuned for an earlier, keyword-rich scoring regime. Current global keywords are mostly long-tail phrases ("photo booth rental", "Los Angeles events") that rarely appear in RSS `<description>` snippets. Without the 5-point recency bonus (article < 24h old), nothing clears 15.
+
+**Fixes shipped to PRECRIME source:**
+
+1. `templates/rss_config.json` — `relevanceThreshold` lowered from `15` → `6`. Also removed the vestigial `feeds: []` field; feeds are loaded from `skills/rss-factlet-harvester/rss_sources.md`, never from this JSON.
+
+2. `rss/rss-scorer-mcp/index.js` — `getTopArticles()` now tracks a diagnostic payload (`feedsFetched`, `feedsFailed`, `itemsSeen`, `maxScoreSeen`, `maxScoreTitle`, `maxScoreFeed`) and, when returning zero articles, both logs a concrete "LIKELY CAUSE" line AND attaches a `diag` object to the MCP response. The agent can now distinguish "threshold too high" vs. "feeds all 404" vs. "no feeds configured" without guessing.
+
+3. `deploy.js` — the `manifest.rssConfig.feeds` merge branch now prints a warning instead of silently writing a dead field into the output JSON. Agents tuning feeds via manifest were getting misled.
+
+4. `manifests/manifest.generic.json` — `rssConfig.feeds` removed; a `_comment` field now documents that feeds live in `rss_sources.md`.
+
+**PHOTOBOOTH fix (deployment-local, not source):** told the user to set `relevanceThreshold: 6` in their live `rss_config.json` and restart the RSS MCP server. Two feeds (`bizbash.com/feed`, `laist.com/feed/all`) are returning 404 — they can stay and just log errors until the user prunes them.
+
+---
+
 ## [2026-04-18] session | Scoring policy extracted to scoring_config.json + share-skill Bash+curl fix
 
 **Refactor:** `computeBookingScore`, `handleScoreClient`, `handleLinkFactlet`, and `isGenericEmail` used to have all their weights, thresholds, regex patterns, and the generic-email prefix list hardcoded as JS literals. Non-coders couldn't tune, and parallel deployments risked drifting. Lifted all policy into `server/mcp/scoring_config.json`. `mcp_server.js` loads it once at startup and fails fast if missing/malformed. `LOC_RX` regexes are compiled once from the JSON patterns. `deploy.js` now copies `scoring_config.json` alongside `mcp_server.js` into every generated deployment.

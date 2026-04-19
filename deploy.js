@@ -414,7 +414,9 @@ write(path.join(outputDir, 'server', 'mcp', 'mcp_server_config.json'), JSON.stri
 // 5. Generate .mcp.json
 copyTemplate('mcp.json', '.mcp.json', tokens);
 
-// 6. Generate rss_config.json (merge base template + manifest feeds)
+// 6. Generate rss_config.json (merge base template + manifest keywords)
+// NOTE: feeds are loaded by the RSS server from skills/rss-factlet-harvester/rss_sources.md,
+// NOT from this JSON. Any `feeds` field here is ignored at runtime.
 const baseRssCfgPath = path.join(TMPL, 'rss_config.json');
 let rssCfg = JSON.parse(fs.readFileSync(baseRssCfgPath, 'utf8'));
 const mc = manifest.rssConfig || {};
@@ -423,7 +425,7 @@ if (mc.additionalKeywords && mc.additionalKeywords.length) {
   rssCfg.keywords.global = [...new Set(rssCfg.keywords.global)];
 }
 if (mc.feeds && mc.feeds.length) {
-  rssCfg.feeds.push(...mc.feeds);
+  console.warn('  ⚠ manifest.rssConfig.feeds is ignored — edit skills/rss-factlet-harvester/rss_sources.md instead');
 }
 write(path.join(outputDir, 'rss', 'rss-scorer-mcp', 'rss_config.json'), JSON.stringify(rssCfg, null, 2));
 
