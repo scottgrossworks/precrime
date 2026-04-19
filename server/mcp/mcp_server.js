@@ -6,7 +6,10 @@
  *
  * 19 tools: 12 original (+ create_client) + 4 booking + 3 scoring (link_factlet, get_client_factlets, score_client)
  *
- * @version 2.0.0
+ * Scoring policy (weights, thresholds, regex patterns, generic-email list)
+ * is loaded from `scoring_config.json` at startup — tune the JSON, not this file.
+ *
+ * @version 2.1.0
  */
 
 const readline = require('readline');
@@ -56,6 +59,23 @@ try {
     console.error(`[MCP] FATAL: mcp_server_config.json not found: ${error.message}`);
     process.exit(1);
 }
+
+// Scoring policy — weights, thresholds, regex patterns, generic email list.
+// Edit scoring_config.json to tune the algorithm, not this file.
+const SCORING_CONFIG_PATH = path.resolve(__dirname, 'scoring_config.json');
+let SCORING;
+try {
+    SCORING = JSON.parse(fs.readFileSync(SCORING_CONFIG_PATH, 'utf8'));
+} catch (error) {
+    console.error(`[MCP] FATAL: scoring_config.json not found or invalid: ${error.message}`);
+    process.exit(1);
+}
+// Compile regex patterns once at startup
+const LOC_RX = {
+    street:      new RegExp(SCORING.booking.location.patterns.street, 'i'),
+    venue:       new RegExp(SCORING.booking.location.patterns.venue, 'i'),
+    campusVague: new RegExp(SCORING.booking.location.patterns.campusVague, 'i')
+};
 
 const dbPath = process.env.DATABASE_URL.replace(/^file:/, '');
 const prisma = new PrismaClient();
@@ -457,7 +477,7 @@ function handleToolsList(id) {
                 },
                 {
                     name: 'score_booking',
-                    description: 'Compute a 0-100 readiness score for a Booking. Five categories: trade (0/20), date (0/20), location (0/10/20), contact (0/10/15/20 — generic emails like info@ score 0), description (0/10/20). Share threshold: total >= 70 AND contact >= 10. Writes bookingScore + contactQuality to DB and returns full breakdown + recommended action.',
+                    description: 'Compute a 0-100 readiness score for a Booking. Six categories: trade (0/20), date (0/5/10/20 penalizes vague multi-week ranges), location (0/5/10/15/20 penalizes campus/complex names without specific venue; bare city name scores 5), contact (0/10/15/20 generic emails like info@ score 0), description (0/10), time (0/10 requires startTime or duration). Hard gates for share-readiness (ALL must pass): total >= 70, trade >= 20, location >= 15 (real venue address — addLeed requires lc), date >= 20 (specific event window — addLeed requires st/et), contact >= 10 (named person). Writes bookingScore + contactQuality to DB and returns full breakdown + recommended action.',
                     inputSchema: {
                         type: 'object',
                         properties: {
@@ -871,8 +891,9 @@ async function handleGetBookings(id, params) {
 // CLIENT SCORING — PROCEDURAL, NO LLM
 // ============================================================================
 
-const SIGNAL_POINTS = { pain: 2, occasion: 2, context: 1 };
-const DRAFT_THRESHOLD = 5;
+// Client scoring constants — sourced from scoring_config.json
+const SIGNAL_POINTS = SCORING.client.signalPoints;
+const DRAFT_THRESHOLD = SCORING.client.draftThreshold;
 
 async function handleLinkFactlet(id, params) {
     const args = params.arguments || {};
@@ -995,14 +1016,8 @@ async function handleScoreClient(id, params) {
 // BOOKING SCORE — PROCEDURAL, NO LLM
 // ============================================================================
 
-const GENERIC_EMAIL_PREFIXES = new Set([
-    'info', 'contact', 'hello', 'support', 'admin', 'office',
-    'general', 'mail', 'help', 'team', 'webmaster', 'bookings',
-    'events', 'enquiries', 'inquiries', 'noreply', 'noreply',
-    'sales', 'marketing', 'pr', 'media', 'press', 'news',
-    'reception', 'management', 'operations', 'service', 'services',
-    'customerservice', 'customercare', 'care', 'feedback', 'staff'
-]);
+// Generic email prefixes — sourced from scoring_config.json
+const GENERIC_EMAIL_PREFIXES = new Set(SCORING.booking.genericEmailPrefixes);
 
 function isGenericEmail(email) {
     if (!email) return false;
@@ -1012,65 +1027,109 @@ function isGenericEmail(email) {
 
 function computeBookingScore(booking, client) {
     const b = {};
+    const P = SCORING.booking;  // policy shorthand
 
-    // Trade: 0 or 20
-    b.trade = booking.trade ? 20 : 0;
+    // Trade: 0 or 20 — addLeed API requires tn
+    b.trade = booking.trade ? P.trade.present : P.trade.missing;
 
-    // Date: 0 or 20
-    b.date = booking.startDate ? 20 : 0;
+    // Date: tiered by event window span — addLeed API requires st/et
+    if (booking.startDate) {
+        if (!booking.endDate) {
+            b.date = P.date.singleDay;
+        } else {
+            const start = new Date(booking.startDate);
+            const end   = new Date(booking.endDate);
+            const spanDays = (end - start) / (1000 * 60 * 60 * 24);
+            if (spanDays <= P.date.tightWindowMaxDays)      b.date = P.date.tightWindow;
+            else if (spanDays <= P.date.roughWindowMaxDays) b.date = P.date.roughWindow;
+            else                                             b.date = P.date.ongoing;
+        }
+    } else {
+        b.date = P.date.missing;
+    }
 
-    // Location: 0, 10, or 20
-    const hasLoc = !!(booking.location && booking.location.trim());
+    // Location: tiered by address specificity — addLeed API requires lc (full address)
+    const loc    = (booking.location || '').trim();
     const hasZip = !!(booking.zip && booking.zip.trim());
-    if (hasLoc && hasZip)      b.location = 20;
-    else if (hasZip || hasLoc) b.location = 10;
-    else                       b.location = 0;
+    const T = P.location.tiers;
 
-    // Contact: 0, 10, 15, or 20 — generic email always scores 0
-    const hasName      = !!(client?.name && client.name.trim());
-    const email        = (client?.email || '').trim();
-    const generic      = email ? isGenericEmail(email) : false;
+    if (loc && hasZip) {
+        const hasStreet = LOC_RX.street.test(loc);
+        const hasVenue  = LOC_RX.venue.test(loc);
+        const isVague   = LOC_RX.campusVague.test(loc) && !hasVenue;
+        if (hasStreet && hasVenue)       b.location = T.streetAndVenue;  // e.g. "CSUN MatArena, 18111 Nordhoff St"
+        else if (hasStreet && !isVague)  b.location = T.cleanStreet;
+        else if (hasVenue)               b.location = T.namedVenue;
+        else if (hasStreet && isVague)   b.location = T.streetInVague;
+        else if (isVague)                b.location = T.vagueOnly;
+        else                             b.location = T.bareCity;  // bare city + zip, not vendor-actionable
+    } else if (hasZip || loc) {
+        b.location = T.partial;
+    } else {
+        b.location = T.none;
+    }
+
+    // Contact: tiered by name + email — generic email always scores 0
+    const hasName       = !!(client?.name && client.name.trim());
+    const email         = (client?.email || '').trim();
+    const generic       = email ? isGenericEmail(email) : false;
     const hasNamedEmail = email && !generic;
-    if (hasName && hasNamedEmail) b.contact = 20;
-    else if (hasNamedEmail)       b.contact = 15;
-    else if (hasName)             b.contact = 10;
-    else                          b.contact = 0;  // no contact OR generic email only
+    if (hasName && hasNamedEmail) b.contact = P.contact.nameAndNamedEmail;
+    else if (hasNamedEmail)       b.contact = P.contact.namedEmailOnly;
+    else if (hasName)             b.contact = P.contact.nameOnly;
+    else                          b.contact = P.contact.none;
 
-    // Description: 0, 10, or 20
+    // Description: word-count threshold (not a hard gate)
     const desc      = (booking.description || '').trim();
     const wordCount = desc ? desc.split(/\s+/).length : 0;
-    if (wordCount >= 20)   b.description = 20;
-    else if (wordCount > 0) b.description = 10;
-    else                    b.description = 0;
+    b.description = wordCount >= P.description.minWords ? P.description.points : 0;
 
-    const total = b.trade + b.date + b.location + b.contact + b.description;
+    // Time: startTime OR duration (not a hard gate, but useful)
+    const hasTime     = !!(booking.startTime && booking.startTime.trim());
+    const hasDuration = !!(booking.duration && booking.duration > 0);
+    b.time = (hasTime || hasDuration) ? P.time.points : 0;
 
-    // Hard gates: total >= 70 AND contact >= 10 (must have a real person)
-    const shareReady = total >= 70 && b.contact >= 10;
+    const total = b.trade + b.date + b.location + b.contact + b.description + b.time;
+
+    // Hard gates — ALL must pass. Tuned to the Leedz addLeed Lambda's required fields.
+    const G = P.hardGates;
+    const shareReady = total >= G.totalMin
+        && b.trade    >= G.tradeMin       // addLeed tn
+        && b.location >= G.locationMin    // addLeed lc
+        && b.date     >= G.dateMin        // addLeed st/et
+        && b.contact  >= G.contactMin;    // buyer needs a named person
 
     // Contact quality label
     let contactQuality;
-    if (b.contact === 20)      contactQuality = 'named_email_and_name';
-    else if (b.contact === 15) contactQuality = 'named_email';
-    else if (b.contact === 10) contactQuality = 'name_only';
-    else if (generic)          contactQuality = 'generic_email';
-    else                       contactQuality = 'none';
+    if (b.contact === P.contact.nameAndNamedEmail)   contactQuality = 'named_email_and_name';
+    else if (b.contact === P.contact.namedEmailOnly) contactQuality = 'named_email';
+    else if (b.contact === P.contact.nameOnly)       contactQuality = 'name_only';
+    else if (generic)                                contactQuality = 'generic_email';
+    else                                             contactQuality = 'none';
 
-    // Recommended next action if not share-ready
+    // Recommended next action if not share-ready — hard gates first, then soft gaps
     let action = null;
     if (!shareReady) {
-        if (b.contact === 0 && generic) {
+        // Hard gates (API will reject or buyer can't act without these)
+        if (b.trade < G.tradeMin) {
+            action = 'CLASSIFY: Assign a trade category before sharing. addLeed requires tn.';
+        } else if (b.contact < G.contactMin && generic) {
             action = `ENRICH: ${email} is a generic inbox. Find a named contact via website, LinkedIn, or Facebook.`;
-        } else if (b.contact === 0) {
+        } else if (b.contact < G.contactMin) {
             action = 'ENRICH: No contact found. Search for a named person at this organization.';
-        } else if (!booking.trade) {
-            action = 'CLASSIFY: Assign a trade category before sharing.';
-        } else if (!booking.startDate) {
-            action = 'ENRICH: No event date. Search or send probe email to confirm timing.';
-        } else if (b.location < 20) {
-            action = 'ENRICH: Partial location. Search for venue address and zip.';
-        } else if (b.description < 20) {
-            action = 'ENRICH: Thin description. Scrape more context or send probe email.';
+        } else if (b.location < G.locationMin) {
+            action = 'ENRICH: Location is not specific enough to share. A vendor needs a real venue address they can show up to. Find the specific hall, lawn, or room.';
+        } else if (b.date < G.dateMin) {
+            if (!booking.startDate) {
+                action = 'ENRICH: No event date. Search or send probe email to confirm timing.';
+            } else {
+                action = 'ENRICH: Date range is too broad to be a single bookable event. Find specific event dates or sessions.';
+            }
+        // Soft gaps (won't block sharing but improve score)
+        } else if (b.time === 0) {
+            action = 'ENRICH: No start time or duration. A vendor needs hours to quote a price.';
+        } else if (b.description === 0) {
+            action = 'ENRICH: No description. Scrape event page or add context about the opportunity.';
         } else {
             action = 'OUTREACH: Send probe email to confirm missing details.';
         }
@@ -1113,7 +1172,8 @@ async function handleScoreBooking(id, params) {
             date:        `${b.date}/20  — ${dateStr}`,
             location:    `${b.location}/20 — ${locStr}`,
             contact:     `${b.contact}/20 — ${booking.client?.email || 'no email'}${emailNote}`,
-            description: `${b.description}/20 — ${(booking.description||'').split(/\s+/).filter(Boolean).length} words`,
+            description: `${b.description}/10 — ${(booking.description||'').split(/\s+/).filter(Boolean).length} words`,
+            time:        `${b.time}/10  — ${booking.startTime || booking.duration || 'MISSING'}`,
         },
         action
     }, null, 2));

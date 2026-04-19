@@ -1,10 +1,17 @@
 ---
-title: Client Scoring & Draft Gate
-tags: [scoring, factlet, contact, dossier, draft, enrichment, gate, warmth, sentAt]
-source_docs: [DOCS/PLAN.md, DOCS/EMAIL_FINDER.md, server/mcp/mcp_server.js, templates/skills/enrichment-agent.md, templates/skills/email-finder.md, templates/skills/evaluator.md]
-last_updated: 2026-04-14
+title: Scoring — Client Draft Gate & Booking Readiness
+tags: [scoring, factlet, contact, dossier, draft, enrichment, gate, warmth, sentAt, booking, shareReady]
+source_docs: [DOCS/SCORING_SYSTEM.md, DOCS/EMAIL_FINDER.md, server/mcp/mcp_server.js, templates/skills/enrichment-agent.md, templates/skills/email-finder.md, templates/skills/evaluator.md]
+last_updated: 2026-04-18
 staleness: none
 ---
+
+Two independent scoring systems live in this project:
+
+1. **Client scoring** — gates draft composition (outreach emails). Procedural contactGate + dossierScore + LLM warmth. See sections below through "sentAt".
+2. **Booking readiness scoring** — gates sharing (marketplace post or forwarded opportunity). Fully procedural, no LLM. See the bottom of this page.
+
+They share only the generic-email detection. Neither feeds into the other.
 
 The client scoring system determines when a client qualifies for automated outreach draft composition. Three mechanisms gate drafting: a binary contact gate, a continuous dossier score, and a holistic warmth assessment.
 
@@ -207,8 +214,141 @@ update_client({ id, draftStatus: "sent", sentAt: new Date().toISOString() })
 
 ---
 
+---
+
+## Booking Readiness Score
+
+Independent from client scoring. Exposed via `score_booking`. Procedural, no LLM. Implemented in `computeBookingScore()` in `server/mcp/mcp_server.js`, but **all tunable values (weights, thresholds, regex patterns, generic-email list) live in `server/mcp/scoring_config.json`**. The JS is a harness that loads the JSON at startup; to retune, edit the JSON and restart the MCP server.
+
+**Purpose:** decide whether a Booking has enough structured detail that a vendor could quote a price and show up. A shareReady Booking is the handoff unit for `share-skill.md` (marketplace post via Leedz API, or email).
+
+**This algorithm has been actively tuned based on real scoring failures.** Vague multi-week date ranges, campus names without venues, and Bookings lacking start times were all scoring as shareable when they weren't.
+
+### Categories (total = 100)
+
+| Category      | Max | Signal                                     |
+|---------------|-----|--------------------------------------------|
+| `trade`       | 20  | Categorizable service type                 |
+| `date`        | 20  | Bookable event window                      |
+| `location`    | 20  | Specific place a vendor can show up        |
+| `contact`     | 20  | Named person + direct email                |
+| `description` | 10  | Enough context for a draft                 |
+| `time`        | 10  | Hours (so a vendor can quote)              |
+
+### Trade (0 or 20)
+Binary. Has `booking.trade` → 20, else 0.
+
+### Date (0 / 5 / 10 / 20)
+
+| Condition                                             | Points |
+|-------------------------------------------------------|--------|
+| `startDate`, no `endDate` (single-day)                | 20     |
+| Window ≤ 7 days                                       | 20     |
+| Window 8–30 days (rough range)                        | 10     |
+| Window > 30 days (ongoing/recurring)                  | 5      |
+| No `startDate`                                        | 0      |
+
+### Location (0 / 5 / 10 / 15 / 20)
+
+Needs both `location` text and `zip`. Three regex classifiers:
+
+- `HAS_STREET` — street address pattern
+- `HAS_VENUE` — hall, arena, ballroom, auditorium, pavilion, plaza, etc.
+- `CAMPUS_VAGUE` — campus, university, complex, fairgrounds, park (vague unless a venue is named)
+
+| Condition                                                  | Points |
+|------------------------------------------------------------|--------|
+| Street + specific venue                                    | 20     |
+| Clean street address (not vague)                           | 15     |
+| Named venue only (no street)                               | 15     |
+| Street address inside a campus/complex                     | 10     |
+| Campus name + zip, no street or venue                      | 10     |
+| **Bare city/neighborhood name + zip** (e.g. "Los Angeles") | **5**  |
+| Zip only OR text only                                      | 5      |
+| Nothing                                                    | 0      |
+
+"CSUN" + 91330 scores 10. "CSUN MatArena, 18111 Nordhoff St" + 91330 scores 20. "Los Angeles, 90210" scores 5 — bare city name is not vendor-actionable and fails the `location >= 15` hard gate.
+
+### Contact (0 / 10 / 15 / 20)
+
+From the linked Client. Uses `isGenericEmail()` (same prefix list as client scoring).
+
+| Condition                          | Points | Label                  |
+|------------------------------------|--------|------------------------|
+| Name + direct email                | 20     | `named_email_and_name` |
+| Direct email only                  | 15     | `named_email`          |
+| Name only                          | 10     | `name_only`            |
+| Generic email only (info@, etc.)   | 0      | `generic_email`        |
+| Nothing                            | 0      | `none`                 |
+
+### Description (0 or 10)
+≥ 10 words → 10, else 0.
+
+### Time (0 or 10)
+`startTime` present OR `duration > 0` → 10, else 0.
+
+### Share Threshold — Hard API Gates
+
+```
+shareReady = total >= 70
+          AND b.trade    >= 20   // addLeed requires tn
+          AND b.location >= 15   // addLeed requires lc — real venue address
+          AND b.date     >= 20   // addLeed requires st/et — specific window
+          AND b.contact  >= 10   // buyer needs a named person
+```
+
+**Every hard gate must pass.** No mechanical compensation — a high total cannot rescue a missing API-required field. The Leedz `addLeed` Lambda (see [[addleed-api]]) rejects POSTs without `tn`, `lc`, `zp`, `st`, or `et`. A booking that fails any gate would either be rejected by the API or posted in a state no vendor could act on.
+
+Key consequences:
+
+- "CSUN" + zip scores 10 (campus-vague) → fails `location >= 15` → NOT shareReady, regardless of total.
+- "Los Angeles, 90210" scores 5 (bare city name) → fails `location >= 15` → NOT shareReady.
+- A 60-day event range scores 5 (date) → fails `date >= 20` → NOT shareReady.
+- A great logistics booking with no named person scores 0 (contact) → NOT shareReady.
+
+### Recommended Action (not shareReady)
+
+Priority-ordered. Hard gates first (API will reject without these):
+
+1. no trade → `CLASSIFY`
+2. generic inbox → `ENRICH: find named contact`
+3. no contact → `ENRICH: find named person`
+4. `location < 15` (vague campus, city-only, or missing) → `ENRICH: find specific venue`
+5. `date < 20` (missing or too-broad window) → `ENRICH: narrow date`
+
+Then soft gaps (won't block sharing):
+
+6. no time/duration → `ENRICH`
+7. thin description → `ENRICH`
+8. else → `OUTREACH: send probe`
+
+The enrichment agent consumes `action` as its next-step directive.
+
+### Writes to DB
+`booking.bookingScore` (total) and `booking.contactQuality` (label).
+
+---
+
+## Tuning Lineage
+
+Booking score tuning is procedural — edit `server/mcp/scoring_config.json` and restart the MCP server. No LLM reasoning. Keep the config file and this doc in lockstep. Known triggers for the current tuning:
+
+- **Hardcoded thresholds in JS** made the scorer opaque to non-coders and risked drift between deployments. **Fix:** extracted all weights, tiers, regex patterns, hard-gate minimums, and the generic-email prefix list into `scoring_config.json`. `mcp_server.js` loads it once at startup and fails fast if the file is missing or malformed.
+
+- **No hard gate on location** — a booking with no real address could still pass shareReady if other fields compensated. addLeed would reject or a buyer couldn't act on it. **Fix:** added four hard gates (`trade >= 20`, `location >= 15`, `date >= 20`, `contact >= 10`) on top of the 70-point floor. No mechanical compensation allowed. API authority: [[addleed-api]].
+- Bare city name ("Los Angeles") scoring 15 → reduced to 5 (fails hard gate).
+- Vague multi-week dates scoring 20 → tiered date scoring + `date >= 20` hard gate.
+- Campus names without a venue scoring 20 → CAMPUS_VAGUE regex (score 10) + `location >= 15` hard gate.
+- Missing hours let events slip through as ready → added `time` category.
+- Description over-weighted as a primary gate → reduced to 10 max.
+- Vendor-opportunity contamination (fairs charging Scott) scoring hot → addressed upstream at enrichment-agent Step 2.5, not in this scorer.
+
+Live tuning work happens in the PHOTOBOOTH deployment's `server/mcp/mcp_server.js`. When stable, sync back to `PRECRIME/server/mcp/mcp_server.js` so future deployments inherit the tuned version.
+
+---
+
 ## Related
-- [[mcp]] — tool definitions for link_factlet, get_client_factlets, score_client
-- [[ontology]] — Client, Factlet, ClientFactlet entity definitions
+- [[mcp]] — tool definitions for link_factlet, get_client_factlets, score_client, score_booking
+- [[ontology]] — Client, Factlet, ClientFactlet, Booking entity definitions
 - [[architecture]] — enrichment pipeline data flow
 - [[email-finder]] — sub-skill that upgrades failing contact gates at Step 3.6

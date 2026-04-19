@@ -1,0 +1,92 @@
+{
+  "_comment": "PRECRIME scoring policy. Edit numeric thresholds, weights, and regex patterns here instead of in JS. mcp_server.js loads this at startup and fails fast if missing or malformed. After editing, restart the MCP server.",
+  "_version": "1.0.0",
+
+  "client": {
+    "_comment": "Client scoring policy — feeds score_client and link_factlet.",
+    "draftThreshold": 5,
+    "signalPoints": {
+      "pain": 2,
+      "occasion": 2,
+      "context": 1
+    }
+  },
+
+  "booking": {
+    "_comment": "Booking readiness policy — feeds score_booking and computeBookingScore. Hard gates are absolute. If any fail, shareReady=false regardless of total.",
+
+    "hardGates": {
+      "_comment": "ALL of these must pass for shareReady=true. Tuned to the Leedz addLeed Lambda's required fields (tn, lc, zp, st, et).",
+      "totalMin": 70,
+      "tradeMin": 20,
+      "locationMin": 15,
+      "dateMin": 20,
+      "contactMin": 10
+    },
+
+    "trade": {
+      "_comment": "0 or 20. addLeed requires tn.",
+      "present": 20,
+      "missing": 0
+    },
+
+    "date": {
+      "_comment": "Tiered by event window span in days. addLeed requires st and et.",
+      "singleDay": 20,
+      "tightWindowMaxDays": 7,
+      "tightWindow": 20,
+      "roughWindowMaxDays": 30,
+      "roughWindow": 10,
+      "ongoing": 5,
+      "missing": 0
+    },
+
+    "location": {
+      "_comment": "Tiered by address specificity. addLeed requires lc (full address). Regex patterns are case-insensitive.",
+      "patterns": {
+        "street":      "\\d+\\s+\\w+\\s+(st|street|ave|avenue|blvd|boulevard|dr|drive|rd|road|way|ln|lane|ct|court|pl|place)\\b",
+        "venue":       "\\b(hall|arena|stadium|ballroom|theater|theatre|auditorium|pavilion|lawn|plaza|center|centre|gym|library|room|building|bldg)\\b",
+        "campusVague": "\\b(campus|university|college|complex|fairgrounds|convention center|park)\\b"
+      },
+      "tiers": {
+        "_comment": "streetAndVenue = 'CSUN MatArena, 18111 Nordhoff St'. bareCity = 'Los Angeles' + zip, not vendor-actionable.",
+        "streetAndVenue": 20,
+        "cleanStreet":    15,
+        "namedVenue":     15,
+        "streetInVague":  10,
+        "vagueOnly":      10,
+        "bareCity":        5,
+        "partial":         5,
+        "none":            0
+      }
+    },
+
+    "contact": {
+      "_comment": "Generic email prefixes always score 0 regardless of name. Uses booking.genericEmailPrefixes list.",
+      "nameAndNamedEmail": 20,
+      "namedEmailOnly":    15,
+      "nameOnly":          10,
+      "none":               0
+    },
+
+    "description": {
+      "_comment": "Word-count threshold. Description is not a hard gate.",
+      "minWords": 10,
+      "points": 10
+    },
+
+    "time": {
+      "_comment": "startTime OR duration > 0 awards the points. Not a hard gate but useful to a vendor.",
+      "points": 10
+    },
+
+    "genericEmailPrefixes": [
+      "info", "contact", "hello", "support", "admin", "office",
+      "general", "mail", "help", "team", "webmaster", "bookings",
+      "events", "enquiries", "inquiries", "noreply",
+      "sales", "marketing", "pr", "media", "press", "news",
+      "reception", "management", "operations", "service", "services",
+      "customerservice", "customercare", "care", "feedback", "staff"
+    ]
+  }
+}

@@ -24,7 +24,7 @@ Check session context for `defaultBookingAction`:
 
 | Value | Action |
 |-------|--------|
-| `leedz_api` | POST to Leedz API Gateway via Bash+curl (no MCP server needed) → Step 2a |
+| `leedz_api` | POST to Leedz API Gateway via WebFetch (no MCP server needed) → Step 2a |
 | `email_share` | Email to share@theleedz.com → Step 2b |
 | `email_user` | Email to Config.companyEmail → Step 2c |
 | *(not set)* | Ask user once → Step 1a |
@@ -35,7 +35,7 @@ Check session context for `defaultBookingAction`:
 > **Trade:** {trade} | **Date:** {startDate} | **Location:** {location}
 >
 > What should I do?
-> 1. Post to The Leedz marketplace via API (leedz_api)
+> 1. Post to The Leedz marketplace via API — I POST directly from Bash/curl, no extra setup needed (leedz_api)
 > 2. Email to share@theleedz.com for review (email_share)
 > 3. Email to you ({companyEmail}) to decide (email_user)
 >
@@ -47,7 +47,7 @@ Note the answer as session context: `defaultBookingAction = [choice]`. Apply to 
 
 ## Step 2a: Post via Leedz API Gateway (leedz_api)
 
-**No MCP server required. POST via the Bash tool + `curl`.**
+**No MCP server required. POST to the API Gateway using the Bash tool + `curl`.**
 
 **DO NOT use WebFetch — it is GET-only and will return 404 against this endpoint.** The Leedz API Gateway requires an HTTP POST with a JSON body.
 
@@ -102,14 +102,7 @@ sh:      "*"                          // broadcast to all platform subscribers
 
 **st conversion:** `booking.startDate` is a datetime string. Convert to epoch ms before passing: `new Date(booking.startDate).getTime()`.
 
-**leedzSession JWT** is stored in `Config.leedzSession`. Set during init-wizard Step 5a. Generate with:
-```
-jwt.encode(
-  {'email': leedzEmail, 'type': 'session', 'exp': <1yr from now>},
-  '648373eeea08d422032db0d1e61a1bc096fe08dd2729ce611092c7a1af15d09c',
-  algorithm='HS256'
-)
-```
+**leedzSession JWT** is stored in `Config.leedzSession`. Already set during init-wizard Step 5a.
 
 On success (response body contains `result.content[0].text` as JSON `{id, tn, ti, pr, cd:1}`):
 ```
@@ -125,10 +118,7 @@ On failure: fall back to Step 2b. Log: `LEEDZ_API_FAILED — [error] — falling
 - **FROM:** leedzEmail (from Config) or companyEmail
 - **TO:** share@theleedz.com
 - **SUBJECT:** `price={leedPrice or 0}, share=*`
-  - Use `share=*` for broadcast (default)
-  - Use `share=friends` if user has a friends list on The Leedz
-  - Use `share=[email1,email2]` for private share to specific vendors
-- **BODY:** Human-readable booking summary for LLM parsing:
+- **BODY:**
   ```
   Trade: {trade}
   Title: {title}
@@ -158,14 +148,6 @@ Same body as Step 2b, but:
 - **TO:** Config.companyEmail
 - **SUBJECT:** `New leed_ready booking: {trade} / {startDate} / {location}`
 
-```
-mcp__gmail-sender__gmail_send({
-  to: config.companyEmail,
-  subject: "New leed_ready booking: {trade} / {startDate} / {location}",
-  body: "[same body as 2b]"
-})
-```
-
 On success: `update_booking({ id, status: "shared", shared: true, sharedTo: config.companyEmail, sharedAt: Date.now() })`
 
 ---
@@ -181,8 +163,7 @@ ACTION: {trade} / {startDate} / {location} → {action taken} [{success|failed}:
 
 ## Rules
 
-- **leedzMode = false or marketplaceEnabled = false:** Skip Step 2a. Go directly to email path (2b or 2c based on defaultBookingAction).
-- **trade not in canonical list:** Same as above — no API post. Log: `TRADE_NOT_IN_LEEDZ — {trade}`
+- **marketplaceEnabled = false or leedzSession is null:** Skip Step 2a entirely. Go to email path.
+- **trade not in canonical list:** Skip Step 2a. Log: `TRADE_NOT_IN_LEEDZ — {trade}`
 - **No email configured:** Log `NO_EMAIL_CONFIG` and skip. Do not crash the pipeline.
 - **Ask once per session.** Once `defaultBookingAction` is set as session context, never ask again.
-- **Do not auto-send without at least one booking detail confirmed.** The Completeness Check gate upstream handles this — trust it.

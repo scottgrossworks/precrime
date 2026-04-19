@@ -5,7 +5,7 @@
 #
 # Guidelines:
 # - Active, public pages only (no private groups)
-# - Focus on pages that post broadly applicable news (not individual school/org events)
+# - Focus on pages that post broadly applicable news (not individual one-off events)
 # - Prune pages that haven't posted in 60+ days (the harvester will flag these as STALE)
 # - Organize by sector/category using comment headers
 #

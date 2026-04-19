@@ -228,6 +228,17 @@ if (fs.existsSync(mcpSrc)) {
   console.warn('    Copy server/mcp/mcp_server.js into the generated workspace manually.');
 }
 
+// 2a. Copy scoring_config.json — policy file loaded at MCP server startup.
+// Tuning the booking/client scorer means editing this JSON, not the JS.
+const scoringSrc = path.join(PRECRIME, 'server', 'mcp', 'scoring_config.json');
+const scoringDst = path.join(outputDir, 'server', 'mcp', 'scoring_config.json');
+if (fs.existsSync(scoringSrc)) {
+  copyFile(scoringSrc, scoringDst);
+} else {
+  console.warn(`  ⚠ scoring_config.json missing: ${scoringSrc}`);
+  console.warn('    The MCP server will fail fast on startup without it.');
+}
+
 // 2b. Copy server/package.json
 const pkgSrc = path.join(PRECRIME, 'server', 'package.json');
 const pkgDst = path.join(outputDir, 'server', 'package.json');
@@ -318,6 +329,70 @@ write(path.join(outputDir, 'server', '.env'),
 // 4b. DB already shipped as blank.sqlite — no prisma db push needed
 if (!noInstall) {
 
+  // 4b-seed. Seed Config table from manifest.configSeed (optional — enables headless install)
+  if (manifest.configSeed && Object.keys(manifest.configSeed).length) {
+    // Strip doc keys (_*) and empty-string values so init-wizard still prompts for them
+    const seedData = {};
+    for (const [k, v] of Object.entries(manifest.configSeed)) {
+      if (k.startsWith('_')) continue;
+      if (v === '' || v === null || v === undefined) continue;
+      seedData[k] = v;
+    }
+
+    if (!Object.keys(seedData).length) {
+      console.log('\nconfigSeed present but no real values — skipping seed (init-wizard will prompt).');
+    } else {
+    console.log('\nSeeding Config table from manifest.configSeed...');
+
+    // Auto-generate leedzSession JWT if leedzEmail given but session not
+    if (seedData.leedzEmail && !seedData.leedzSession) {
+      const crypto = require('crypto');
+      const secret = '648373eeea08d422032db0d1e61a1bc096fe08dd2729ce611092c7a1af15d09c';
+      const b64url = (obj) => Buffer.from(JSON.stringify(obj)).toString('base64url');
+      const header  = b64url({ alg: 'HS256', typ: 'JWT' });
+      const payload = b64url({
+        email: seedData.leedzEmail,
+        type: 'session',
+        exp: Math.floor(Date.now() / 1000) + 365 * 24 * 3600
+      });
+      const sig = crypto.createHmac('sha256', secret).update(`${header}.${payload}`).digest('base64url');
+      seedData.leedzSession = `${header}.${payload}.${sig}`;
+      console.log('  ✓ Generated 1-year leedzSession JWT');
+    }
+
+    const seedScript = `
+const { PrismaClient } = require('@prisma/client');
+const prisma = new PrismaClient();
+const data = ${JSON.stringify(seedData)};
+(async () => {
+  try {
+    const existing = await prisma.config.findFirst();
+    if (existing) {
+      await prisma.config.update({ where: { id: existing.id }, data });
+    } else {
+      await prisma.config.create({ data });
+    }
+    console.log('  ✓ Config row seeded');
+  } catch (e) {
+    console.error('  ✗ Config seed failed:', e.message);
+    process.exit(1);
+  } finally {
+    await prisma.$disconnect();
+  }
+})();
+`;
+    const seedPath = path.join(outputDir, 'server', '_seed_config.js');
+    fs.writeFileSync(seedPath, seedScript);
+    try {
+      execSync('node _seed_config.js', { cwd: path.join(outputDir, 'server'), stdio: 'inherit' });
+    } catch (e) {
+      console.warn('  ⚠ Config seed failed — Config table left empty, init-wizard will fill it');
+    } finally {
+      try { fs.unlinkSync(seedPath); } catch {}
+    }
+    }  // end if (seedData has real values)
+  }
+
   // 4c. Prune devDependencies (removes prisma CLI + its engine binaries — not needed at runtime)
   console.log('\nPruning devDependencies (npm prune --production)...');
   try {
@@ -326,7 +401,7 @@ if (!noInstall) {
     console.warn('  ⚠ npm prune failed — zip will be larger than necessary');
   }
 } else {
-  console.log('[--no-install] Skipping prisma db push + npm prune (run setup.bat on target)');
+  console.log('[--no-install] Skipping prisma db push + npm prune + configSeed (run setup.bat on target)');
 }
 
 // 4. Generate mcp_server_config.json (logging + MCP metadata only — DB path is set via DATABASE_URL env var by precrime.bat)
@@ -388,7 +463,8 @@ console.log('\nSkill playbooks:');
   ['skills/enrichment-agent-parallel.md',     'skills/enrichment-agent-parallel.md'],
   ['skills/evaluator.md',                     'skills/evaluator.md'],
   ['skills/relevance-judge.md',               'skills/relevance-judge.md'],
-  ['skills/factlet-harvester.md',             'skills/factlet-harvester.md'],
+  ['skills/rss-factlet-harvester/SKILL.md',   'skills/rss-factlet-harvester/SKILL.md'],
+  ['skills/rss-factlet-harvester/rss_sources.md', 'skills/rss-factlet-harvester/rss_sources.md'],
   ['skills/fb-factlet-harvester/SKILL.md',    'skills/fb-factlet-harvester/SKILL.md'],
   ['skills/fb-factlet-harvester/fb_sources.md','skills/fb-factlet-harvester/fb_sources.md'],
   ['skills/reddit-factlet-harvester/SKILL.md',      'skills/reddit-factlet-harvester/SKILL.md'],
@@ -397,6 +473,8 @@ console.log('\nSkill playbooks:');
   ['skills/ig-factlet-harvester/ig_sources.md','skills/ig-factlet-harvester/ig_sources.md'],
   ['skills/x-factlet-harvester/SKILL.md',    'skills/x-factlet-harvester/SKILL.md'],
   ['skills/x-factlet-harvester/x_sources.md','skills/x-factlet-harvester/x_sources.md'],
+  ['skills/client-seeder.md',                 'skills/client-seeder.md'],
+  ['skills/share-skill.md',                   'skills/share-skill.md'],
   ['skills/source-discovery.md',              'skills/source-discovery.md'],
   ['skills/source-discovery/discovered_directories.md', 'skills/source-discovery/discovered_directories.md'],
   ['skills/init-wizard.md',                   'skills/init-wizard.md'],
