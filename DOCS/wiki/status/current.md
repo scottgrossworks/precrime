@@ -1,9 +1,21 @@
 ---
 title: Pre-Crime — Current Project State
-tags: [status, done, pending, sessions, decisions, warmth, x-harvester, sentAt]
-source_docs: [DOCS/STATUS.md]
-last_updated: 2026-04-14 (sessions 10-14)
+tags: [status, done, pending, sessions, decisions, warmth, x-harvester, sentAt, hermes, docker]
+source_docs: [DOCS/STATUS.md, DOCS/HERMES.md]
+last_updated: 2026-04-17 (session 16 — Hermes integration day 3)
 staleness: none
+---
+
+## Session 16 — Hermes Integration (in progress)
+
+See [[hermes]] for full technical writeup. Short version:
+- Docker image builds; Hermes boots; `precrime-mcp` connects; Tavily web search works.
+- SQLite writes fixed via `/db/` copy-in/sync-out in entrypoint.sh (WAL mode does not survive Windows volume mount).
+- Browser/Chrome tool calls, mcporter CLI, and Zoom closing line all overridden in SOUL.md.
+- RSS MCP server still failing on startup with ENOENT — likely hermes.bat was run from the wrong folder (PRECRIME source instead of deployment). Entrypoint now prints a clear diagnostic.
+- Skill startup checks `/precrime/skills/` (not `/precrime/templates/skills/`) — fix needs rebuild.
+- End-to-end enrichment run not yet completed.
+
 ---
 
 Current state of the Pre-Crime project as of 2026-04-14. This article mirrors `STATUS.md` — the authoritative current-state document. When STATUS.md and any other doc conflict, STATUS.md wins.

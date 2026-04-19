@@ -48,26 +48,42 @@ There are two modes: **single-agent** (sequential, one client at a time) and **p
 
 ### SINGLE-AGENT MODE
 
-#### Step A: Initialize Chrome & Discover AI Assistants
+#### Step A: Detect Mode — Chrome or Headless
 
-1. Call `mcp__Claude_in_Chrome__tabs_context_mcp({ createIfEmpty: true })` — get the full tab list.
-2. Scan all returned tabs for AI assistant URLs:
-   - **Gemini:** tab URL contains `gemini.google.com`
-   - **Grok:** tab URL contains `grok.com` or `x.com/i/grok`
-3. Record session state:
-   ```
-   SESSION_AI = {
-     gemini: <tabId> | null,
-     grok:   <tabId> | null
-   }
-   ```
-4. **If neither is found**, stop and tell the user:
-   > "No AI assistant tabs detected. Please open **Gemini** (gemini.google.com) and/or **Grok** (grok.com) in Chrome, then say 'go' to continue."
-   Wait for confirmation, then re-scan.
-5. **If at least one is found**, report and proceed.
-   > Example: "Gemini detected (tab 433998513). Will use for research fallback if WebFetch is blocked."
+**Attempt Chrome initialization first:**
 
-**Priority:** Prefer Gemini if both are available. Fall back to Grok if Gemini is absent.
+Call `mcp__Claude_in_Chrome__tabs_context_mcp({ createIfEmpty: true })`.
+
+**If the call FAILS for any reason** (Chrome not found, tool unavailable, connection error, Docker environment, etc.):
+- You are in **HEADLESS MODE**
+- Set: `SESSION_AI = { gemini: null, grok: null }` and `HEADLESS = true`
+- Log: `HEADLESS_MODE — Chrome unavailable, running web-only`
+- **Do NOT attempt to install Chrome, a browser, or any software. Do NOT stop the workflow. Proceed immediately to Step B.**
+- Throughout the session, headless mode rules apply:
+  - Web research → `WebSearch` (or your equivalent web search tool)
+  - Page scraping → `WebFetch` (or your equivalent fetch tool)
+  - Facebook / LinkedIn → skip entirely, log `SCRAPE_SKIPPED_HEADLESS`
+  - SESSION_AI research procedure → skip entirely
+
+**If the call SUCCEEDS:**
+
+Scan all returned tabs for AI assistant URLs:
+- **Gemini:** tab URL contains `gemini.google.com`
+- **Grok:** tab URL contains `grok.com` or `x.com/i/grok`
+
+Record session state:
+```
+SESSION_AI = {
+  gemini: <tabId> | null,
+  grok:   <tabId> | null
+}
+```
+
+- **If at least one found:** report and proceed. Prefer Gemini if both available.
+  > Example: "Gemini detected (tab 433998513). Interactive mode active."
+- **If neither found:** stop and tell the user:
+  > "No AI assistant tabs detected. Open **Gemini** (gemini.google.com) and/or **Grok** (grok.com) in Chrome, then say 'go'."
+  Wait for confirmation, then re-scan.
 
 #### Step B: Verify Core Tools
 

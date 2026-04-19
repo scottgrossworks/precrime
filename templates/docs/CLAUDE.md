@@ -108,7 +108,7 @@ When the user says any of these: "start precrime", "start the precrime workflow"
 | `skills/init-wizard.md` | **START HERE.** First-run setup. Installs deps, walks through config, launches enrichment. |
 | `skills/enrichment-agent.md` | Full enrichment loop (run AFTER init-wizard completes) |
 | `skills/evaluator.md` | Draft evaluation logic |
-| `skills/factlet-harvester.md` | RSS → factlet pipeline |
+| `skills/rss-factlet-harvester/SKILL.md` | RSS → factlet pipeline |
 | `skills/relevance-judge.md` | Relevance filter for all intel |
 | `skills/fb-factlet-harvester/SKILL.md` | Facebook → factlet pipeline (needs Chrome) |
 
@@ -116,34 +116,11 @@ When the user says any of these: "start precrime", "start the precrime workflow"
 
 ## OUTREACH WRITING RULES
 
-**Read `DOCS/VALUE_PROP.md` for word limit, tone, open/close rules, and forbidden phrases specific to this deployment.**
+**All outreach writing rules live in `DOCS/VALUE_PROP.md`** — opening, closing, word limit, tone, forbidden phrases, banned constructions, intel minimum, everything. This file does not duplicate them. The skill files (enrichment-agent.md, evaluator.md) read VALUE_PROP.md at compose and evaluate time.
 
-### Mandatory Structure
-- **Opening:** `Dear <name>,` on its own line. ALWAYS. No exceptions.
-- **Closing:** Read `DOCS/VALUE_PROP.md` for the permitted closing line. If none specified, end with a simple meeting ask.
-- **NO em-dashes (—) or double-hyphens (--).** ZERO TOLERANCE. They render as corrupted characters in email. Use a comma, period, or rewrite.
-
-### Intel Minimum
-- Do NOT compose a draft unless you have at least ONE non-generic intel item in the dossier or linked factlets.
-- Generic = org name, city, address, contact role. This is directory data, not intel.
-- If you only have directory data, set brewing and move on. A thin draft is worse than no draft.
-
-### Tone: Warm and Collegial — NEVER Confrontational
-- Do NOT take something positive about the prospect and then question, challenge, or undermine it.
-- **BANNED:** "Your org does X. But what about Y?" / "This is true...but..." / "[Compliment]. But [criticism]." / Any positive-then-negative pivot.
-- **CORRECT:** Mention what you found. Connect to the product. Ask for the meeting. Three moves. No auditing. No lecturing.
-
-### Universal Rules
-- Reference something specific and recent from the dossier.
-- Connect their situation to the product in ONE sentence.
-- No filler. Every sentence sells or gets cut.
-- **Brevity is the goal.** Cut every word that doesn't earn its place.
-- Do NOT auto-send. All drafts go to `ready` for human review.
-
-### Banned Phrasing — automatic rewrite if found
-- "Those aren't X. Those are Y." and "This isn't X. This is Y." — AI tell.
-- Any sentence that redefines what something "really" is.
-- Any "positive...but negative..." construction.
+Two cross-cutting rules enforced by the MCP pipeline regardless of deployment:
+- Drafts never auto-send. Every draft lands at `draftStatus = ready` for human review.
+- Em-dashes, en-dashes, and double-hyphens are banned everywhere (they corrupt in email clients). The evaluator enforces this as a hard fail.
 
 ---
 

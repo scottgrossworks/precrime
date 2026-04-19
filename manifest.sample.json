@@ -237,7 +237,13 @@
       "email_user   — email booking to companyEmail for seller to decide"
     ],
     "leadCaptureEnabled": false,
-    "marketplaceEnabled": false
+    "marketplaceEnabled": false,
+    "runMode": "hybrid",
+    "_runMode_options": [
+      "outreach    — enrich contacts and write outreach emails. No marketplace sharing.",
+      "marketplace — find and share leed_ready bookings to The Leedz. NO draft emails written.",
+      "hybrid      — both: draft outreach emails AND share bookings. (default)"
+    ]
   },
 
   "redditConfig": {

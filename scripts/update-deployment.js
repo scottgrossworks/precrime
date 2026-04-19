@@ -17,7 +17,24 @@ const fs              = require('fs');
 const path            = require('path');
 const crypto          = require('crypto');
 const { execSync }    = require('child_process');
-const { DatabaseSync } = require('node:sqlite');
+
+// Use better-sqlite3 from server/node_modules so we don't depend on Node 22.5+ (node:sqlite)
+const PRECRIME_ROOT   = path.resolve(__dirname, '..');
+let Database;
+try {
+  Database = require(path.join(PRECRIME_ROOT, 'server', 'node_modules', 'better-sqlite3'));
+} catch (e) {
+  console.error('ERROR: better-sqlite3 not found in server/node_modules.');
+  console.error('Run "cd server && npm install" first, then re-run this script.');
+  process.exit(1);
+}
+// Adapter so the rest of the script keeps its DatabaseSync-like API
+class DatabaseSync {
+  constructor(p) { this._db = new Database(p); }
+  exec(sql)      { this._db.exec(sql); }
+  prepare(sql)   { return this._db.prepare(sql); }
+  close()        { this._db.close(); }
+}
 
 // ---------------------------------------------------------------------------
 // CLI
@@ -48,7 +65,8 @@ const GUTS_FILES = [
   'skills/enrichment-agent-parallel.md',
   'skills/evaluator.md',
   'skills/relevance-judge.md',
-  'skills/factlet-harvester.md',
+  'skills/rss-factlet-harvester/SKILL.md',
+  'skills/rss-factlet-harvester/rss_sources.md',
   'skills/source-discovery.md',
   'skills/source-discovery/discovered_directories.md',
   'skills/fb-factlet-harvester/SKILL.md',
@@ -84,8 +102,10 @@ const MEMORY_PATTERNS = [
   /reddit_sources\.md$/i,
   /ig_sources\.md$/i,
   /x_sources\.md$/i,
+  /rss_sources\.md$/i,
   /rss_config\.json$/i,
   /[\\/]logs[\\/]/,
+  /hermes\.bat$/i,
 ];
 
 // Server files that trigger npm reinstall when changed

@@ -183,6 +183,7 @@ function buildTokens(m) {
     '{{OUTREACH_CLOSE_RULE}}':    o.closeWith || "Close with a command, not a hope",
     '{{OUTREACH_FORBIDDEN}}':     forbidden,
     '{{FB_SOURCES_LIST}}':        fbSources,
+    '{{RUN_MODE}}':               (m.bookingConfig && m.bookingConfig.runMode) || 'hybrid',
     '{{DB_RELATIVE_PATH}}':       dbFile.replace(/\\/g, '/'),
     '{{DB_ABS_PATH}}':            dbAbsPath.replace(/\\/g, '/'),
     '{{PROJECT_ROOT}}':           outputDir.replace(/\\/g, '/'),
@@ -214,6 +215,7 @@ const dirs = [
   path.join(outputDir, 'skills', 'ig-factlet-harvester'),
   path.join(outputDir, 'skills', 'x-factlet-harvester'),
   path.join(outputDir, 'skills', 'source-discovery'),
+  path.join(outputDir, 'tools'),
 ];
 dirs.forEach(mkdir);
 console.log('Directories created.');
@@ -302,6 +304,16 @@ if (!noInstall) {
   }
 } else {
   console.log('[--no-install] Skipping RSS npm install');
+}
+
+// 2f. Copy tools/ — all files, dynamically (no manual update needed when new tools are added)
+const toolsSrc = path.join(PRECRIME, 'tools');
+if (fs.existsSync(toolsSrc)) {
+  for (const toolFile of fs.readdirSync(toolsSrc)) {
+    copyFile(path.join(toolsSrc, toolFile), path.join(outputDir, 'tools', toolFile));
+  }
+} else {
+  console.warn('  ⚠ PRECRIME/tools/ directory missing');
 }
 
 // 3. Copy blank template DB — schema is already applied, no prisma db push needed at runtime
@@ -480,6 +492,7 @@ console.log('\nSkill playbooks:');
   ['skills/source-discovery.md',              'skills/source-discovery.md'],
   ['skills/source-discovery/discovered_directories.md', 'skills/source-discovery/discovered_directories.md'],
   ['skills/init-wizard.md',                   'skills/init-wizard.md'],
+  ['skills/email-finder.md',                  'skills/email-finder.md'],
 ].forEach(([src, dst]) => copyTemplate(src, dst, tokens));
 
 // 8. Copy + substitute doc stubs

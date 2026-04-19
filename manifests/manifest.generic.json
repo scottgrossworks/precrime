@@ -117,7 +117,8 @@
     "marketplaceEnabled": false,
     "leadCaptureEnabled": false,
     "leedzEmail": "",
-    "leedzSession": ""
+    "leedzSession": "",
+    "runMode": ""
   },
   "rssConfig": {
     "_comment": "Feeds live in skills/rss-factlet-harvester/rss_sources.md, not here. Only additionalKeywords is honored at deploy time.",
