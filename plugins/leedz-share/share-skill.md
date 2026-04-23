@@ -96,6 +96,7 @@ cn:      client.name                  // client name — optional, pay-to-see
 em:      client.email                 // client email — optional, pay-to-see
 ph:      client.phone                 // client phone — optional, pay-to-see
 sh:      "*"                          // broadcast to all platform subscribers
+email:   "false"                     // suppress immediate email/X broadcast (PRECRIME posts are pre-enriched)
 ```
 
 **lc constraint:** if `booking.location` is provided, verify it ends with `booking.zip`. If not, append: `booking.location + " " + booking.zip`.

@@ -50,17 +50,15 @@ Use these in all relevance checks below.
 
 ### Step 1: Fetch Articles
 
-```
-mcp__precrime-rss__get_top_articles({ limit: 100 })
-```
+Call `mcp__precrime-rss__get_top_articles` with `limit: 100`.
+
+**If that tool is not available** (not in your toolset), fall back: read `skills/rss-factlet-harvester/rss_sources.md`, then call `WebFetch` on each feed URL directly and parse the returned XML for `<item>` or `<entry>` elements (title, link, pubDate, description).
 
 Returns scored articles with url, title, pubDate, feedName, category, score, snippet, content.
 
 ### Step 2: Check Existing Factlets
 
-```
-mcp__precrime-mcp__get_new_factlets({ since: "<30 days ago>", limit: 100 })
-```
+Call `mcp__precrime-mcp__get_new_factlets` with `since` set to 30 days ago and `limit: 100`.
 
 If an article covers the same topic as an existing factlet, skip it.
 
@@ -87,14 +85,7 @@ SPECIFIC to one org/person → four-path classification:
 
 ### Step 4: Create Factlets
 
-For each article that passes all three questions:
-
-```
-mcp__precrime-mcp__create_factlet({
-  content: "[2-3 sentence summary]",
-  source: "https://article-url/..."
-})
-```
+For each article that passes all three questions, call `mcp__precrime-mcp__create_factlet` with `content` (2-3 sentence summary) and `source` (article URL).
 
 **Factlet content rules:**
 - 2–3 sentences. No more.
