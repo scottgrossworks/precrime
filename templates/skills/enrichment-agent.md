@@ -106,10 +106,6 @@ Print this banner ONCE before the loop starts, and repeat it in every ROUNDUP.md
 
 ---
 
-### PARALLEL-AGENT MODE
-
-For 5+ client batches: see `skills/enrichment-agent-parallel.md`. The orchestrator pre-assigns one Gemini tab per agent, then launches all agents simultaneously.
-
 ---
 
 ## Searching and Ranking Clients — Token Safety Rule

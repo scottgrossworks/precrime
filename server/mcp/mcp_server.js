@@ -1,15 +1,13 @@
 /**
- * PRE-CRIME — MCP SERVER (Direct Prisma)
+ * PRE-CRIME -- MCP SERVER (3 workflow tools)
  *
- * JSON-RPC server for Claude Desktop. Queries deployment SQLite
- * directly via PrismaClient. No HTTP server required.
+ * JSON-RPC server exposing 3 tools: pipeline, find, trades.
+ * Collapses 22 CRUD tools into workflow-level operations.
+ * Queries deployment SQLite directly via PrismaClient. No HTTP server.
  *
- * 19 tools: 12 original (+ create_client) + 4 booking + 3 scoring (link_factlet, get_client_factlets, score_client)
+ * See DOCS/MCP_REWRITE.md for design rationale.
  *
- * Scoring policy (weights, thresholds, regex patterns, generic-email list)
- * is loaded from `scoring_config.json` at startup — tune the JSON, not this file.
- *
- * @version 2.1.0
+ * @version 1.0.0
  */
 
 const readline = require('readline');
@@ -30,7 +28,7 @@ if (process.env.DATABASE_URL) {
         process.env.DATABASE_URL = 'file:' + resolved;
     }
 } else {
-    // No env var at all — default to data/myproject.sqlite
+    // No env var at all -- default to data/myproject.sqlite
     process.env.DATABASE_URL = 'file:' + path.resolve(PRECRIME_ROOT, 'data', 'myproject.sqlite');
 }
 
@@ -59,23 +57,6 @@ try {
     console.error(`[MCP] FATAL: mcp_server_config.json not found: ${error.message}`);
     process.exit(1);
 }
-
-// Scoring policy — weights, thresholds, regex patterns, generic email list.
-// Edit scoring_config.json to tune the algorithm, not this file.
-const SCORING_CONFIG_PATH = path.resolve(__dirname, 'scoring_config.json');
-let SCORING;
-try {
-    SCORING = JSON.parse(fs.readFileSync(SCORING_CONFIG_PATH, 'utf8'));
-} catch (error) {
-    console.error(`[MCP] FATAL: scoring_config.json not found or invalid: ${error.message}`);
-    process.exit(1);
-}
-// Compile regex patterns once at startup
-const LOC_RX = {
-    street:      new RegExp(SCORING.booking.location.patterns.street, 'i'),
-    venue:       new RegExp(SCORING.booking.location.patterns.venue, 'i'),
-    campusVague: new RegExp(SCORING.booking.location.patterns.campusVague, 'i')
-};
 
 const dbPath = process.env.DATABASE_URL.replace(/^file:/, '');
 const prisma = new PrismaClient();
@@ -136,7 +117,6 @@ const logError = (message) => writeLogEntry('error', message);
 
 /**
  * Check if text looks like JSON (starts with { or [)
- * Used by isJsonRpcLine() in request processing
  */
 function looksLikeJson(text) {
     const trimmed = text.trim();
@@ -145,9 +125,6 @@ function looksLikeJson(text) {
 
 /**
  * Create successful JSON-RPC response
- * @param {string} id - Request ID
- * @param {string} text - Response text to send
- * @returns {Object} JSON-RPC response object
  */
 function createSuccessResponse(id, text) {
     return {
@@ -164,10 +141,6 @@ function createSuccessResponse(id, text) {
 
 /**
  * Create JSON-RPC error response
- * @param {string} id - Request ID
- * @param {number} code - Error code
- * @param {string} message - Error message
- * @returns {Object} JSON-RPC error response
  */
 function createErrorResponse(id, code, message) {
     return {
@@ -182,7 +155,6 @@ function createErrorResponse(id, code, message) {
 
 /**
  * Send JSON-RPC response to stdout
- * @param {Object} response - Response object to send
  */
 function sendJsonRpcResponse(response) {
     process.stdout.write(JSON.stringify(response) + '\n');
@@ -190,7 +162,7 @@ function sendJsonRpcResponse(response) {
 
 /**
  * JSON.stringify with BigInt safety. Prisma returns BigInt for Int64 fields
- * (e.g. sharedAt). Standard JSON.stringify throws on BigInt — convert to Number.
+ * (e.g. sharedAt). Standard JSON.stringify throws on BigInt.
  */
 function safeJson(obj) {
     return JSON.stringify(obj, (key, val) => typeof val === 'bigint' ? Number(val) : val, 2);
@@ -209,317 +181,118 @@ function handleInitialize(id) {
             protocolVersion: "2025-06-18",
             capabilities: { tools: {} },
             serverInfo: {
-                name: config.mcp.name,
-                version: config.mcp.version
+                name: "precrime",
+                version: "1.0.0"
             }
         }
     };
 }
 
 function handleToolsList(id) {
-    logInfo('Handling tools/list request');
+    logInfo('Handling tools/list request (3 tools)');
     return {
         jsonrpc: '2.0',
         id: id,
         result: {
             tools: [
                 {
-                    name: 'get_client',
-                    description: 'Get a single client by ID',
+                    name: 'pipeline',
+                    description: [
+                        'Pre-Crime workflow operations. One tool, four actions.',
+                        '',
+                        'action="status": Read full system state in one call. Returns { config, stats, completeness, readyDrafts, brewingCount }. completeness is a derived check of whether config has the fields needed for the current defaultBookingAction. Use this at startup and between enrichment rounds.',
+                        '',
+                        'action="configure": Update Config fields. Pass patch with any Config fields (companyName, companyEmail, businessDescription, activeEntities, defaultTrade, marketplaceEnabled, leadCaptureEnabled, leedzEmail, leedzSession, llmApiKey, llmProvider, llmBaseUrl, llmAnthropicVersion, llmMaxTokens, factletStaleDays, defaultBookingAction). Returns updated config.',
+                        '',
+                        'action="next": Atomically claim the next work item and return it fully hydrated. Pass entity="client" (default) or entity="booking". For clients: returns the client record with all linked factlets and bookings in one payload. The lastQueueCheck is stamped before return so no other agent claims it. Pass optional criteria to filter (company, name, draftStatus). Returns null if queue is empty. Response is automatically trimmed for context efficiency: dossier tail-clipped to last 2000 chars (or override via dossierLimit), factlets capped to 8 most recent (or override via factletLimit). Pass 0 to disable a cap. _clipped metadata is included if anything was trimmed.',
+                        '',
+                        'action="save": Atomically persist client work in a single transaction. Two modes: (1) UPDATE existing client - pass id and patch with any of: dossierAppend, draft, draftStatus, targetUrls, intelScore, name, email, phone, company, website, clientNotes, segment, factlets[], bookings[]. (2) CREATE new client - omit id, patch must include name (required), plus optional email, phone, company, website, segment, source, factlets[], bookings[]. After persisting, runs score_target and returns the score plus the (new or existing) clientId.'
+                    ].join('\n'),
                     inputSchema: {
                         type: 'object',
                         properties: {
-                            id: { type: 'string', description: 'Client ID' }
+                            action: {
+                                type: 'string',
+                                enum: ['status', 'configure', 'next', 'save'],
+                                description: 'Which pipeline operation to run.'
+                            },
+                            entity: {
+                                type: 'string',
+                                enum: ['client', 'booking'],
+                                description: 'For action=next only. Which entity queue to pull from. Defaults to client.'
+                            },
+                            criteria: {
+                                type: 'object',
+                                description: 'For action=next only. Optional filters: { company, name, draftStatus }.',
+                                properties: {
+                                    company: { type: 'string' },
+                                    name: { type: 'string' },
+                                    draftStatus: { type: 'string' }
+                                }
+                            },
+                            dossierLimit: {
+                                type: 'number',
+                                description: 'For action=next only. Max chars of dossier to return, tail-clipped (most recent kept). Default 2000. Pass 0 to return full dossier.'
+                            },
+                            factletLimit: {
+                                type: 'number',
+                                description: 'For action=next only. Max factlets to return (most recent first). Default 8. Pass 0 for all.'
+                            },
+                            id: {
+                                type: 'string',
+                                description: 'For action=save. Client ID to update. OMIT this to CREATE a new client (in which case patch.name is required).'
+                            },
+                            patch: {
+                                type: 'object',
+                                description: 'For action=save or action=configure. For save UPDATE: dossierAppend, draft, draftStatus, targetUrls, intelScore, name, email, phone, company, website, clientNotes, segment, factlets[], bookings[]. For save CREATE (no id): name (REQUIRED), plus optional email, phone, company, website, segment, source, factlets[], bookings[]. For configure: any Config model fields.'
+                            }
                         },
-                        required: ['id']
+                        required: ['action']
                     }
                 },
                 {
-                    name: 'create_client',
-                    description: 'Create a new client record. Requires at least name or company. Sets draftStatus to "brewing" by default. Returns the created client with its ID.',
+                    name: 'find',
+                    description: [
+                        'Read-only search across the Pre-Crime database. One tool, four actions.',
+                        '',
+                        'action="clients": Search clients by name, email, company, segment, draftStatus, warmth range. Default summary=true returns slim records (no dossier/draft/targetUrls). Pass summary=false only when you need full records. Default limit 10. Sorted by dossierScore descending.',
+                        '',
+                        'action="bookings": Search bookings by status, trade, keyword (checks title, description, notes, location). Returns bookings with slim client stub. Default limit 20. Sorted by createdAt descending.',
+                        '',
+                        'action="factlets": Get factlets. Pass filters.sinceTimestamp (ISO string) for queue checking, or filters.clientId for a specific client. Returns factlets sorted by createdAt ascending.',
+                        '',
+                        'action="drafts": Get clients with draftStatus="ready", sorted by dossierScore descending. Pass summary=true for slim records. Default limit 10. Optional filters.minScore for minimum dossierScore.'
+                    ].join('\n'),
                     inputSchema: {
                         type: 'object',
                         properties: {
-                            name: { type: 'string', description: 'Contact person name' },
-                            email: { type: 'string', description: 'Email address' },
-                            phone: { type: 'string', description: 'Phone number' },
-                            company: { type: 'string', description: 'Company or organization name' },
-                            website: { type: 'string', description: 'Website URL' },
-                            clientNotes: { type: 'string' },
-                            segment: { type: 'string', description: 'Audience segment' },
-                            dossier: { type: 'string', description: 'Initial dossier notes' },
-                            targetUrls: { type: 'string', description: 'JSON array of URLs: [{url, type, label}]' },
-                            draftStatus: { type: 'string', description: 'Default: brewing' },
-                            source: { type: 'string', description: 'How this client was found (e.g., "seeder:directory", "harvester:reddit")' }
-                        }
-                    }
-                },
-                {
-                    name: 'search_clients',
-                    description: 'Search clients by name, email, company, or keyword. Filter by draftStatus, warmthScore, and/or segment. Returns lightweight summary records by default (no dossier/draft/targetUrls). Pass summary=false ONLY when you need full records for one specific client.',
-                    inputSchema: {
-                        type: 'object',
-                        properties: {
-                            search: { type: 'string', description: 'Search across name, email, company' },
-                            name: { type: 'string', description: 'Filter by name (partial match)' },
-                            email: { type: 'string', description: 'Filter by email (exact match)' },
-                            company: { type: 'string', description: 'Filter by company (partial match)' },
-                            segment: { type: 'string', description: 'Filter by segment (partial match)' },
-                            draftStatus: { type: 'string', description: 'Filter by draft status: brewing, ready, sent' },
-                            warmthScore: { type: 'number', description: 'Exact warmthScore match (e.g. 10)' },
-                            minWarmthScore: { type: 'number', description: 'Minimum warmthScore (inclusive)' },
-                            maxWarmthScore: { type: 'number', description: 'Maximum warmthScore (inclusive)' },
-                            limit: { type: 'number', description: 'Max results (default 10)' },
-                            summary: { type: 'boolean', description: 'DEFAULT TRUE. Returns lightweight records (no dossier/draft/targetUrls). Pass false ONLY when you need full records — but prefer get_client(id) for single full records instead.' }
-                        }
-                    }
-                },
-                {
-                    name: 'update_client',
-                    description: 'Update a client record. Use for dossier, draft, draftStatus, warmthScore, clientNotes, etc.',
-                    inputSchema: {
-                        type: 'object',
-                        properties: {
-                            id: { type: 'string', description: 'Client ID (required)' },
-                            name: { type: 'string' },
-                            email: { type: 'string' },
-                            phone: { type: 'string' },
-                            company: { type: 'string' },
-                            website: { type: 'string' },
-                            clientNotes: { type: 'string' },
-                            dossier: { type: 'string' },
-                            targetUrls: { type: 'string', description: 'JSON array of discovered URLs: [{url, type, label}]' },
-                            draft: { type: 'string' },
-                            draftStatus: { type: 'string' },
-                            sentAt: { type: 'string', description: 'ISO datetime — when draft was sent' },
-                            warmthScore: { type: 'number' },
-                            lastEnriched: { type: 'string', description: 'ISO datetime' },
-                            lastQueueCheck: { type: 'string', description: 'ISO datetime' }
+                            action: {
+                                type: 'string',
+                                enum: ['clients', 'bookings', 'factlets', 'drafts'],
+                                description: 'Which entity type to search.'
+                            },
+                            filters: {
+                                type: 'object',
+                                description: 'Action-specific filters. clients: search, name, email, company, segment, draftStatus, warmthScore, minWarmthScore, maxWarmthScore. bookings: status, trade, search. factlets: sinceTimestamp, clientId. drafts: minScore.'
+                            },
+                            summary: {
+                                type: 'boolean',
+                                description: 'Default true. When true, returns slim records without heavy text fields (dossier, draft, targetUrls). Pass false only when you need full records.'
+                            },
+                            limit: {
+                                type: 'number',
+                                description: 'Max results. Default 10 for clients/drafts, 20 for bookings.'
+                            }
                         },
-                        required: ['id']
+                        required: ['action']
                     }
                 },
                 {
-                    name: 'get_ready_drafts',
-                    description: 'Get clients with draftStatus = "ready", sorted by warmthScore descending',
+                    name: 'trades',
+                    description: 'Fetch the canonical Leedz marketplace trade names from the Leedz API. Returns a sorted array of trade name strings (e.g. ["bartender", "caricatures", "dj", "photo booth"]). This is the ONLY authoritative source for valid Leedz trades. Never guess from training data. Cached 10 minutes. Serves stale cache on network failure.',
                     inputSchema: {
                         type: 'object',
-                        properties: {
-                            limit: { type: 'number', description: 'Max results (default 10)' },
-                            summary: { type: 'boolean', description: 'If true, return lightweight records only (no dossier, draft, targetUrls). Use for browsing the list before fetching individual records.' }
-                        }
-                    }
-                },
-                {
-                    name: 'get_stats',
-                    description: 'Get system stats: total clients, clients by draftStatus, factlet count',
-                    inputSchema: { type: 'object', properties: {} }
-                },
-                {
-                    name: 'create_factlet',
-                    description: 'Saves a mission-relevant news item to the global broadcast queue',
-                    inputSchema: {
-                        type: 'object',
-                        properties: {
-                            content: { type: 'string', description: 'The 2-3 sentence summary of the news' },
-                            source: { type: 'string', description: 'The URL of the original article' }
-                        },
-                        required: ['content', 'source']
-                    }
-                },
-                {
-                    name: 'get_new_factlets',
-                    description: 'Get factlets newer than a given timestamp (for queue checking)',
-                    inputSchema: {
-                        type: 'object',
-                        properties: {
-                            since: { type: 'string', description: 'ISO datetime -- return factlets created after this time' }
-                        },
-                        required: ['since']
-                    }
-                },
-                {
-                    name: 'delete_factlet',
-                    description: 'Remove a factlet from the queue',
-                    inputSchema: {
-                        type: 'object',
-                        properties: {
-                            id: { type: 'string', description: 'Factlet ID' }
-                        },
-                        required: ['id']
-                    }
-                },
-                {
-                    name: 'get_next_client',
-                    description: 'Fetch the next client needing enrichment — oldest lastQueueCheck (nulls first). Atomically stamps lastQueueCheck=now before returning so no other agent claims the same record. Pass optional criteria to target a subset (e.g. company="Christian School"). Returns null if no matching records exist.',
-                    inputSchema: {
-                        type: 'object',
-                        properties: {
-                            company: { type: 'string', description: 'Filter by company keyword (partial match)' },
-                            name: { type: 'string', description: 'Filter by name keyword (partial match)' },
-                            draftStatus: { type: 'string', description: 'Filter by draft status: brewing, ready, sent' }
-                        }
-                    }
-                },
-                {
-                    name: 'get_config',
-                    description: 'Get current system configuration',
-                    inputSchema: { type: 'object', properties: {} }
-                },
-                {
-                    name: 'update_config',
-                    description: 'Update system configuration',
-                    inputSchema: {
-                        type: 'object',
-                        properties: {
-                            companyName: { type: 'string' },
-                            companyEmail: { type: 'string' },
-                            businessDescription: { type: 'string' },
-                            llmApiKey: { type: 'string' },
-                            llmProvider: { type: 'string' },
-                            llmBaseUrl: { type: 'string' },
-                            llmAnthropicVersion: { type: 'string' },
-                            llmMaxTokens: { type: 'number' },
-                            activeEntities: { type: 'string', description: 'JSON array: ["client"] or ["client", "booking"]' },
-                            defaultTrade: { type: 'string', description: 'Default trade name (e.g., "DJ")' },
-                            marketplaceEnabled: { type: 'boolean' },
-                            leadCaptureEnabled: { type: 'boolean' },
-                            leedzEmail: { type: 'string', description: 'The Leedz marketplace account email' },
-                            leedzSession: { type: 'string', description: 'Pre-generated HS256 JWT for createLeed calls' }
-                        }
-                    }
-                },
-                {
-                    name: 'create_booking',
-                    description: 'Create a Booking for a Client. If trade + startDate + (location OR zip) are all present, status auto-sets to "leed_ready".',
-                    inputSchema: {
-                        type: 'object',
-                        properties: {
-                            clientId: { type: 'string', description: 'Client ID (required)' },
-                            title: { type: 'string' },
-                            description: { type: 'string' },
-                            notes: { type: 'string' },
-                            location: { type: 'string' },
-                            startDate: { type: 'string', description: 'ISO datetime' },
-                            endDate: { type: 'string', description: 'ISO datetime' },
-                            startTime: { type: 'string' },
-                            endTime: { type: 'string' },
-                            duration: { type: 'number' },
-                            hourlyRate: { type: 'number' },
-                            flatRate: { type: 'number' },
-                            totalAmount: { type: 'number' },
-                            status: { type: 'string', description: 'new | leed_ready | taken | shared | expired' },
-                            source: { type: 'string', description: 'e.g., "reddit:r/weddingplanning"' },
-                            sourceUrl: { type: 'string' },
-                            trade: { type: 'string', description: 'Leedz trade name (e.g., "DJ")' },
-                            zip: { type: 'string' },
-                            leedPrice: { type: 'number', description: 'Price in cents for marketplace listing' }
-                        },
-                        required: ['clientId']
-                    }
-                },
-                {
-                    name: 'update_booking',
-                    description: 'Update a Booking record by ID',
-                    inputSchema: {
-                        type: 'object',
-                        properties: {
-                            id: { type: 'string', description: 'Booking ID (required)' },
-                            title: { type: 'string' },
-                            description: { type: 'string' },
-                            notes: { type: 'string' },
-                            location: { type: 'string' },
-                            startDate: { type: 'string', description: 'ISO datetime' },
-                            endDate: { type: 'string', description: 'ISO datetime' },
-                            startTime: { type: 'string' },
-                            endTime: { type: 'string' },
-                            duration: { type: 'number' },
-                            hourlyRate: { type: 'number' },
-                            flatRate: { type: 'number' },
-                            totalAmount: { type: 'number' },
-                            status: { type: 'string', description: 'new | leed_ready | taken | shared | expired' },
-                            source: { type: 'string' },
-                            sourceUrl: { type: 'string' },
-                            trade: { type: 'string' },
-                            zip: { type: 'string' },
-                            shared: { type: 'boolean' },
-                            sharedAt: { type: 'number', description: 'Epoch ms' },
-                            leedPrice: { type: 'number' },
-                            squarePaymentUrl: { type: 'string' },
-                            leedId: { type: 'string', description: 'The Leedz marketplace ID after posting' }
-                        },
-                        required: ['id']
-                    }
-                },
-                {
-                    name: 'get_bookings',
-                    description: 'Get Bookings, optionally filtered by status, trade, and/or keyword search. Search checks title, description, notes, and location fields. Returns booking fields + slim client stub.',
-                    inputSchema: {
-                        type: 'object',
-                        properties: {
-                            search: { type: 'string', description: 'Keyword search across title, description, notes, and location fields' },
-                            status: { type: 'string', description: 'Filter by status: new, leed_ready, taken, shared, expired' },
-                            trade: { type: 'string', description: 'Filter by trade name' },
-                            limit: { type: 'number', description: 'Max results (default 20)' }
-                        }
-                    }
-                },
-                {
-                    name: 'get_client_bookings',
-                    description: 'Get all Bookings for a specific Client',
-                    inputSchema: {
-                        type: 'object',
-                        properties: {
-                            clientId: { type: 'string', description: 'Client ID (required)' }
-                        },
-                        required: ['clientId']
-                    }
-                },
-                {
-                    name: 'score_booking',
-                    description: 'Compute a 0-100 readiness score for a Booking. Six categories: trade (0/20), date (0/5/10/20 penalizes vague multi-week ranges), location (0/5/10/15/20 penalizes campus/complex names without specific venue; bare city name scores 5), contact (0/10/15/20 generic emails like info@ score 0), description (0/10), time (0/10 requires startTime or duration). Hard gates for share-readiness (ALL must pass): total >= 70, trade >= 20, location >= 15 (real venue address — addLeed requires lc), date >= 20 (specific event window — addLeed requires st/et), contact >= 10 (named person). Writes bookingScore + contactQuality to DB and returns full breakdown + recommended action.',
-                    inputSchema: {
-                        type: 'object',
-                        properties: {
-                            id: { type: 'string', description: 'Booking ID' }
-                        },
-                        required: ['id']
-                    }
-                },
-                {
-                    name: 'link_factlet',
-                    description: 'Associate a factlet with a client. Classifies the factlet as pain/occasion/context for THIS client and assigns points (pain=2, occasion=2, context=1). Idempotent — calling again for the same client+factlet pair updates signalType/points.',
-                    inputSchema: {
-                        type: 'object',
-                        properties: {
-                            clientId: { type: 'string', description: 'Client ID' },
-                            factletId: { type: 'string', description: 'Factlet ID' },
-                            signalType: { type: 'string', description: 'pain | occasion | context' }
-                        },
-                        required: ['clientId', 'factletId', 'signalType']
-                    }
-                },
-                {
-                    name: 'get_client_factlets',
-                    description: 'Get all factlets linked to a client, with their signalType, points, and full factlet content. Use at start of enrichment to hydrate factlet context.',
-                    inputSchema: {
-                        type: 'object',
-                        properties: {
-                            clientId: { type: 'string', description: 'Client ID' }
-                        },
-                        required: ['clientId']
-                    }
-                },
-                {
-                    name: 'score_client',
-                    description: 'Procedural client scoring (no LLM). Computes contactGate (binary: named person + direct email), factletScore (sum of linked factlet points), dossierScore (intelScore + factletScore), and canDraft (contactGate AND dossierScore >= 5). Writes scores back to DB. Pass intelScore (D2+D3) after scraping.',
-                    inputSchema: {
-                        type: 'object',
-                        properties: {
-                            clientId: { type: 'string', description: 'Client ID' },
-                            intelScore: { type: 'number', description: 'Intel depth + direct signals score (D2+D3, max 7). Set by enrichment agent after scraping.' }
-                        },
-                        required: ['clientId']
+                        properties: {}
                     }
                 }
             ]
@@ -528,144 +301,358 @@ function handleToolsList(id) {
 }
 
 // ============================================================================
-// TOOL HANDLERS — DIRECT PRISMA
+// SCORING LOGIC (lifted from v1 verbatim)
 // ============================================================================
 
-// Reference: prisma_sqlite_db.js getClient() lines 107-114
-async function handleGetClient(id, params) {
-    const clientId = params.arguments?.id;
-    if (!clientId) return createErrorResponse(id, -32602, 'Missing client ID');
+const GENERIC_EMAIL_PREFIXES = new Set([
+    'info', 'contact', 'hello', 'support', 'admin', 'office',
+    'general', 'mail', 'help', 'team', 'webmaster', 'bookings',
+    'events', 'enquiries', 'inquiries', 'noreply', 'noreply',
+    'sales', 'marketing', 'pr', 'media', 'press', 'news',
+    'reception', 'management', 'operations', 'service', 'services',
+    'customerservice', 'customercare', 'care', 'feedback', 'staff'
+]);
 
-    const client = await prisma.client.findUnique({ where: { id: clientId } });
-    if (!client) return createErrorResponse(id, -32602, `Client not found: ${clientId}`);
-
-    return createSuccessResponse(id, JSON.stringify(client, null, 2));
+function isGenericEmail(email) {
+    if (!email) return false;
+    const prefix = email.split('@')[0].toLowerCase().replace(/[^a-z]/g, '');
+    return GENERIC_EMAIL_PREFIXES.has(prefix);
 }
 
-async function handleCreateClient(id, params) {
-    const args = params.arguments || {};
-    if (!args.name && !args.company) {
-        return createErrorResponse(id, -32602, 'At least one of name or company is required');
+function computeBookingScore(booking, client) {
+    const b = {};
+
+    // Trade: 0 or 20
+    b.trade = booking.trade ? 20 : 0;
+
+    // Date: 0, 5, 10, or 20
+    if (booking.startDate) {
+        if (!booking.endDate) {
+            b.date = 20;
+        } else {
+            const start = new Date(booking.startDate);
+            const end   = new Date(booking.endDate);
+            const spanDays = (end - start) / (1000 * 60 * 60 * 24);
+            if (spanDays <= 7)       b.date = 20;
+            else if (spanDays <= 30) b.date = 10;
+            else                     b.date = 5;
+        }
+    } else {
+        b.date = 0;
     }
 
-    const data = {};
-    const allowedFields = [
-        'name', 'email', 'phone', 'company', 'website', 'clientNotes',
-        'segment', 'dossier', 'targetUrls', 'draftStatus', 'source'
-    ];
-    for (const field of allowedFields) {
-        if (args[field] !== undefined) {
-            data[field] = args[field];
+    // Location: 0, 5, 10, 15, or 20
+    const loc    = (booking.location || '').trim();
+    const hasZip = !!(booking.zip && booking.zip.trim());
+    const CAMPUS_VAGUE = /\b(campus|university|college|complex|fairgrounds|convention center|park)\b/i;
+    const HAS_VENUE    = /\b(hall|arena|stadium|ballroom|theater|theatre|auditorium|pavilion|lawn|plaza|center|centre|gym|library|room|building|bldg)\b/i;
+    const HAS_STREET   = /\d+\s+\w+\s+(st|street|ave|avenue|blvd|boulevard|dr|drive|rd|road|way|ln|lane|ct|court|pl|place)\b/i;
+
+    if (loc && hasZip) {
+        const hasStreet = HAS_STREET.test(loc);
+        const hasVenue  = HAS_VENUE.test(loc);
+        const isVague   = CAMPUS_VAGUE.test(loc) && !hasVenue;
+        if (hasStreet && hasVenue)       b.location = 20;
+        else if (hasStreet && !isVague)  b.location = 15;
+        else if (hasVenue)               b.location = 15;
+        else if (hasStreet && isVague)   b.location = 10;
+        else if (isVague)                b.location = 10;
+        else                             b.location = 5;
+    } else if (hasZip || loc) {
+        b.location = 5;
+    } else {
+        b.location = 0;
+    }
+
+    // Contact: 0, 10, 15, or 20
+    const hasName      = !!(client?.name && client.name.trim());
+    const email        = (client?.email || '').trim();
+    const generic      = email ? isGenericEmail(email) : false;
+    const hasNamedEmail = email && !generic;
+    if (hasName && hasNamedEmail) b.contact = 20;
+    else if (hasNamedEmail)       b.contact = 15;
+    else if (hasName)             b.contact = 10;
+    else                          b.contact = 0;
+
+    // Description: 0 or 10
+    const desc      = (booking.description || '').trim();
+    const wordCount = desc ? desc.split(/\s+/).length : 0;
+    b.description = wordCount >= 10 ? 10 : 0;
+
+    // Time: 0 or 10
+    const hasTime     = !!(booking.startTime && booking.startTime.trim());
+    const hasDuration = !!(booking.duration && booking.duration > 0);
+    b.time = (hasTime || hasDuration) ? 10 : 0;
+
+    const total = b.trade + b.date + b.location + b.contact + b.description + b.time;
+
+    // leed_ready requires all three:
+    //   1. named human + direct (non-generic) email  -> contact === 20
+    //   2. demand signal (enforced upstream via factletMultiplier >= 1.0 at booking-target layer)
+    //   3. complete data: trade, date, location with zip
+    const shareReady = total >= 70
+        && b.trade >= 20
+        && b.location >= 15
+        && b.date >= 20
+        && b.contact === 20
+        && hasZip;
+
+    // Contact quality label
+    let contactQuality;
+    if (b.contact === 20)      contactQuality = 'named_email_and_name';
+    else if (b.contact === 15) contactQuality = 'named_email';
+    else if (b.contact === 10) contactQuality = 'name_only';
+    else if (generic)          contactQuality = 'generic_email';
+    else                       contactQuality = 'none';
+
+    // Recommended next action
+    let action = null;
+    if (!shareReady) {
+        if (b.trade === 0) {
+            action = 'CLASSIFY: Assign a trade category before sharing. addLeed requires tn.';
+        } else if (b.contact === 0 && generic) {
+            action = `ENRICH: ${email} is a generic inbox. Find a named contact via website, LinkedIn, or Facebook.`;
+        } else if (b.contact === 0) {
+            action = 'ENRICH: No contact found. Search for a named person at this organization.';
+        } else if (b.location < 15) {
+            action = 'ENRICH: Location is not specific enough to share. A vendor needs a real venue address they can show up to. Find the specific hall, lawn, or room.';
+        } else if (b.date < 20) {
+            if (!booking.startDate) {
+                action = 'ENRICH: No event date. Search or send probe email to confirm timing.';
+            } else {
+                action = 'ENRICH: Date range is too broad to be a single bookable event. Find specific event dates or sessions.';
+            }
+        } else if (b.time === 0) {
+            action = 'ENRICH: No start time or duration. A vendor needs hours to quote a price.';
+        } else if (b.description === 0) {
+            action = 'ENRICH: No description. Scrape event page or add context about the opportunity.';
+        } else {
+            action = 'OUTREACH: Send probe email to confirm missing details.';
         }
     }
-    if (!data.draftStatus) data.draftStatus = 'brewing';
 
-    const client = await prisma.client.create({ data });
-    return createSuccessResponse(id, JSON.stringify(client, null, 2));
+    return { total, breakdown: b, shareReady, contactQuality, action };
 }
 
-// Reference: prisma_sqlite_db.js getClients() lines 116-196
-async function handleSearchClients(id, params) {
-    const args = params.arguments || {};
-    let where = {};
-    const limit = args.limit || 10;
+const SIGNAL_POINTS = { pain: 2, occasion: 2, context: 1 };
+const FACTLET_THRESHOLD = 3;
+const FACTLET_POINTS_PER = 2;
+const DRAFT_THRESHOLD_CLIENT = 5;
 
-    if (args.search) {
-        where.OR = [
-            { name: { contains: args.search } },
-            { email: { contains: args.search } },
-            { company: { contains: args.search } }
-        ];
-    } else {
-        if (args.name) where.name = { contains: args.name };
-        if (args.email) where.email = args.email;
-        if (args.company) where.company = { contains: args.company };
-        if (args.segment) where.segment = { contains: args.segment };
-    }
-
-    if (args.draftStatus) where.draftStatus = args.draftStatus;
-
-    if (args.warmthScore !== undefined) {
-        where.warmthScore = parseInt(args.warmthScore, 10);
-    } else if (args.minWarmthScore !== undefined || args.maxWarmthScore !== undefined) {
-        where.warmthScore = {};
-        if (args.minWarmthScore !== undefined) where.warmthScore.gte = parseInt(args.minWarmthScore, 10);
-        if (args.maxWarmthScore !== undefined) where.warmthScore.lte = parseInt(args.maxWarmthScore, 10);
-    }
-
-    const queryOpts = { where, take: limit, orderBy: { dossierScore: 'desc' } };
-
-    // Default to summary mode — full records with dossier/draft/targetUrls are too large
-    // for MCP response limits. Pass summary=false ONLY when you need the full record.
-    const useSummary = args.summary !== false;
-    if (useSummary) {
-        queryOpts.select = {
-            id: true, name: true, company: true, segment: true,
-            email: true, phone: true, website: true,
-            dossierScore: true, contactGate: true, intelScore: true,
-            warmthScore: true, draftStatus: true, lastEnriched: true, source: true
-        };
-    }
-
-    const clients = await prisma.client.findMany(queryOpts);
-    return createSuccessResponse(id, JSON.stringify(clients, null, 2));
+async function getFactletStaleDays() {
+    const cfg = await prisma.config.findFirst();
+    return (cfg && cfg.factletStaleDays) || 180;
 }
 
-// Reference: prisma_sqlite_db.js updateClient() lines 198-238
-async function handleUpdateClient(id, params) {
-    const args = params.arguments || {};
-    const clientId = args.id;
-    if (!clientId) return createErrorResponse(id, -32602, 'Missing client ID');
+function computeFactletStats(clientFactlets, staleDays) {
+    const now = Date.now();
+    let score = 0;
+    let freshCount = 0;
+    for (const cf of clientFactlets) {
+        const createdAt = cf.factlet && cf.factlet.createdAt;
+        if (!createdAt) continue;
+        const ageDays = (now - new Date(createdAt).getTime()) / (1000 * 60 * 60 * 24);
+        const weight = Math.max(0, 1 - ageDays / staleDays);
+        if (weight > 0) freshCount++;
+        score += weight;
+    }
+    return { score, count: clientFactlets.length, freshCount };
+}
 
-    const allowedFields = [
-        'name', 'email', 'phone', 'company', 'website', 'clientNotes',
-        'dossier', 'targetUrls', 'draft', 'draftStatus', 'sentAt', 'warmthScore',
-        'dossierScore', 'contactGate', 'intelScore',
-        'lastEnriched', 'lastQueueCheck'
-    ];
-
-    const data = {};
-    for (const field of allowedFields) {
-        if (args[field] !== undefined) {
-            if (field === 'lastEnriched' || field === 'lastQueueCheck' || field === 'sentAt') {
-                data[field] = new Date(args[field]);
-            } else if (field === 'warmthScore') {
-                data[field] = parseFloat(args[field]);
-            } else if (field === 'dossierScore' || field === 'intelScore') {
-                data[field] = parseInt(args[field], 10);
-            } else if (field === 'contactGate') {
-                data[field] = !!args[field];
-            } else {
-                data[field] = args[field];
+async function computeClientScore(clientId, intelOverride) {
+    const client = await prisma.client.findUnique({
+        where: { id: clientId },
+        include: {
+            factlets: {
+                where: { relevance: true },
+                include: { factlet: { select: { id: true, createdAt: true } } }
             }
         }
+    });
+    if (!client) return null;
+
+    const staleDays = await getFactletStaleDays();
+    const fs = computeFactletStats(client.factlets || [], staleDays);
+
+    const hasName         = !!(client.name && client.name.trim());
+    const email           = (client.email || '').trim();
+    const generic         = email ? isGenericEmail(email) : false;
+    const hasDirectEmail  = !!(email && !generic);
+    const contactGate     = hasName && hasDirectEmail;
+
+    const intelScore    = (intelOverride !== null && intelOverride !== undefined) ? intelOverride : (client.intelScore || 0);
+    const dossierScore  = intelScore + Math.round(fs.score * FACTLET_POINTS_PER);
+    const draftReady    = contactGate && dossierScore >= DRAFT_THRESHOLD_CLIENT;
+
+    const updateData = { dossierScore, contactGate };
+    if (intelOverride !== null && intelOverride !== undefined) updateData.intelScore = intelOverride;
+    await prisma.client.update({
+        where: { id: clientId },
+        data:  updateData
+    });
+
+    let action = null;
+    if (!draftReady) {
+        if (!hasName)      action = 'CHASE_CONTACT: no named person.';
+        else if (!email)   action = 'CHASE_CONTACT: no email.';
+        else if (generic)  action = `CHASE_CONTACT: ${email} is a generic inbox. Find ${client.name}'s direct email.`;
+        else               action = `THIN_DOSSIER: dossierScore ${dossierScore} < ${DRAFT_THRESHOLD_CLIENT}. Need more fresh relevant factlets.`;
     }
 
-    const updated = await prisma.client.update({ where: { id: clientId }, data });
-    return createSuccessResponse(id, JSON.stringify(updated, null, 2));
-}
-
-async function handleGetReadyDrafts(id, params) {
-    const args = params.arguments || {};
-    const limit = args.limit || 10;
-    const queryOpts = {
-        where: { draftStatus: 'ready' },
-        orderBy: { dossierScore: 'desc' },
-        take: limit
+    return {
+        targetType: 'client',
+        targetId:   clientId,
+        total:      dossierScore,
+        shareReady: false,
+        draftReady,
+        components: {
+            contactGate,
+            intelScore,
+            factletScore:      Math.round(fs.score * 100) / 100,
+            factletCount:      fs.count,
+            factletFreshCount: fs.freshCount,
+            factletStaleDays:  staleDays,
+            dossierScore,
+            contactEmail:      email,
+            contactGeneric:    generic
+        },
+        action
     };
-    if (args.summary) {
-        queryOpts.select = {
-            id: true, name: true, company: true, segment: true,
-            email: true, dossierScore: true, contactGate: true,
-            warmthScore: true, draftStatus: true, lastEnriched: true
-        };
-    }
-    const clients = await prisma.client.findMany(queryOpts);
-    return createSuccessResponse(id, JSON.stringify(clients, null, 2));
 }
 
-// Reference: prisma_sqlite_db.js getSystemStats() lines 624-641
-async function handleGetStats(id, params) {
+async function computeBookingTargetScore(bookingId) {
+    const booking = await prisma.booking.findUnique({
+        where: { id: bookingId },
+        include: {
+            client: {
+                include: {
+                    factlets: {
+                        where: { relevance: true },
+                        include: { factlet: { select: { id: true, createdAt: true } } }
+                    }
+                }
+            }
+        }
+    });
+    if (!booking) return null;
+
+    const client = booking.client;
+    const staleDays = await getFactletStaleDays();
+
+    const data = computeBookingScore(booking, client);
+    const fs = computeFactletStats(client.factlets || [], staleDays);
+    const factletMultiplier = Math.min(1.0, fs.score / FACTLET_THRESHOLD);
+
+    const total = Math.round(data.total * factletMultiplier);
+    const shareReady = data.shareReady && factletMultiplier >= 1.0;
+    const draftReady = data.shareReady && factletMultiplier >= 0.5;
+
+    await prisma.booking.update({
+        where: { id: bookingId },
+        data: {
+            bookingScore:   total,
+            factletScore:   Math.round(fs.score),
+            contactQuality: data.contactQuality
+        }
+    });
+
+    let action = data.action;
+    if (data.shareReady && factletMultiplier < 1.0) {
+        action = `ENRICH_FACTLETS: Booking data complete but only ${fs.freshCount} fresh relevant factlet(s) (need ${FACTLET_THRESHOLD}). Find more recent intel connecting this client to VALUE_PROP.`;
+    }
+
+    return {
+        targetType: 'booking',
+        targetId:   bookingId,
+        total,
+        shareReady,
+        draftReady,
+        components: {
+            dataScore:         data.total,
+            dataBreakdown:     data.breakdown,
+            factletScore:      Math.round(fs.score * 100) / 100,
+            factletCount:      fs.count,
+            factletFreshCount: fs.freshCount,
+            factletMultiplier: Math.round(factletMultiplier * 100) / 100,
+            factletStaleDays:  staleDays,
+            contactQuality:    data.contactQuality
+        },
+        action
+    };
+}
+
+// ============================================================================
+// PIPELINE TOOL HANDLER
+// ============================================================================
+
+// Defaults for response trimming (see clipClientForResponse).
+const DEFAULT_DOSSIER_LIMIT = 2000;
+const DEFAULT_FACTLET_LIMIT = 8;
+
+/**
+ * Tail-clip dossier and cap factlet array to keep response payloads tight.
+ * The model rarely needs the full historical dossier on every turn — recent
+ * entries are usually all that matters. Cutting here saves significant
+ * tokens per `next` call, especially after a client has been enriched many
+ * times.
+ *
+ * dossierLimit / factletLimit args, when passed, override the defaults.
+ * Pass 0 to disable a cap (return full content). Pass undefined for default.
+ */
+function clipClientForResponse(client, dossierLimit, factletLimit) {
+    if (!client || typeof client !== 'object') return client;
+
+    const dLimit = (dossierLimit === undefined) ? DEFAULT_DOSSIER_LIMIT : Number(dossierLimit);
+    const fLimit = (factletLimit === undefined) ? DEFAULT_FACTLET_LIMIT : Number(factletLimit);
+
+    const out = { ...client };
+    const meta = {};
+
+    if (dLimit > 0 && typeof out.dossier === 'string' && out.dossier.length > dLimit) {
+        const tail = out.dossier.slice(-dLimit);
+        // Try to start at a clean line boundary so timestamped entries stay readable
+        const nlIdx = tail.indexOf('\n');
+        const clipped = (nlIdx > 0 && nlIdx < dLimit - 200) ? tail.slice(nlIdx + 1) : tail;
+        out.dossier = `[...older dossier truncated, showing last ${clipped.length} chars]\n${clipped}`;
+        meta.dossierFullLength = client.dossier.length;
+        meta.dossierTruncated = true;
+    }
+
+    if (Array.isArray(out.factlets) && fLimit > 0 && out.factlets.length > fLimit) {
+        meta.factletsFullCount = out.factlets.length;
+        meta.factletsLimited = true;
+        out.factlets = out.factlets.slice(0, fLimit); // already ordered desc by appliedAt
+    }
+
+    if (Object.keys(meta).length > 0) out._clipped = meta;
+    return out;
+}
+
+async function handlePipeline(id, params) {
+    const args = params.arguments || {};
+    // Defensive default: if the model calls pipeline() with no action or
+    // action=undefined, treat it as status. Beats erroring for what is almost
+    // always "show me where things stand."
+    let action = args.action;
+    if (action === undefined || action === null || action === 'undefined' || action === '') {
+        action = 'status';
+    }
+
+    switch (action) {
+        case 'status':    return await pipelineStatus(id);
+        case 'configure': return await pipelineConfigure(id, args.patch || {});
+        case 'next':      return await pipelineNext(id, args.entity || 'client', args.criteria || {}, args.dossierLimit, args.factletLimit);
+        case 'save':      return await pipelineSave(id, args.id, args.patch || {});
+        default:
+            return createErrorResponse(id, -32602, `Unknown pipeline action: "${action}". Must be: status, configure, next, save.`);
+    }
+}
+
+async function pipelineStatus(id) {
+    // Config
+    const cfg = await prisma.config.findFirst({ orderBy: { createdAt: 'desc' } });
+
+    // Stats (same queries as v1 handleGetStats)
     const [totalClients, totalFactlets, totalLinkedFactlets, brewing, ready, sent,
            contactGatePass, contactGateFail,
            dossierHigh, dossierMid, dossierLow, dossierNone,
@@ -693,184 +680,372 @@ async function handleGetStats(id, params) {
         prisma.booking.count({ where: { AND: [{ bookingScore: { not: null } }, { bookingScore: { lt: 50 } }] } }),
         prisma.booking.count({ where: { bookingScore: null } })
     ]);
-    return createSuccessResponse(id, JSON.stringify({
-        totalClients, totalFactlets, totalLinkedFactlets,
-        drafts: { brewing, ready, sent },
-        contactGate: { pass: contactGatePass, fail: contactGateFail },
-        dossierScores: { high: dossierHigh, mid: dossierMid, low: dossierLow, unscored: dossierNone },
-        bookings: {
-            total: totalBookings, new: newBookings, leed_ready: leedReady, taken, shared,
-            scores: { share_ready: scoreHigh, needs_work: scoreMid, incomplete: scoreLow, unscored: scoreNone }
+
+    // Ready drafts (top 5, summary)
+    const readyDrafts = await prisma.client.findMany({
+        where: { draftStatus: 'ready' },
+        orderBy: { dossierScore: 'desc' },
+        take: 5,
+        select: {
+            id: true, name: true, company: true, segment: true,
+            email: true, dossierScore: true, contactGate: true,
+            warmthScore: true, draftStatus: true, lastEnriched: true
         }
+    });
+
+    // Completeness: check if config has the fields needed for current mode
+    const completeness = {};
+    if (cfg) {
+        completeness.hasCompanyName = !!(cfg.companyName && cfg.companyName.trim());
+        completeness.hasCompanyEmail = !!(cfg.companyEmail && cfg.companyEmail.trim());
+        completeness.hasBusinessDescription = !!(cfg.businessDescription && cfg.businessDescription.trim());
+        completeness.hasActiveEntities = !!(cfg.activeEntities && cfg.activeEntities.trim());
+        completeness.hasDefaultTrade = !!(cfg.defaultTrade && cfg.defaultTrade.trim());
+        if (cfg.marketplaceEnabled) {
+            completeness.hasLeedzEmail = !!(cfg.leedzEmail && cfg.leedzEmail.trim());
+            completeness.hasLeedzSession = !!(cfg.leedzSession && cfg.leedzSession.trim());
+        }
+        completeness.ready = completeness.hasCompanyName
+            && completeness.hasCompanyEmail
+            && completeness.hasBusinessDescription;
+    }
+
+    return createSuccessResponse(id, JSON.stringify({
+        config: cfg,
+        stats: {
+            totalClients, totalFactlets, totalLinkedFactlets,
+            drafts: { brewing, ready, sent },
+            contactGate: { pass: contactGatePass, fail: contactGateFail },
+            dossierScores: { high: dossierHigh, mid: dossierMid, low: dossierLow, unscored: dossierNone },
+            bookings: {
+                total: totalBookings, new: newBookings, leed_ready: leedReady, taken, shared,
+                scores: { share_ready: scoreHigh, needs_work: scoreMid, incomplete: scoreLow, unscored: scoreNone }
+            }
+        },
+        completeness,
+        readyDrafts,
+        brewingCount: brewing
     }, null, 2));
 }
 
-async function handleCreateFactlet(id, params) {
-    const args = params.arguments || {};
-    if (!args.content) return createErrorResponse(id, -32602, 'Missing factlet content');
-    if (!args.source)  return createErrorResponse(id, -32602, 'Missing factlet source URL');
+async function pipelineConfigure(id, patch) {
+    if (!patch || Object.keys(patch).length === 0) {
+        return createErrorResponse(id, -32602, 'configure requires a non-empty patch.');
+    }
 
-    const factlet = await prisma.factlet.create({
-        data: { content: args.content, source: args.source }
-    });
-    return createSuccessResponse(id, JSON.stringify(factlet, null, 2));
-}
-
-async function handleGetNewFactlets(id, params) {
-    const since = params.arguments?.since;
-    if (!since) return createErrorResponse(id, -32602, 'Missing "since" timestamp');
-
-    const factlets = await prisma.factlet.findMany({
-        where: { createdAt: { gt: new Date(since) } },
-        orderBy: { createdAt: 'asc' }
-    });
-    return createSuccessResponse(id, JSON.stringify(factlets, null, 2));
-}
-
-async function handleDeleteFactlet(id, params) {
-    const factletId = params.arguments?.id;
-    if (!factletId) return createErrorResponse(id, -32602, 'Missing factlet ID');
-
-    await prisma.factlet.delete({ where: { id: factletId } });
-    return createSuccessResponse(id, `Factlet ${factletId} deleted`);
-}
-
-// Atomic fetch-and-mark: finds oldest-touched client, stamps lastQueueCheck=now,
-// returns the record. The stamp happens BEFORE return so concurrent agents cannot
-// claim the same record. Claude's stateless memory is never trusted as the cursor —
-// the DB timestamp IS the bookmark.
-async function handleGetNextClient(id, params) {
-    const args = params.arguments || {};
-    const where = {};
-    if (args.company)     where.company     = { contains: args.company };
-    if (args.name)        where.name        = { contains: args.name };
-    if (args.draftStatus) where.draftStatus = args.draftStatus;
-
-    // NULL lastQueueCheck sorts first in SQLite ASC — never-touched records come first
-    const client = await prisma.client.findFirst({
-        where,
-        orderBy: { lastQueueCheck: 'asc' }
-    });
-
-    if (!client) return createSuccessResponse(id, JSON.stringify(null));
-
-    // Stamp before returning — this is what prevents re-processing
-    const stamped = await prisma.client.update({
-        where: { id: client.id },
-        data: { lastQueueCheck: new Date() }
-    });
-
-    return createSuccessResponse(id, JSON.stringify(stamped, null, 2));
-}
-
-async function handleGetConfig(id, params) {
-    const cfg = await prisma.config.findFirst({ orderBy: { createdAt: 'desc' } });
-    return createSuccessResponse(id, JSON.stringify(cfg, null, 2));
-}
-
-// Reference: prisma_sqlite_db.js upsertConfig() lines 594-622
-async function handleUpdateConfig(id, params) {
-    const args = params.arguments || {};
     const existing = await prisma.config.findFirst({ orderBy: { createdAt: 'desc' } });
 
     let cfg;
     if (existing) {
-        cfg = await prisma.config.update({ where: { id: existing.id }, data: args });
+        cfg = await prisma.config.update({ where: { id: existing.id }, data: patch });
     } else {
-        cfg = await prisma.config.create({ data: args });
+        cfg = await prisma.config.create({ data: patch });
     }
     return createSuccessResponse(id, JSON.stringify(cfg, null, 2));
 }
 
-// ============================================================================
-// BOOKING TOOL HANDLERS
-// ============================================================================
-
-async function handleCreateBooking(id, params) {
-    const args = params.arguments || {};
-    if (!args.clientId) return createErrorResponse(id, -32602, 'Missing clientId');
-
-    const data = { clientId: args.clientId };
-    const fields = [
-        'title', 'description', 'notes', 'location', 'startTime', 'endTime',
-        'source', 'sourceUrl', 'trade', 'zip', 'sharedTo', 'squarePaymentUrl', 'leedId'
-    ];
-    for (const f of fields) { if (args[f] !== undefined) data[f] = args[f]; }
-
-    // Numeric fields
-    if (args.duration !== undefined)   data.duration   = parseFloat(args.duration);
-    if (args.hourlyRate !== undefined)  data.hourlyRate  = parseFloat(args.hourlyRate);
-    if (args.flatRate !== undefined)    data.flatRate    = parseFloat(args.flatRate);
-    if (args.totalAmount !== undefined) data.totalAmount = parseFloat(args.totalAmount);
-    if (args.leedPrice !== undefined)   data.leedPrice   = parseInt(args.leedPrice, 10);
-
-    // Date fields
-    if (args.startDate) data.startDate = new Date(args.startDate);
-    if (args.endDate)   data.endDate   = new Date(args.endDate);
-
-    // Boolean
-    if (args.shared !== undefined) data.shared = !!args.shared;
-
-    // Status defaults to 'new' via schema — check Booking Action Criterion
-    if (args.status) {
-        data.status = args.status;
-    } else if (data.trade && data.startDate && (data.location || data.zip)) {
-        data.status = 'leed_ready';
+async function pipelineNext(id, entity, criteria, dossierLimit, factletLimit) {
+    if (entity === 'booking') {
+        return await pipelineNextBooking(id, criteria, dossierLimit, factletLimit);
     }
-
-    const booking = await prisma.booking.create({ data });
-    return createSuccessResponse(id, safeJson(booking));
+    return await pipelineNextClient(id, criteria, dossierLimit, factletLimit);
 }
 
-async function handleUpdateBooking(id, params) {
-    const args = params.arguments || {};
-    if (!args.id) return createErrorResponse(id, -32602, 'Missing booking ID');
-
-    const allowedFields = [
-        'title', 'description', 'notes', 'location', 'startTime', 'endTime',
-        'status', 'source', 'sourceUrl', 'trade', 'zip', 'sharedTo',
-        'squarePaymentUrl', 'leedId'
-    ];
-    const data = {};
-    for (const f of allowedFields) { if (args[f] !== undefined) data[f] = args[f]; }
-
-    if (args.duration !== undefined)   data.duration   = parseFloat(args.duration);
-    if (args.hourlyRate !== undefined)  data.hourlyRate  = parseFloat(args.hourlyRate);
-    if (args.flatRate !== undefined)    data.flatRate    = parseFloat(args.flatRate);
-    if (args.totalAmount !== undefined) data.totalAmount = parseFloat(args.totalAmount);
-    if (args.leedPrice !== undefined)   data.leedPrice   = parseInt(args.leedPrice, 10);
-    if (args.startDate) data.startDate = new Date(args.startDate);
-    if (args.endDate)   data.endDate   = new Date(args.endDate);
-    if (args.shared !== undefined) data.shared = !!args.shared;
-    if (args.sharedAt !== undefined) data.sharedAt = BigInt(args.sharedAt);
-
-    // Auto-promote to leed_ready if fields complete and status not explicitly set
-    if (!data.status) {
-        const existing = await prisma.booking.findUnique({ where: { id: args.id } });
-        const merged = { ...existing, ...data };
-        if (merged.trade && merged.startDate && (merged.location || merged.zip)) {
-            data.status = 'leed_ready';
-        }
-    }
-
-    const booking = await prisma.booking.update({ where: { id: args.id }, data });
-    return createSuccessResponse(id, safeJson(booking));
-}
-
-async function handleGetBookings(id, params) {
-    const args = params.arguments || {};
+async function pipelineNextClient(id, criteria, dossierLimit, factletLimit) {
     const where = {};
-    if (args.status) where.status = args.status;
-    if (args.trade)  where.trade  = args.trade;
-    const limit = args.limit || 20;
+    if (criteria.company)     where.company     = { contains: criteria.company };
+    if (criteria.name)        where.name        = { contains: criteria.name };
+    if (criteria.draftStatus) where.draftStatus = criteria.draftStatus;
 
-    // Keyword search across title, description, notes, location
-    if (args.search) {
+    // Atomic claim + hydrate in one transaction
+    const result = await prisma.$transaction(async (tx) => {
+        // Find oldest lastQueueCheck (nulls first in SQLite ASC)
+        const client = await tx.client.findFirst({
+            where,
+            orderBy: { lastQueueCheck: 'asc' }
+        });
+
+        if (!client) return null;
+
+        // Stamp before returning
+        const stamped = await tx.client.update({
+            where: { id: client.id },
+            data: { lastQueueCheck: new Date() }
+        });
+
+        // Hydrate: factlets + bookings
+        const factlets = await tx.clientFactlet.findMany({
+            where: { clientId: client.id },
+            include: { factlet: { select: { id: true, content: true, source: true, createdAt: true } } },
+            orderBy: { appliedAt: 'desc' }
+        });
+
+        const bookings = await tx.booking.findMany({
+            where: { clientId: client.id },
+            orderBy: { createdAt: 'desc' }
+        });
+
+        return { ...stamped, factlets, bookings };
+    });
+
+    return createSuccessResponse(id, safeJson(clipClientForResponse(result, dossierLimit, factletLimit)));
+}
+
+async function pipelineNextBooking(id, criteria, dossierLimit, factletLimit) {
+    const where = {};
+    if (criteria.status) where.status = criteria.status;
+    if (criteria.trade)  where.trade  = criteria.trade;
+
+    const result = await prisma.$transaction(async (tx) => {
+        const booking = await tx.booking.findFirst({
+            where,
+            orderBy: { createdAt: 'asc' }
+        });
+
+        if (!booking) return null;
+
+        // Hydrate with client + client factlets
+        const client = await tx.client.findUnique({
+            where: { id: booking.clientId }
+        });
+
+        const factlets = client ? await tx.clientFactlet.findMany({
+            where: { clientId: client.id },
+            include: { factlet: { select: { id: true, content: true, source: true, createdAt: true } } },
+            orderBy: { appliedAt: 'desc' }
+        }) : [];
+
+        return { ...booking, client: { ...client, factlets } };
+    });
+
+    // Clip the embedded client (dossier + factlets), not the booking itself
+    if (result && result.client) {
+        result.client = clipClientForResponse(result.client, dossierLimit, factletLimit);
+    }
+    return createSuccessResponse(id, safeJson(result));
+}
+
+async function pipelineSave(id, clientId, patch) {
+    let existing = null;
+    let isCreate = false;
+
+    if (clientId) {
+        existing = await prisma.client.findUnique({ where: { id: clientId } });
+        if (!existing) {
+            return createErrorResponse(id, -32602, `Client not found: ${clientId}`);
+        }
+    } else {
+        // No id = create new client. Requires patch.name.
+        if (!patch.name) {
+            return createErrorResponse(id, -32602, 'save without id requires patch.name to create a new client.');
+        }
+        isCreate = true;
+        const created = await prisma.client.create({
+            data: {
+                name: patch.name,
+                email: patch.email || null,
+                phone: patch.phone || null,
+                company: patch.company || null,
+                website: patch.website || null,
+                segment: patch.segment || null,
+                source: patch.source || null
+            }
+        });
+        clientId = created.id;
+        existing = created;
+    }
+
+    await prisma.$transaction(async (tx) => {
+        // Build client update data
+        const clientData = {};
+        const clientFields = [
+            'name', 'email', 'phone', 'company', 'website', 'clientNotes',
+            'segment', 'draft', 'draftStatus', 'targetUrls'
+        ];
+        for (const field of clientFields) {
+            if (patch[field] !== undefined) {
+                clientData[field] = patch[field];
+            }
+        }
+
+        // dossierAppend: timestamp + append to existing dossier
+        if (patch.dossierAppend) {
+            const timestamp = new Date().toISOString().slice(0, 10);
+            const existingDossier = existing.dossier || '';
+            const separator = existingDossier ? '\n\n' : '';
+            clientData.dossier = existingDossier + separator + `[${timestamp}] ${patch.dossierAppend}`;
+        }
+
+        // Direct dossier overwrite (use dossierAppend instead when possible)
+        if (patch.dossier !== undefined && patch.dossierAppend === undefined) {
+            clientData.dossier = patch.dossier;
+        }
+
+        if (patch.intelScore !== undefined) {
+            clientData.intelScore = parseInt(patch.intelScore, 10);
+        }
+
+        if (patch.sentAt) {
+            clientData.sentAt = new Date(patch.sentAt);
+        }
+
+        if (patch.warmthScore !== undefined) {
+            clientData.warmthScore = parseFloat(patch.warmthScore);
+        }
+
+        clientData.lastEnriched = new Date();
+
+        if (Object.keys(clientData).length > 0) {
+            await tx.client.update({ where: { id: clientId }, data: clientData });
+        }
+
+        // Create and link factlets
+        if (Array.isArray(patch.factlets)) {
+            for (const f of patch.factlets) {
+                if (!f.content || !f.source) continue;
+
+                const factlet = await tx.factlet.create({
+                    data: { content: f.content, source: f.source }
+                });
+
+                const signalType = f.signalType || 'context';
+                const points = SIGNAL_POINTS[signalType] || 1;
+
+                await tx.clientFactlet.upsert({
+                    where: { clientId_factletId: { clientId, factletId: factlet.id } },
+                    create: { clientId, factletId: factlet.id, signalType, points },
+                    update: { signalType, points }
+                });
+            }
+        }
+
+        // Upsert bookings
+        if (Array.isArray(patch.bookings)) {
+            for (const b of patch.bookings) {
+                const bookingData = { clientId };
+                const bookingFields = [
+                    'title', 'description', 'notes', 'location', 'startTime', 'endTime',
+                    'source', 'sourceUrl', 'trade', 'zip', 'sharedTo', 'squarePaymentUrl', 'leedId',
+                    'status'
+                ];
+                for (const f of bookingFields) {
+                    if (b[f] !== undefined) bookingData[f] = b[f];
+                }
+
+                if (b.duration !== undefined)   bookingData.duration   = parseFloat(b.duration);
+                if (b.hourlyRate !== undefined)  bookingData.hourlyRate  = parseFloat(b.hourlyRate);
+                if (b.flatRate !== undefined)    bookingData.flatRate    = parseFloat(b.flatRate);
+                if (b.totalAmount !== undefined) bookingData.totalAmount = parseFloat(b.totalAmount);
+                if (b.leedPrice !== undefined)   bookingData.leedPrice   = parseInt(b.leedPrice, 10);
+                if (b.startDate) bookingData.startDate = new Date(b.startDate);
+                if (b.endDate)   bookingData.endDate   = new Date(b.endDate);
+                if (b.shared !== undefined) bookingData.shared = !!b.shared;
+                if (b.sharedAt !== undefined) bookingData.sharedAt = BigInt(b.sharedAt);
+
+                // Auto-promote to leed_ready
+                if (!bookingData.status && bookingData.trade && bookingData.startDate && (bookingData.location || bookingData.zip)) {
+                    bookingData.status = 'leed_ready';
+                }
+
+                if (b.id) {
+                    // Update existing booking
+                    const { clientId: _cid, ...updateData } = bookingData;
+                    await tx.booking.update({ where: { id: b.id }, data: updateData });
+                } else {
+                    // Create new booking
+                    await tx.booking.create({ data: bookingData });
+                }
+            }
+        }
+    });
+
+    // Score after transaction completes (scoring reads back from DB)
+    const intelOverride = (patch.intelScore !== undefined) ? parseInt(patch.intelScore, 10) : null;
+    const scoreResult = await computeClientScore(clientId, intelOverride);
+
+    return createSuccessResponse(id, JSON.stringify({
+        saved: true,
+        clientId,
+        score: scoreResult
+    }, null, 2));
+}
+
+// ============================================================================
+// FIND TOOL HANDLER
+// ============================================================================
+
+async function handleFind(id, params) {
+    const args = params.arguments || {};
+    const action = args.action;
+
+    switch (action) {
+        case 'clients':  return await findClients(id, args);
+        case 'bookings': return await findBookings(id, args);
+        case 'factlets': return await findFactlets(id, args);
+        case 'drafts':   return await findDrafts(id, args);
+        default:
+            return createErrorResponse(id, -32602, `Unknown find action: "${action}". Must be: clients, bookings, factlets, drafts.`);
+    }
+}
+
+async function findClients(id, args) {
+    const filters = args.filters || {};
+    const limit = args.limit || 10;
+    const useSummary = args.summary !== false;
+    let where = {};
+
+    if (filters.search) {
         where.OR = [
-            { title:       { contains: args.search } },
-            { description: { contains: args.search } },
-            { notes:       { contains: args.search } },
-            { location:    { contains: args.search } }
+            { name: { contains: filters.search } },
+            { email: { contains: filters.search } },
+            { company: { contains: filters.search } }
+        ];
+    } else {
+        if (filters.name)    where.name    = { contains: filters.name };
+        if (filters.email)   where.email   = filters.email;
+        if (filters.company) where.company = { contains: filters.company };
+        if (filters.segment) where.segment = { contains: filters.segment };
+    }
+
+    if (filters.draftStatus) where.draftStatus = filters.draftStatus;
+
+    if (filters.warmthScore !== undefined) {
+        where.warmthScore = parseInt(filters.warmthScore, 10);
+    } else if (filters.minWarmthScore !== undefined || filters.maxWarmthScore !== undefined) {
+        where.warmthScore = {};
+        if (filters.minWarmthScore !== undefined) where.warmthScore.gte = parseInt(filters.minWarmthScore, 10);
+        if (filters.maxWarmthScore !== undefined) where.warmthScore.lte = parseInt(filters.maxWarmthScore, 10);
+    }
+
+    const queryOpts = { where, take: limit, orderBy: { dossierScore: 'desc' } };
+
+    if (useSummary) {
+        queryOpts.select = {
+            id: true, name: true, company: true, segment: true,
+            email: true, phone: true, website: true,
+            dossierScore: true, contactGate: true, intelScore: true,
+            warmthScore: true, draftStatus: true, lastEnriched: true, source: true
+        };
+    }
+
+    const clients = await prisma.client.findMany(queryOpts);
+    return createSuccessResponse(id, JSON.stringify(clients, null, 2));
+}
+
+async function findBookings(id, args) {
+    const filters = args.filters || {};
+    const limit = args.limit || 20;
+    const where = {};
+
+    if (filters.status) where.status = filters.status;
+    if (filters.trade)  where.trade  = filters.trade;
+
+    if (filters.search) {
+        where.OR = [
+            { title:       { contains: filters.search } },
+            { description: { contains: filters.search } },
+            { notes:       { contains: filters.search } },
+            { location:    { contains: filters.search } }
         ];
     }
 
@@ -887,365 +1062,124 @@ async function handleGetBookings(id, params) {
     return createSuccessResponse(id, safeJson(bookings));
 }
 
-// ============================================================================
-// CLIENT SCORING — PROCEDURAL, NO LLM
-// ============================================================================
+async function findFactlets(id, args) {
+    const filters = args.filters || {};
 
-// Client scoring constants — sourced from scoring_config.json
-const SIGNAL_POINTS = SCORING.client.signalPoints;
-const DRAFT_THRESHOLD = SCORING.client.draftThreshold;
-
-async function handleLinkFactlet(id, params) {
-    const args = params.arguments || {};
-    const { clientId, factletId, signalType } = args;
-    if (!clientId)   return createErrorResponse(id, -32602, 'Missing clientId');
-    if (!factletId)  return createErrorResponse(id, -32602, 'Missing factletId');
-    if (!signalType) return createErrorResponse(id, -32602, 'Missing signalType');
-
-    const validTypes = ['pain', 'occasion', 'context'];
-    if (!validTypes.includes(signalType)) {
-        return createErrorResponse(id, -32602, `Invalid signalType "${signalType}". Must be: ${validTypes.join(', ')}`);
+    // If clientId is provided, return linked factlets for that client
+    if (filters.clientId) {
+        const links = await prisma.clientFactlet.findMany({
+            where: { clientId: filters.clientId },
+            include: { factlet: { select: { id: true, content: true, source: true, createdAt: true } } },
+            orderBy: { appliedAt: 'desc' }
+        });
+        return createSuccessResponse(id, JSON.stringify(links, null, 2));
     }
 
-    const points = SIGNAL_POINTS[signalType];
+    // Otherwise, global factlet query (queue checking)
+    if (!filters.sinceTimestamp) {
+        return createErrorResponse(id, -32602, 'factlets action requires filters.sinceTimestamp or filters.clientId.');
+    }
 
-    // Upsert — idempotent on clientId+factletId unique constraint
-    const link = await prisma.clientFactlet.upsert({
-        where: { clientId_factletId: { clientId, factletId } },
-        create: { clientId, factletId, signalType, points },
-        update: { signalType, points },
-        include: { factlet: { select: { content: true, source: true } } }
+    const factlets = await prisma.factlet.findMany({
+        where: { createdAt: { gt: new Date(filters.sinceTimestamp) } },
+        orderBy: { createdAt: 'asc' }
     });
-
-    return createSuccessResponse(id, JSON.stringify(link, null, 2));
+    return createSuccessResponse(id, JSON.stringify(factlets, null, 2));
 }
 
-async function handleGetClientFactlets(id, params) {
-    const clientId = params.arguments?.clientId;
-    if (!clientId) return createErrorResponse(id, -32602, 'Missing clientId');
+async function findDrafts(id, args) {
+    const limit = args.limit || 10;
+    const useSummary = args.summary !== false;
+    const filters = args.filters || {};
 
-    const links = await prisma.clientFactlet.findMany({
-        where: { clientId },
-        include: { factlet: { select: { id: true, content: true, source: true, createdAt: true } } },
-        orderBy: { appliedAt: 'desc' }
-    });
+    const where = { draftStatus: 'ready' };
+    if (filters.minScore !== undefined) {
+        where.dossierScore = { gte: parseInt(filters.minScore, 10) };
+    }
 
-    return createSuccessResponse(id, JSON.stringify(links, null, 2));
+    const queryOpts = {
+        where,
+        orderBy: { dossierScore: 'desc' },
+        take: limit
+    };
+
+    if (useSummary) {
+        queryOpts.select = {
+            id: true, name: true, company: true, segment: true,
+            email: true, dossierScore: true, contactGate: true,
+            warmthScore: true, draftStatus: true, lastEnriched: true
+        };
+    }
+
+    const clients = await prisma.client.findMany(queryOpts);
+    return createSuccessResponse(id, JSON.stringify(clients, null, 2));
 }
 
-async function handleScoreClient(id, params) {
-    const args = params.arguments || {};
-    const clientId = args.clientId;
-    if (!clientId) return createErrorResponse(id, -32602, 'Missing clientId');
+// ============================================================================
+// TRADES TOOL HANDLER (unchanged from v1)
+// ============================================================================
 
-    const client = await prisma.client.findUnique({ where: { id: clientId } });
-    if (!client) return createErrorResponse(id, -32602, `Client not found: ${clientId}`);
+const TRADES_URL = 'https://jjz8op6uy4.execute-api.us-west-2.amazonaws.com/Leedz_Stage_1/getTrades';
+const TRADES_CACHE_TTL_MS = 10 * 60 * 1000;
+let tradesCache = null;
+let tradesCacheAt = 0;
 
-    // --- Contact Gate ---
-    const hasName = !!(client.name && client.name.trim());
-    const email = (client.email || '').trim();
-    const generic = email ? isGenericEmail(email) : false;
-    const hasDirectEmail = !!(email && !generic);
-    const contactGate = hasName && hasDirectEmail;
-
-    // --- Factlet Score (D4) ---
-    const factletAgg = await prisma.clientFactlet.aggregate({
-        where: { clientId },
-        _sum: { points: true },
-        _count: true
-    });
-    const factletScore = factletAgg._sum.points || 0;
-    const factletCount = factletAgg._count || 0;
-
-    // --- Intel Score (D2+D3) ---
-    // Use provided param if present, otherwise use stored value
-    const intelScore = (args.intelScore !== undefined)
-        ? parseInt(args.intelScore, 10)
-        : (client.intelScore || 0);
-
-    // --- Dossier Score ---
-    const dossierScore = intelScore + factletScore;
-
-    // --- Draft Eligibility ---
-    const canDraft = contactGate && (dossierScore >= DRAFT_THRESHOLD);
-
-    // --- Recommended action ---
-    let action = null;
-    if (!canDraft) {
-        if (!hasName) {
-            action = 'CHASE_CONTACT: No named person. Find a decision-maker via website, LinkedIn, or staff directory.';
-        } else if (!email) {
-            action = 'CHASE_CONTACT: No email at all. Search for direct email via LinkedIn, staff directory, domain patterns.';
-        } else if (generic) {
-            action = `CHASE_CONTACT: ${email} is a generic inbox. Find ${client.name}'s direct email.`;
-        } else if (dossierScore < DRAFT_THRESHOLD) {
-            action = `THIN_DOSSIER: dossierScore ${dossierScore} < ${DRAFT_THRESHOLD}. Need more signals or factlets.`;
+async function handleTrades(id, params) {
+    const now = Date.now();
+    if (tradesCache && (now - tradesCacheAt) < TRADES_CACHE_TTL_MS) {
+        return createSuccessResponse(id, safeJson(tradesCache));
+    }
+    try {
+        const res = await fetch(TRADES_URL);
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        const raw = await res.json();
+        const trades = Array.isArray(raw)
+            ? raw.map(t => t.sk).filter(Boolean).sort()
+            : [];
+        tradesCache = trades;
+        tradesCacheAt = now;
+        return createSuccessResponse(id, safeJson(trades));
+    } catch (error) {
+        logError(`getTrades fetch error: ${error.message}`);
+        if (tradesCache) {
+            logWarn('Serving stale trades cache due to fetch failure');
+            return createSuccessResponse(id, safeJson(tradesCache));
         }
+        return createErrorResponse(id, -32603, `getTrades failed and no cache available: ${error.message}`);
     }
-
-    // --- Write back to DB ---
-    const updateData = { dossierScore, contactGate };
-    if (args.intelScore !== undefined) {
-        updateData.intelScore = intelScore;
-    }
-    await prisma.client.update({ where: { id: clientId }, data: updateData });
-
-    const emailNote = email
-        ? (generic ? ` (generic — gate fails)` : '')
-        : ' (no email)';
-
-    return createSuccessResponse(id, JSON.stringify({
-        clientId,
-        contactGate,
-        dossierScore,
-        factletScore,
-        factletCount,
-        intelScore,
-        canDraft,
-        breakdown: {
-            contact: `${contactGate ? 'PASS' : 'FAIL'} — ${client.name || 'NO NAME'} / ${email || 'no email'}${emailNote}`,
-            intel:   `${intelScore}/7 — D2+D3 from scraping`,
-            factlets: `${factletScore} pts from ${factletCount} linked factlets`,
-            total:   `${dossierScore} (threshold: ${DRAFT_THRESHOLD})`
-        },
-        action
-    }, null, 2));
 }
 
 // ============================================================================
-// BOOKING SCORE — PROCEDURAL, NO LLM
+// TOOL CALL ROUTER (3 tools)
 // ============================================================================
-
-// Generic email prefixes — sourced from scoring_config.json
-const GENERIC_EMAIL_PREFIXES = new Set(SCORING.booking.genericEmailPrefixes);
-
-function isGenericEmail(email) {
-    if (!email) return false;
-    const prefix = email.split('@')[0].toLowerCase().replace(/[^a-z]/g, '');
-    return GENERIC_EMAIL_PREFIXES.has(prefix);
-}
-
-function computeBookingScore(booking, client) {
-    const b = {};
-    const P = SCORING.booking;  // policy shorthand
-
-    // Trade: 0 or 20 — addLeed API requires tn
-    b.trade = booking.trade ? P.trade.present : P.trade.missing;
-
-    // Date: tiered by event window span — addLeed API requires st/et
-    if (booking.startDate) {
-        if (!booking.endDate) {
-            b.date = P.date.singleDay;
-        } else {
-            const start = new Date(booking.startDate);
-            const end   = new Date(booking.endDate);
-            const spanDays = (end - start) / (1000 * 60 * 60 * 24);
-            if (spanDays <= P.date.tightWindowMaxDays)      b.date = P.date.tightWindow;
-            else if (spanDays <= P.date.roughWindowMaxDays) b.date = P.date.roughWindow;
-            else                                             b.date = P.date.ongoing;
-        }
-    } else {
-        b.date = P.date.missing;
-    }
-
-    // Location: tiered by address specificity — addLeed API requires lc (full address)
-    const loc    = (booking.location || '').trim();
-    const hasZip = !!(booking.zip && booking.zip.trim());
-    const T = P.location.tiers;
-
-    if (loc && hasZip) {
-        const hasStreet = LOC_RX.street.test(loc);
-        const hasVenue  = LOC_RX.venue.test(loc);
-        const isVague   = LOC_RX.campusVague.test(loc) && !hasVenue;
-        if (hasStreet && hasVenue)       b.location = T.streetAndVenue;  // e.g. "CSUN MatArena, 18111 Nordhoff St"
-        else if (hasStreet && !isVague)  b.location = T.cleanStreet;
-        else if (hasVenue)               b.location = T.namedVenue;
-        else if (hasStreet && isVague)   b.location = T.streetInVague;
-        else if (isVague)                b.location = T.vagueOnly;
-        else                             b.location = T.bareCity;  // bare city + zip, not vendor-actionable
-    } else if (hasZip || loc) {
-        b.location = T.partial;
-    } else {
-        b.location = T.none;
-    }
-
-    // Contact: tiered by name + email — generic email always scores 0
-    const hasName       = !!(client?.name && client.name.trim());
-    const email         = (client?.email || '').trim();
-    const generic       = email ? isGenericEmail(email) : false;
-    const hasNamedEmail = email && !generic;
-    if (hasName && hasNamedEmail) b.contact = P.contact.nameAndNamedEmail;
-    else if (hasNamedEmail)       b.contact = P.contact.namedEmailOnly;
-    else if (hasName)             b.contact = P.contact.nameOnly;
-    else                          b.contact = P.contact.none;
-
-    // Description: word-count threshold (not a hard gate)
-    const desc      = (booking.description || '').trim();
-    const wordCount = desc ? desc.split(/\s+/).length : 0;
-    b.description = wordCount >= P.description.minWords ? P.description.points : 0;
-
-    // Time: startTime OR duration (not a hard gate, but useful)
-    const hasTime     = !!(booking.startTime && booking.startTime.trim());
-    const hasDuration = !!(booking.duration && booking.duration > 0);
-    b.time = (hasTime || hasDuration) ? P.time.points : 0;
-
-    const total = b.trade + b.date + b.location + b.contact + b.description + b.time;
-
-    // Hard gates — ALL must pass. Tuned to the Leedz addLeed Lambda's required fields.
-    const G = P.hardGates;
-    const shareReady = total >= G.totalMin
-        && b.trade    >= G.tradeMin       // addLeed tn
-        && b.location >= G.locationMin    // addLeed lc
-        && b.date     >= G.dateMin        // addLeed st/et
-        && b.contact  >= G.contactMin;    // buyer needs a named person
-
-    // Contact quality label
-    let contactQuality;
-    if (b.contact === P.contact.nameAndNamedEmail)   contactQuality = 'named_email_and_name';
-    else if (b.contact === P.contact.namedEmailOnly) contactQuality = 'named_email';
-    else if (b.contact === P.contact.nameOnly)       contactQuality = 'name_only';
-    else if (generic)                                contactQuality = 'generic_email';
-    else                                             contactQuality = 'none';
-
-    // Recommended next action if not share-ready — hard gates first, then soft gaps
-    let action = null;
-    if (!shareReady) {
-        // Hard gates (API will reject or buyer can't act without these)
-        if (b.trade < G.tradeMin) {
-            action = 'CLASSIFY: Assign a trade category before sharing. addLeed requires tn.';
-        } else if (b.contact < G.contactMin && generic) {
-            action = `ENRICH: ${email} is a generic inbox. Find a named contact via website, LinkedIn, or Facebook.`;
-        } else if (b.contact < G.contactMin) {
-            action = 'ENRICH: No contact found. Search for a named person at this organization.';
-        } else if (b.location < G.locationMin) {
-            action = 'ENRICH: Location is not specific enough to share. A vendor needs a real venue address they can show up to. Find the specific hall, lawn, or room.';
-        } else if (b.date < G.dateMin) {
-            if (!booking.startDate) {
-                action = 'ENRICH: No event date. Search or send probe email to confirm timing.';
-            } else {
-                action = 'ENRICH: Date range is too broad to be a single bookable event. Find specific event dates or sessions.';
-            }
-        // Soft gaps (won't block sharing but improve score)
-        } else if (b.time === 0) {
-            action = 'ENRICH: No start time or duration. A vendor needs hours to quote a price.';
-        } else if (b.description === 0) {
-            action = 'ENRICH: No description. Scrape event page or add context about the opportunity.';
-        } else {
-            action = 'OUTREACH: Send probe email to confirm missing details.';
-        }
-    }
-
-    return { total, breakdown: b, shareReady, contactQuality, action };
-}
-
-async function handleScoreBooking(id, params) {
-    const bookingId = params.arguments?.id;
-    if (!bookingId) return createErrorResponse(id, -32602, 'Missing booking ID');
-
-    const booking = await prisma.booking.findUnique({
-        where: { id: bookingId },
-        include: { client: { select: { id: true, name: true, email: true } } }
-    });
-    if (!booking) return createErrorResponse(id, -32602, `Booking not found: ${bookingId}`);
-
-    const { total, breakdown: b, shareReady, contactQuality, action } = computeBookingScore(booking, booking.client);
-
-    // Write score back to DB
-    await prisma.booking.update({
-        where: { id: bookingId },
-        data: { bookingScore: total, contactQuality }
-    });
-
-    const dateStr   = booking.startDate ? new Date(booking.startDate).toISOString().split('T')[0] : 'MISSING';
-    const locStr    = [booking.location, booking.zip].filter(Boolean).join(', ') || 'MISSING';
-    const emailNote = booking.client?.email
-        ? (contactQuality === 'generic_email' ? ` (generic — scores 0)` : '')
-        : '';
-
-    return createSuccessResponse(id, JSON.stringify({
-        id:             bookingId,
-        score:          total,
-        shareReady,
-        contactQuality,
-        breakdown: {
-            trade:       `${b.trade}/20  — ${booking.trade || 'MISSING'}`,
-            date:        `${b.date}/20  — ${dateStr}`,
-            location:    `${b.location}/20 — ${locStr}`,
-            contact:     `${b.contact}/20 — ${booking.client?.email || 'no email'}${emailNote}`,
-            description: `${b.description}/10 — ${(booking.description||'').split(/\s+/).filter(Boolean).length} words`,
-            time:        `${b.time}/10  — ${booking.startTime || booking.duration || 'MISSING'}`,
-        },
-        action
-    }, null, 2));
-}
-
-async function handleGetClientBookings(id, params) {
-    const clientId = params.arguments?.clientId;
-    if (!clientId) return createErrorResponse(id, -32602, 'Missing clientId');
-
-    const bookings = await prisma.booking.findMany({
-        where: { clientId },
-        orderBy: { createdAt: 'desc' }
-    });
-    return createSuccessResponse(id, safeJson(bookings));
-}
-
-// ==============================================================================
-// TOOL CALL ROUTER
-// ==============================================================================
 
 async function handleToolCall(id, params) {
     try {
         switch (params.name) {
-            case 'get_client':          return await handleGetClient(id, params);
-            case 'create_client':       return await handleCreateClient(id, params);
-            case 'search_clients':      return await handleSearchClients(id, params);
-            case 'update_client':       return await handleUpdateClient(id, params);
-            case 'get_ready_drafts':    return await handleGetReadyDrafts(id, params);
-            case 'get_stats':           return await handleGetStats(id, params);
-            case 'create_factlet':      return await handleCreateFactlet(id, params);
-            case 'get_new_factlets':    return await handleGetNewFactlets(id, params);
-            case 'delete_factlet':      return await handleDeleteFactlet(id, params);
-            case 'get_next_client':     return await handleGetNextClient(id, params);
-            case 'get_config':          return await handleGetConfig(id, params);
-            case 'update_config':       return await handleUpdateConfig(id, params);
-            case 'create_booking':      return await handleCreateBooking(id, params);
-            case 'update_booking':      return await handleUpdateBooking(id, params);
-            case 'get_bookings':        return await handleGetBookings(id, params);
-            case 'get_client_bookings': return await handleGetClientBookings(id, params);
-            case 'score_booking':       return await handleScoreBooking(id, params);
-            case 'link_factlet':        return await handleLinkFactlet(id, params);
-            case 'get_client_factlets': return await handleGetClientFactlets(id, params);
-            case 'score_client':        return await handleScoreClient(id, params);
+            case 'pipeline': return await handlePipeline(id, params);
+            case 'find':     return await handleFind(id, params);
+            case 'trades':   return await handleTrades(id, params);
             default:
                 return createErrorResponse(id, -32601, `Unknown tool: ${params.name}`);
         }
     } catch (error) {
-        logError(`Tool call error: ${error.message}`);
+        logError(`Tool call error (${params.name}): ${error.message}`);
         return createErrorResponse(id, -32603, `Error: ${error.message}`);
     }
 }
 
-// ==============================================================================
+// ============================================================================
 // REQUEST PROCESSING
-// ==============================================================================
+// ============================================================================
 
 function handlePromptsList(id) {
     logInfo('Handling prompts/list request');
-    return {
-        jsonrpc: '2.0',
-        id: id,
-        result: { prompts: [] }
-    };
+    return { jsonrpc: '2.0', id: id, result: { prompts: [] } };
 }
 
 function handleResourcesList(id) {
     logInfo('Handling resources/list request');
-    return {
-        jsonrpc: '2.0',
-        id: id,
-        result: { resources: [] }
-    };
+    return { jsonrpc: '2.0', id: id, result: { resources: [] } };
 }
 
 async function processJsonRpcRequest(request) {
@@ -1304,15 +1238,15 @@ async function handleInputLine(line) {
     }
 }
 
-// ==============================================================================
+// ============================================================================
 // SERVER LIFECYCLE
-// ==============================================================================
+// ============================================================================
 
 function startMcpServer() {
-    console.error(`[MCP] Starting Pre-Crime MCP server...`);
+    console.error(`[MCP] Starting Pre-Crime MCP server (3 tools)...`);
     console.error(`[MCP] Database: ${dbPath}`);
 
-    logInfo('Starting Pre-Crime MCP server...');
+    logInfo('Starting Pre-Crime MCP server (3 tools)...');
     logInfo(`Database: ${dbPath}`);
 
     const rl = readline.createInterface({

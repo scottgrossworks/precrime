@@ -1,5 +1,5 @@
 ---
-name: {{DEPLOYMENT_NAME}}-fb-factlet-harvester
+name: MyProject-fb-factlet-harvester
 description: Scrape curated Facebook pages for relevant news and create factlets
 triggers:
   - harvest facebook factlets
@@ -7,14 +7,15 @@ triggers:
   - run the fb harvester
   - check facebook for news
 ---
+<!-- v2-compat: tools migrated to precrime__pipeline / precrime__find / precrime__trades surface -->
 
-# {{DEPLOYMENT_NAME}} — Facebook Factlet Harvester
+# MyProject — Facebook Factlet Harvester
 
 You scrape curated Facebook pages for broadly applicable news relevant to selling the product (per `DOCS/VALUE_PROP.md`) and create factlets for the broadcast queue.
 
 **Before running: read `DOCS/VALUE_PROP.md`** for product name, audience, and relevance signals.
 
-**Detect mode before running (Step 0).** Chrome is preferred; headless (WebSearch) is the automatic fallback. Do NOT stop if Chrome is unavailable.
+**Detect mode before running (Step 0).** Chrome is preferred; headless (tavily__tavily_search) is the automatic fallback. Do NOT stop if Chrome is unavailable.
 
 ## Source File
 
@@ -30,8 +31,8 @@ Only scrape URLs listed in that file. Never add new pages mid-run.
 | `mcp__Claude_in_Chrome__navigate` | Navigate to each FB page |
 | `mcp__Claude_in_Chrome__computer` | Wait, scroll |
 | `mcp__Claude_in_Chrome__get_page_text` | Extract post text |
-| `mcp__precrime-mcp__create_factlet` | Save qualifying posts |
-| `mcp__precrime-mcp__get_new_factlets` | Check existing queue (dedup) |
+| `precrime__find` | Look up clients (`action: "clients"`) and existing factlets (`action: "factlets"`) |
+| `precrime__pipeline` | Attach a factlet under a client via `action: "save", patch: { factlets: [...] }` |
 
 ## Procedure
 
@@ -39,7 +40,7 @@ Only scrape URLs listed in that file. Never add new pages mid-run.
 
 1. **Detect mode:** if `mcp__Claude_in_Chrome__tabs_context_mcp` is in your available tools, call `tabs_context_mcp({ createIfEmpty: false })`. If the tool is missing or the call fails → **HEADLESS mode** automatically. Do NOT stop. Do NOT mention Chrome to the user. Proceed.
 2. Read `fb_sources.md`. Parse all URLs (skip lines starting with `#` or blank).
-3. `get_new_factlets({ since: "1970-01-01T00:00:00Z" })` — load full queue for dedup.
+3. `precrime__find({ action: "factlets", filters: { since: "1970-01-01T00:00:00Z" } })` — load full queue for dedup.
 
 **If HEADLESS:** skip Steps 0.5, 1, 1.5, 2 below. Go directly to Step 0H.
 
@@ -48,8 +49,8 @@ Only scrape URLs listed in that file. Never add new pages mid-run.
 For each URL in fb_sources.md, extract the page name from the URL (e.g. `facebook.com/SomeGroup` → "SomeGroup"). Then:
 
 ```
-WebSearch("[page name] facebook recent posts 2026")
-WebSearch("[page name] facebook event news 2026")
+tavily__tavily_search({ query: "[page name] facebook recent posts 2026" })
+tavily__tavily_search({ query: "[page name] facebook event news 2026" })
 ```
 
 Evaluate any snippets returned against the same relevance criteria in Steps 3–4. Create factlets for qualifying findings. Skip Steps 0.5–2 entirely. Jump to Step 5 (report) when done.
@@ -107,9 +108,9 @@ NOT RELEVANT:
 BROAD → create factlet. Affects multiple orgs in the audience. Proceed to Q3.
 
 SPECIFIC to one org/person → four-path classification:
-- Already in DB? `search_clients({ company: "[name]", limit: 1 })` → YES: append to dossier, no factlet. NO: continue.
-- Has trade + date + location/zip AND `leadCaptureEnabled`? → Lead HOT: `create_client` + `create_booking(status:"leed_ready")`, run Booking Completeness Check.
-- Missing booking details AND `leadCaptureEnabled`? → Lead THIN: `create_client` only, dossier note.
+- Already in DB? `precrime__find({ action: "clients", filters: { company: "[name]" }, summary: true, limit: 1 })` → YES: append to dossier via `precrime__pipeline({ action: "save", id, patch: { factlets: [{ content, source, signalType: "context" }] } })`, no broadcast factlet. NO: continue.
+- Has trade + date + location/zip AND `leadCaptureEnabled`? → Lead HOT: `precrime__pipeline({ action: "save", patch: { name, company, source, bookings: [{ status: "leed_ready", trade, startDate, location, zip }], factlets: [{...}] } })`, run Booking Completeness Check.
+- Missing booking details AND `leadCaptureEnabled`? → Lead THIN: `precrime__pipeline({ action: "save", patch: { name, company, source, factlets: [{...}] } })`.
 - `leadCaptureEnabled = false`? → skip. Log: `LEAD_CAPTURE_OFF — [name/org]`
 
 **Q3: Is this post-2023?**
@@ -118,12 +119,15 @@ Recency is a bonus, not a gate. Only skip if pre-2023 AND superseded by newer da
 
 ### Step 4: Create Factlets
 
+v2 has no standalone factlet creation. Factlets must attach to a client.
+
+OPTION A (preferred): if the post maps to an existing client, look them up and attach:
 ```
-mcp__precrime-mcp__create_factlet({
-  content: "[2-3 sentences. What. Why it matters for the target decision-makers. Implication.]",
-  source: "[Facebook page URL]"
-})
+precrime__find({ action: "clients", filters: { company: "[name]" }, summary: true, limit: 1 })
+precrime__pipeline({ action: "save", id: clientId, patch: { factlets: [{ content: "[2-3 sentences. What. Why it matters for the target decision-makers. Implication.]", source: "[Facebook page URL]", signalType: "context" }] } })
 ```
+
+OPTION B (fallback): if the intel is broad-applicable but has no client target yet, append to `logs/UNLINKED_INTEL.md` with the same content + source. Promote to a client save when one surfaces. Do not invent a placeholder client.
 
 Rules: same as RSS harvester. 2-3 sentences. No opinions. No mention of the product.
 One factlet per distinct news item — not one per post.
@@ -151,32 +155,9 @@ One factlet per distinct news item — not one per post.
 - Reuse the same Chrome tab for every page — do NOT create new tabs
 - Do NOT scrape pages not in fb_sources.md
 - Do NOT create factlets for single-org events (dossier material)
-- In headless mode use WebSearch only — do NOT attempt Chrome tools
+- In headless mode use tavily__tavily_search only, do NOT attempt Chrome tools
 - Do NOT interact with the page (no likes, comments, shares)
 - Do NOT follow links to external articles — evaluate post text only
 
 ---
-<!-- CUSTOMIZATION NOTES FOR DEPLOYER
-     ================================
-     This skill is identical in structure across all deployments.
-     The only thing that changes is:
 
-     1. fb_sources.md — the list of Facebook pages to scrape.
-        Populate this with:
-        - Industry association pages
-        - News organization pages
-        - Competitor pages (for market intelligence)
-        - Community pages where your buyers congregate
-        - Any public page that frequently posts content relevant to your audience
-
-     2. The relevance criteria above (Q1) — already substituted from your manifest.
-        Make sure they match your relevance-judge.md criteria.
-
-     3. The STALE threshold (60 days) — adjust if your audience posts less frequently.
-        Religious orgs and small associations may post monthly; raise to 90 days.
-        News organizations post daily; could tighten to 30 days.
-
-     CHROME REQUIREMENT: This skill requires the Claude-in-Chrome MCP extension.
-     The extension connects automatically if it is running in the browser.
-     No special claude launch flags are needed.
--->

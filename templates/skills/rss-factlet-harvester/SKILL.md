@@ -9,6 +9,7 @@ triggers:
   - run the rss harvester
   - run the factlet harvester
 ---
+<!-- v2-compat: tools migrated to precrime__pipeline / precrime__find / precrime__trades surface -->
 
 # RSS Factlet Harvester
 
@@ -30,11 +31,12 @@ You scan configured RSS feeds and create factlets — short, broadly applicable 
 
 | Tool | Purpose |
 |------|---------|
-| `mcp__precrime-rss__get_top_articles` | Fetch top-scoring articles from configured RSS feeds |
-| `mcp__precrime-mcp__create_factlet` | Save a qualifying article as a factlet |
-| `mcp__precrime-mcp__get_new_factlets` | Check existing queue (avoid duplicates) |
-| `WebFetch` | Fetch full article content when snippet is insufficient |
-| `WebSearch` | Research a story's broader context when needed |
+| `precrime_rss__get_top_articles` | Fetch top-scoring articles from configured RSS feeds |
+| `precrime__pipeline({ action: "save", id, patch: { factlets: [...] } })` | Attach a qualifying article as a factlet under a client (v2 has no standalone factlets) |
+| `precrime__find({ action: "factlets" })` | Check existing queue (avoid duplicates) |
+| `precrime__find({ action: "clients" })` | Look up the target client to attach factlets to |
+| `tavily__tavily_extract` | Fetch full article content when snippet is insufficient |
+| `tavily__tavily_search` | Research a story's broader context when needed |
 
 ## Procedure
 
@@ -50,15 +52,15 @@ Use these in all relevance checks below.
 
 ### Step 1: Fetch Articles
 
-Call `mcp__precrime-rss__get_top_articles` with `limit: 100`.
+Call `precrime_rss__get_top_articles` with `limit: 100`.
 
-**If that tool is not available** (not in your toolset), fall back: read `skills/rss-factlet-harvester/rss_sources.md`, then call `WebFetch` on each feed URL directly and parse the returned XML for `<item>` or `<entry>` elements (title, link, pubDate, description).
+**If that tool is not available** (not in your toolset), fall back: read `skills/rss-factlet-harvester/rss_sources.md`, then call `tavily__tavily_extract({ url: "..." })` on each feed URL directly and parse the returned content for `<item>` or `<entry>` elements (title, link, pubDate, description).
 
 Returns scored articles with url, title, pubDate, feedName, category, score, snippet, content.
 
 ### Step 2: Check Existing Factlets
 
-Call `mcp__precrime-mcp__get_new_factlets` with `since` set to 30 days ago and `limit: 100`.
+Call `precrime__find({ action: "factlets", filters: { since: "30 days ago ISO" }, limit: 100 })`.
 
 If an article covers the same topic as an existing factlet, skip it.
 
@@ -73,9 +75,9 @@ Three questions per article:
 BROAD → proceed to Q3 (becomes a factlet candidate).
 
 SPECIFIC to one org/person → four-path classification:
-- Already in DB (`search_clients`)? → YES: append to dossier, no factlet.
-- Has trade + date + location/zip AND `leadCaptureEnabled`? → Lead HOT: `create_client` + `create_booking(status:"leed_ready")`.
-- Missing booking details AND `leadCaptureEnabled`? → Lead THIN: `create_client` only.
+- Already in DB (`precrime__find({ action: "clients", filters: { search: "..." }, summary: true, limit: 1 })`)? → YES: append to dossier via `precrime__pipeline({ action: "save", id, patch: { dossier } })`, no broadcast factlet.
+- Has trade + date + location/zip AND `leadCaptureEnabled`? → Lead HOT: `precrime__pipeline({ action: "save", patch: { name, company, source, bookings: [{ status: "leed_ready", trade, startDate, location, zip }] } })`.
+- Missing booking details AND `leadCaptureEnabled`? → Lead THIN: `precrime__pipeline({ action: "save", patch: { name, company, source } })`.
 - `leadCaptureEnabled = false` → skip, log `LEAD_CAPTURE_OFF`.
 
 **Q3 — Recent enough?**
@@ -85,7 +87,15 @@ SPECIFIC to one org/person → four-path classification:
 
 ### Step 4: Create Factlets
 
-For each article that passes all three questions, call `mcp__precrime-mcp__create_factlet` with `content` (2-3 sentence summary) and `source` (article URL).
+For each article that passes all three questions, attach to a client (v2 has no standalone factlets):
+
+OPTION A (preferred): if the article maps to an existing client, look them up and attach:
+```
+precrime__find({ action: "clients", filters: { company: "[name]" }, summary: true, limit: 1 })
+precrime__pipeline({ action: "save", id: clientId, patch: { factlets: [{ content: "[2-3 sentence summary]", source: "[article URL]", signalType: "context" }] } })
+```
+
+OPTION B (fallback): if the article is broad-applicable but has no client target yet, append to `logs/UNLINKED_INTEL.md` with content + source. Promote to a client save when one surfaces. Do not invent a placeholder client.
 
 **Factlet content rules:**
 - 2–3 sentences. No more.

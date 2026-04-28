@@ -1,5 +1,5 @@
 ---
-name: {{DEPLOYMENT_NAME}}-ig-factlet-harvester
+name: MyProject-ig-factlet-harvester
 description: Scrape curated Instagram profiles and hashtags for relevant posts and create factlets
 triggers:
   - harvest instagram factlets
@@ -8,14 +8,15 @@ triggers:
   - check instagram for news
   - check instagram for leads
 ---
+<!-- v2-compat: tools migrated to precrime__pipeline / precrime__find / precrime__trades surface -->
 
-# {{DEPLOYMENT_NAME}} — Instagram Factlet & Lead Harvester
+# MyProject — Instagram Factlet & Lead Harvester
 
 You scrape curated Instagram profiles and hashtag pages for broadly applicable news relevant to selling the product (per `DOCS/VALUE_PROP.md`) and create factlets for the broadcast queue.
 
 **Before running: read `DOCS/VALUE_PROP.md`** for product name, audience, and relevance signals.
 
-**Detect mode before running (Step 0).** Chrome is preferred; headless (WebSearch) is the automatic fallback. Do NOT stop if Chrome is unavailable.
+**Detect mode before running (Step 0).** Chrome is preferred; headless (tavily__tavily_search) is the automatic fallback. Do NOT stop if Chrome is unavailable.
 
 ## Source File
 
@@ -31,13 +32,13 @@ Only scrape accounts and hashtags listed in that file. Never add new sources mid
 | `mcp__Claude_in_Chrome__navigate` | Navigate to each IG profile/hashtag page |
 | `mcp__Claude_in_Chrome__computer` | Wait, scroll |
 | `mcp__Claude_in_Chrome__get_page_text` | Extract post captions and metadata |
-| `mcp__precrime-mcp__create_factlet` | Save qualifying posts as factlets |
-| `mcp__precrime-mcp__get_new_factlets` | Check existing queue (dedup) |
-| `mcp__precrime-mcp__search_clients` | Check if person/org is already a client |
-| `mcp__precrime-mcp__update_client` | Append to existing client's dossier |
-| `mcp__precrime-mcp__create_client` | Create new client (lead capture paths) |
-| `mcp__precrime-mcp__create_booking` | Create booking (hot lead path) |
-| `mcp__precrime-mcp__get_config` | Read config (check leadCaptureEnabled) |
+| `precrime__pipeline({ action: "save", id, patch: { factlets: [...] } })` | Attach factlet under a client (v2 has no standalone factlets) |
+| `precrime__find({ action: "factlets" })` | Check existing factlet queue (dedup) |
+| `precrime__find({ action: "clients" })` | Check if person/org is already a client |
+| `precrime__pipeline({ action: "save", id, patch: { dossier } })` | Append to existing client's dossier |
+| `precrime__pipeline({ action: "save", patch: {...} })` | Create new client (lead capture paths) |
+| `precrime__pipeline({ action: "save", patch: { bookings: [...] } })` | Create booking under client (hot lead path) |
+| `precrime__pipeline({ action: "configure" })` | Read config (check leadCaptureEnabled) |
 
 ## Procedure
 
@@ -45,8 +46,8 @@ Only scrape accounts and hashtags listed in that file. Never add new sources mid
 
 1. **Detect mode:** if `mcp__Claude_in_Chrome__tabs_context_mcp` is in your available tools, call `tabs_context_mcp({ createIfEmpty: false })`. If the tool is missing or the call fails → **HEADLESS mode** automatically. Do NOT stop. Do NOT mention Chrome to the user. Proceed.
 2. Read `skills/ig-factlet-harvester/ig_sources.md`. Parse all sources (skip lines starting with `#` or blank). Separate into ACCOUNTS (`@handle` lines) and HASHTAGS (`#tag` lines).
-3. `get_new_factlets({ since: "1970-01-01T00:00:00Z" })` — load full queue for dedup.
-4. `get_config()` — check `leadCaptureEnabled`.
+3. `precrime__find({ action: "factlets", filters: { since: "1970-01-01T00:00:00Z" } })` — load full queue for dedup.
+4. `precrime__pipeline({ action: "configure" })` — check `leadCaptureEnabled`.
 
 **If HEADLESS:** skip Steps 0.5, 1, 1.5, 2, 3 below. Go directly to Step 0H.
 
@@ -54,13 +55,13 @@ Only scrape accounts and hashtags listed in that file. Never add new sources mid
 
 For each @handle in ig_sources.md:
 ```
-WebSearch("instagram.com/{handle} recent posts 2026")
-WebSearch("{handle} instagram 2026")
+tavily__tavily_search({ query: "instagram.com/{handle} recent posts 2026" })
+tavily__tavily_search({ query: "{handle} instagram 2026" })
 ```
 
 For each #hashtag in ig_sources.md:
 ```
-WebSearch("instagram #{hashtag} 2026")
+tavily__tavily_search({ query: "instagram #{hashtag} 2026" })
 ```
 
 Evaluate any snippets returned against the same classification in Steps 4–5. Apply all four output paths (factlet, dossier, thin, hot) using the same logic. Jump to Step 6 (report) when done.
@@ -141,7 +142,7 @@ For every extracted post (from both accounts and hashtags), answer the classific
 **Q2: Is this person/org already in the DB?**
 
 ```
-mcp__precrime-mcp__search_clients({ search: "{name or org}", limit: 1 })
+precrime__find({ action: "clients", filters: { search: "{name or org}" }, summary: true, limit: 1 })
 ```
 
 - **YES (match found)** -> **Dossier** update (Step 5B)
@@ -180,14 +181,11 @@ One account's self-promotion, one org's internal event -> NO.
 - 7-30 days: include if major trend
 - 30+ days: skip
 
-If all three pass:
+If all three pass: v2 requires a client target for the factlet.
 
-```
-mcp__precrime-mcp__create_factlet({
-  content: "[2-3 sentences. What. Why it matters for the target decision-makers. Implication.]",
-  source: "instagram:@{account_handle}"
-})
-```
+OPTION A (preferred): if the post maps to an existing client, attach via `precrime__pipeline({ action: "save", id: clientId, patch: { factlets: [{ content: "[2-3 sentences...]", source: "instagram:@{account_handle}", signalType: "context" }] } })`.
+
+OPTION B (fallback): if no client target yet, append the entry to `logs/UNLINKED_INTEL.md` with content + source. Promote to a client save when one surfaces. Do not invent a placeholder client.
 
 Rules: 2-3 sentences. No opinions. No mention of the product.
 One factlet per distinct topic, not one per post. If two posts cover the same news, write one factlet.
@@ -197,9 +195,10 @@ One factlet per distinct topic, not one per post. If two posts cover the same ne
 This post is about an existing client. Append to their dossier:
 
 ```
-mcp__precrime-mcp__update_client({
+precrime__pipeline({
+  action: "save",
   id: "{clientId}",
-  dossier: "{existing dossier}\n[{today}] Instagram @{post.author}: {finding}"
+  patch: { dossier: "{existing dossier}\n[{today}] Instagram @{post.author}: {finding}" }
 })
 ```
 
@@ -208,38 +207,38 @@ mcp__precrime-mcp__update_client({
 New potential client, no concrete booking details.
 
 ```
-mcp__precrime-mcp__create_client({
-  company: "{name or org}",
-  dossier: "[{today}] Discovered via Instagram @{source_account}: {summary}",
-  segment: "ig_lead"
+precrime__pipeline({
+  action: "save",
+  patch: {
+    company: "{name or org}",
+    dossier: "[{today}] Discovered via Instagram @{source_account}: {summary}",
+    segment: "ig_lead"
+  }
 })
 ```
 
 ### Step 5D: Lead Capture HOT
 
-New client WITH booking details: trade + date + location all present.
+New client WITH booking details: trade + date + location all present. Save in one nested call:
 
 ```
-mcp__precrime-mcp__create_client({
-  company: "{name or org}",
-  dossier: "[{today}] Discovered via Instagram @{source_account}: {summary}",
-  segment: "ig_lead"
-})
-```
-
-Then immediately:
-
-```
-mcp__precrime-mcp__create_booking({
-  clientId: "{new client id}",
-  trade: "{matched trade}",
-  startDate: "{ISO date}",
-  location: "{location}",
-  zip: "{zip if known}",
-  source: "instagram:@{source_account}",
-  sourceUrl: "https://www.instagram.com/p/{shortcode}/",
-  status: "leed_ready",
-  notes: "{relevant quote from caption}"
+precrime__pipeline({
+  action: "save",
+  patch: {
+    company: "{name or org}",
+    dossier: "[{today}] Discovered via Instagram @{source_account}: {summary}",
+    segment: "ig_lead",
+    bookings: [{
+      trade: "{matched trade}",
+      startDate: "{ISO date}",
+      location: "{location}",
+      zip: "{zip if known}",
+      source: "instagram:@{source_account}",
+      sourceUrl: "https://www.instagram.com/p/{shortcode}/",
+      status: "leed_ready",
+      notes: "{relevant quote from caption}"
+    }]
+  }
 })
 ```
 
@@ -288,7 +287,7 @@ Output path breakdown:
 - Reuse the same Chrome tab for every page, do NOT create new tabs
 - Do NOT scrape accounts or hashtags not in ig_sources.md
 - Do NOT create factlets for single-org events (dossier material)
-- In headless mode use WebSearch only — do NOT attempt Chrome tools
+- In headless mode use tavily__tavily_search only, do NOT attempt Chrome tools
 - Do NOT interact with Instagram (no likes, follows, comments, DMs)
 - Do NOT follow external links in captions, evaluate caption text + metadata only
 - Do NOT scrape private accounts, stories, or reels audio
@@ -296,29 +295,4 @@ Output path breakdown:
 - Source field format: `"instagram:@{handle}"` or `"instagram:#{hashtag}"`
 
 ---
-<!-- CUSTOMIZATION NOTES FOR DEPLOYER
-     ================================
-     This skill is identical in structure across all deployments.
-     The only thing that changes is:
 
-     1. ig_sources.md -- the list of Instagram accounts and hashtags to scrape.
-        Populate this with:
-        - Industry association accounts
-        - Trade publication accounts
-        - Competitor accounts (market intelligence)
-        - Community hub accounts where your buyers congregate
-        - Hashtags your buyers use for events/buying signals
-
-     2. The relevance criteria (Q1) -- already substituted from your manifest.
-        Make sure they match your relevance-judge.md criteria.
-
-     3. The STALE threshold (60 days) -- adjust if your audience posts less frequently.
-
-     CHROME REQUIREMENT: This skill requires the Claude-in-Chrome MCP extension.
-     The extension connects automatically if it is running in the browser.
-     No special claude launch flags are needed.
-
-     INSTAGRAM RATE LIMITS: Instagram may throttle or block repeated scraping.
-     Space runs 6+ hours apart. If you consistently get blocked, reduce the number
-     of hashtags (they trigger blocks more than profile pages).
--->

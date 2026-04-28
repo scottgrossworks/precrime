@@ -1,5 +1,5 @@
 ---
-name: {{DEPLOYMENT_NAME}}-x-factlet-harvester
+name: MyProject-x-factlet-harvester
 description: Harvest X/Twitter posts via Grok and create factlets or capture leads
 triggers:
   - harvest x factlets
@@ -11,12 +11,13 @@ triggers:
   - check twitter for news
   - check x for leads
 ---
+<!-- v2-compat: tools migrated to precrime__pipeline / precrime__find / precrime__trades surface -->
 
-# {{DEPLOYMENT_NAME}} — X/Twitter Factlet & Lead Harvester
+# MyProject — X/Twitter Factlet & Lead Harvester
 
 You harvest X (Twitter) posts using Grok (via Chrome) and classify each post into one of four output paths. Grok searches X's full index — zero API keys, zero fetch scripts. You handle the judgment.
 
-**Detect mode at Step 0.** Chrome + Grok is preferred. If unavailable, use WebSearch as fallback. Do NOT stop.
+**Detect mode at Step 0.** Chrome + Grok is preferred. If unavailable, use tavily__tavily_search as fallback. Do NOT stop.
 
 ## Source File
 
@@ -32,11 +33,11 @@ Three source types: `@accounts`, `#hashtags`, and `keyword:` searches. Source-di
 | `mcp__Claude_in_Chrome__navigate` | Navigate to Grok or X search |
 | `mcp__Claude_in_Chrome__computer` | Type queries, scroll, wait |
 | `mcp__Claude_in_Chrome__get_page_text` | Read Grok responses / X search results |
-| `mcp__precrime-mcp__create_factlet` | Save broadly applicable intel |
-| `mcp__precrime-mcp__get_new_factlets` | Check existing queue (dedup) |
-| `mcp__precrime-mcp__search_clients` | Check if a person/org is already a client |
-| `mcp__precrime-mcp__update_client` | Append to existing client's dossier |
-| `mcp__precrime-mcp__create_booking` | Create a booking for Lead Capture hot path |
+| `precrime__pipeline({ action: "save", id, patch: { factlets: [...] } })` | Attach factlet under a client (v2 has no standalone factlets) |
+| `precrime__find({ action: "factlets" })` | Check existing queue (dedup) |
+| `precrime__find({ action: "clients" })` | Check if a person/org is already a client |
+| `precrime__pipeline({ action: "save", id, patch: { dossier } })` | Append to existing client's dossier |
+| `precrime__pipeline({ action: "save", patch: { bookings: [...] } })` | Create a booking under client (Lead Capture hot path) |
 
 ## Procedure
 
@@ -45,20 +46,20 @@ Three source types: `@accounts`, `#hashtags`, and `keyword:` searches. Source-di
 1. **Detect mode:** if `mcp__Claude_in_Chrome__tabs_context_mcp` is in your available tools, call it. If the tool is missing or fails → **HEADLESS mode** automatically. Do NOT stop. Do NOT mention Chrome.
 2. Chrome only: scan open tabs for `grok.com` or `x.com/i/grok`. Store as `GROK_TAB = <tabId> | null`. Scan for `x.com` → `X_TAB = <tabId> | null`.
 3. Read `x_sources.md`. Parse all entries (skip lines starting with `#` or blank). Separate into: `accounts`, `hashtags`, `keywords`.
-4. `get_new_factlets({ since: "1970-01-01T00:00:00Z" })` — load full queue for dedup.
+4. `precrime__find({ action: "factlets", filters: { since: "1970-01-01T00:00:00Z" } })` — load full queue for dedup.
 
 **If HEADLESS:** skip Steps 1 (Grok path). Go directly to Step 1H.
 
-### Step 1H: Headless X Harvesting (WebSearch)
+### Step 1H: Headless X Harvesting (tavily__tavily_search)
 
 For each `@account` in x_sources.md:
-`WebSearch("from:{account} site:x.com 2026")`
+`tavily__tavily_search({ query: "from:{account} site:x.com 2026" })`
 
 For each `#hashtag`:
-`WebSearch("#{hashtag} site:x.com 2026")`
+`tavily__tavily_search({ query: "#{hashtag} site:x.com 2026" })`
 
 For each `keyword:` entry:
-`WebSearch("{keyword phrase} site:x.com 2026")`
+`tavily__tavily_search({ query: "{keyword phrase} site:x.com 2026" })`
 
 Evaluate snippets using the same classification in Steps 3–4. Jump to Step 5 (report) when done.
 
@@ -107,7 +108,7 @@ For each source entry:
 ### Step 2: Load Existing Factlets (dedup)
 
 ```
-mcp__precrime-mcp__get_new_factlets({ since: "30 days ago ISO" })
+precrime__find({ action: "factlets", filters: { since: "30 days ago ISO" } })
 ```
 
 Build a list of existing factlet topics. Any post covering the same ground gets skipped.
@@ -131,7 +132,7 @@ For every post collected from Grok or X search, answer the classification questi
 **2. Is this person/org already in the DB?**
 
 ```
-mcp__precrime-mcp__search_clients({ search: "{name or org}", limit: 1 })
+precrime__find({ action: "clients", filters: { search: "{name or org}" }, summary: true, limit: 1 })
 ```
 
 - **YES (match found)** → **Dossier** update (Step 4B)
@@ -173,14 +174,11 @@ X has a much higher noise-to-signal ratio than other platforms. Be strict on Q2.
 - 3–7 days: include if major trend
 - 7+ days: skip (X content decays faster than other platforms)
 
-If all three pass:
+If all three pass: v2 requires a client target.
 
-```
-mcp__precrime-mcp__create_factlet({
-  content: "[2-3 sentences. What. Why it matters for the target decision-makers. Implication.]",
-  source: "https://x.com/{author}/status/{id}"
-})
-```
+OPTION A (preferred): if the post maps to an existing client, attach via `precrime__pipeline({ action: "save", id: clientId, patch: { factlets: [{ content: "[2-3 sentences...]", source: "https://x.com/{author}/status/{id}", signalType: "context" }] } })`.
+
+OPTION B (fallback): if no client target yet, append the entry to `logs/UNLINKED_INTEL.md` with content + source. Promote to a client save when one surfaces. Do not invent a placeholder client.
 
 Rules: 2-3 sentences. No opinions. No mention of the product.
 One factlet per distinct topic — not one per post. Multiple tweets about the same news = one factlet.
@@ -190,9 +188,10 @@ One factlet per distinct topic — not one per post. Multiple tweets about the s
 This post is about an existing client. Append to their dossier:
 
 ```
-mcp__precrime-mcp__update_client({
+precrime__pipeline({
+  action: "save",
   id: "{clientId}",
-  dossier: "{existing dossier}\n[{today}] X @{author}: {finding}"
+  patch: { dossier: "{existing dossier}\n[{today}] X @{author}: {finding}" }
 })
 ```
 
@@ -249,7 +248,7 @@ Output path breakdown:
 
 ## Rules
 
-- Grok is the fetch layer. Claude does the judgment. Never use WebFetch for X.
+- Grok is the fetch layer. Claude does the judgment. Never use tavily__tavily_extract for X.
 - One factlet per distinct topic — not one per post. A trending topic with 10 tweets = one factlet.
 - X has high noise. Be stricter on relevance than with Reddit or RSS. Hot takes are not factlets.
 - Recency window is tighter: 7 days max, prefer 3. X content decays fast.
@@ -261,33 +260,4 @@ Output path breakdown:
 - If Grok returns "I can't help with that" or similar refusal, skip that query and log `GROK_REFUSED — {query}`.
 
 ---
-<!-- CUSTOMIZATION NOTES FOR DEPLOYER
-     ================================
-     1. Edit skills/x-factlet-harvester/x_sources.md to add accounts,
-        hashtags, and keyword searches for your audience.
-        Source-discovery will also populate this file automatically.
 
-     2. The four-way classification (factlet / dossier / lead thin / lead hot)
-        is the same across all harvesters. The relevance criteria (Q1) come
-        from your manifest.
-
-     3. No API keys needed. Grok handles X search natively.
-        If Grok is unavailable, Chrome X search is the fallback
-        (requires user to be logged into X).
-
-     4. X has the highest noise-to-signal ratio of any source. Expect
-        more posts to be filtered out than with Reddit or RSS. A typical
-        harvest might collect 50 posts and yield 2-3 factlets. This is normal.
-
-     5. Keyword searches are highest value for lead capture.
-        Account monitoring is highest value for factlets.
-        Hashtags are a mix — start with 3-5 and prune after 2 cycles.
-
-     6. The 7-day recency window is tighter than other harvesters (Reddit: 30 days,
-        RSS: 30 days). X content decays fast. Adjust if your industry moves slower.
-
-     CHROME REQUIREMENT: This skill requires either Grok (grok.com) or X (x.com)
-     open in Chrome. Grok is strongly preferred — it returns structured results
-     and costs zero Claude tokens on the search. X search fallback is more fragile
-     and token-heavy.
--->

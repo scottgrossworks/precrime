@@ -1,5 +1,5 @@
 ---
-name: {{DEPLOYMENT_NAME}}-reddit-factlet-harvester
+name: MyProject-reddit-factlet-harvester
 description: Harvest Reddit posts via public JSON API and create factlets or capture leads
 triggers:
   - harvest reddit factlets
@@ -8,8 +8,9 @@ triggers:
   - check reddit for news
   - check reddit for leads
 ---
+<!-- v2-compat: tools migrated to precrime__pipeline / precrime__find / precrime__trades surface -->
 
-# {{DEPLOYMENT_NAME}} — Reddit Factlet & Lead Harvester
+# MyProject — Reddit Factlet & Lead Harvester
 
 You harvest Reddit posts using `tools/reddit_harvest.py` (public JSON endpoints, no auth) and classify each post into one of four output paths. The script handles the fetch (zero Claude tokens). You handle the judgment.
 
@@ -21,11 +22,11 @@ You harvest Reddit posts using `tools/reddit_harvest.py` (public JSON endpoints,
 |------|---------|
 | `Bash` | Run reddit_harvest.py to fetch posts → JSON files |
 | `Read` | Read the output JSON files |
-| `mcp__precrime-mcp__create_factlet` | Save broadly applicable intel |
-| `mcp__precrime-mcp__get_new_factlets` | Check existing queue (dedup) |
-| `mcp__precrime-mcp__search_clients` | Check if a person/org is already a client |
-| `mcp__precrime-mcp__update_client` | Append to existing client's dossier |
-| `mcp__precrime-mcp__create_booking` | Create a booking for Lead Capture hot path |
+| `precrime__pipeline({ action: "save", id, patch: { factlets: [...] } })` | Attach factlet under a client (v2 has no standalone factlets) |
+| `precrime__find({ action: "factlets" })` | Check existing queue (dedup) |
+| `precrime__find({ action: "clients" })` | Check if a person/org is already a client |
+| `precrime__pipeline({ action: "save", id, patch: { dossier } })` | Append to existing client's dossier |
+| `precrime__pipeline({ action: "save", patch: { bookings: [...] } })` | Create a booking under client (Lead Capture hot path) |
 
 ## Source File
 
@@ -49,9 +50,9 @@ Runs all subreddit/keyword combos defined in the config in one pass.
 
 **Option B — Headless fallback (if script fails or tools/reddit_harvest.py is missing):**
 
-Use `WebFetch` directly on Reddit's public JSON API — no script, no auth needed:
+Use `tavily__tavily_extract` directly on Reddit's public JSON API, no script, no auth needed:
 
-`WebFetch("https://www.reddit.com/r/{subreddit}/new.json?limit=25")` for each subreddit in reddit_sources.md.
+`tavily__tavily_extract({ url: "https://www.reddit.com/r/{subreddit}/new.json?limit=25" })` for each subreddit in reddit_sources.md.
 
 Parse the returned JSON for `data.children[].data` — each item has `title`, `selftext`, `permalink`, `created_utc`, `author`, `score`.
 
@@ -68,7 +69,7 @@ Each file contains `scrape_settings` (metadata) and a `data` array of posts with
 ### Step 2: Load Existing Factlets (dedup)
 
 ```
-mcp__precrime-mcp__get_new_factlets({ since: "30 days ago ISO" })
+precrime__find({ action: "factlets", filters: { since: "30 days ago ISO" } })
 ```
 
 Build a list of existing factlet topics. Any post covering the same ground gets skipped.
@@ -85,7 +86,7 @@ For every post, answer the classification questions IN ORDER:
 **2. Is this person/org already in the DB?**
 
 ```
-mcp__precrime-mcp__search_clients({ search: "{name or org}", limit: 1 })
+precrime__find({ action: "clients", filters: { search: "{name or org}" }, summary: true, limit: 1 })
 ```
 
 - **YES (match found)** → **Dossier** update (Step 4B)
@@ -125,14 +126,11 @@ One person's question or one org's internal matter → NO.
 - 7–30 days: include if major trend
 - 30+ days: skip
 
-If all three pass:
+If all three pass: v2 requires a client target.
 
-```
-mcp__precrime-mcp__create_factlet({
-  content: "[2-3 sentences. What. Why it matters for the target decision-makers. Implication.]",
-  source: "https://reddit.com{permalink}"
-})
-```
+OPTION A (preferred): if the post maps to an existing client, attach via `precrime__pipeline({ action: "save", id: clientId, patch: { factlets: [{ content: "[2-3 sentences...]", source: "https://reddit.com{permalink}", signalType: "context" }] } })`.
+
+OPTION B (fallback): if no client target yet, append the entry to `logs/UNLINKED_INTEL.md` with content + source. Promote to a client save when one surfaces. Do not invent a placeholder client.
 
 Rules: 2-3 sentences. No opinions. No mention of the product.
 One factlet per distinct topic — not one per post. Two posts about the same news = one factlet.
@@ -142,9 +140,10 @@ One factlet per distinct topic — not one per post. Two posts about the same ne
 This post is about an existing client. Append to their dossier:
 
 ```
-mcp__precrime-mcp__update_client({
+precrime__pipeline({
+  action: "save",
   id: "{clientId}",
-  dossier: "{existing dossier}\n[{today}] Reddit r/{subreddit}: {finding}"
+  patch: { dossier: "{existing dossier}\n[{today}] Reddit r/{subreddit}: {finding}" }
 })
 ```
 
@@ -197,7 +196,7 @@ Output path breakdown:
 
 ## Rules
 
-- Prefer the terminal tool + reddit_harvest.py. If the script fails, fall back to WebFetch on Reddit JSON API. Do NOT stop.
+- Prefer the terminal tool + reddit_harvest.py. If the script fails, fall back to tavily__tavily_extract on Reddit JSON API. Do NOT stop.
 - One factlet per distinct topic — not one per post. Two posts about the same news = one factlet.
 - Dossier entries are timestamped prose. Include the subreddit and date.
 - Lead Capture is opt-in. If `leadCaptureEnabled` is false, flag but do not create records.
@@ -205,30 +204,4 @@ Output path breakdown:
 - Do NOT follow external links in posts. Evaluate the post text only.
 
 ---
-<!-- CUSTOMIZATION NOTES FOR DEPLOYER
-     ================================
-     1. Edit skills/reddit-factlet-harvester/reddit_sources.md to add subreddits
-        for your audience. Start with 3-5 subreddits where your buyers congregate.
-        Source-discovery will also populate this file automatically.
 
-     2. Edit reddit/reddit_config.json for operational settings (keywords, limits,
-        scoring thresholds). The JSON config drives the Python script; the
-        reddit_sources.md file is the human-readable source list.
-
-     3. The four-way classification (factlet / dossier / lead thin / lead hot)
-        is the same across all harvesters. The relevance criteria (Q1) come
-        from your manifest.
-
-     4. No API keys needed. The script uses Reddit's public .json endpoints.
-        Rate limit: ~2 seconds between requests (built in). A harvest of
-        5 subreddits runs in ~15 seconds. Safe to run multiple times per hour.
-
-     6. Use --sort relevance (default) for factlet harvesting. Use --sort hot
-        or --sort top for initial exploration of a new subreddit to gauge
-        relevance before adding it to the config.
-
-     LEAD CAPTURE NOTE: Steps 4C and 4D are gated by leadCaptureEnabled
-     in your deployment config. If you're running outreach-only (no bookings),
-     leave it false — the skill will still flag potential leads in the report
-     but won't create database records.
--->
