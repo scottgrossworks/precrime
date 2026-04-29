@@ -1,13 +1,14 @@
 """
 LEEDZ_PROXY_MCP -- local stdio MCP wrapping the remote Leedz createLeed API.
 
-Why: two fields on every createLeed call must always have specific values for
+Why: three fields on every createLeed call must always have specific values for
 this deployment, and the model cannot be trusted to set them every time:
-  - email = "false"  (broadcast-suppression toggle, NEVER blast to subscribers)
-  - pr    = 0        (free-leed marketplace policy)
-This proxy HARD-CODES both fields on every createLeed call regardless of what
-the caller sends. The "broadcast-on" and "non-zero-price" states are unreachable
-from goose by construction.
+  - email = "false"                  (broadcast-suppression toggle, NEVER blast to subscribers)
+  - pr    = 0                        (free-leed marketplace policy)
+  - cr    = "theleedz.com@gmail.com" (creator forced to platform admin account regardless of session JWT)
+This proxy HARD-CODES all three fields on every createLeed call regardless of
+what the caller sends. The "broadcast-on", "non-zero-price", and "creator-other-than-admin"
+states are unreachable from goose by construction.
 
 Architecture:
 - Goose registers this script as the `leedz` extension (stdio).
@@ -142,7 +143,7 @@ def log(msg: str) -> None:
     sys.stderr.flush()
 
 
-def call_log(action: str, original_email, original_pr, payload: dict, status: str) -> None:
+def call_log(action: str, original_email, original_pr, original_cr, payload: dict, status: str) -> None:
     """One line per call so you can tail the log."""
     try:
         CALL_LOG.parent.mkdir(parents=True, exist_ok=True)
@@ -154,7 +155,8 @@ def call_log(action: str, original_email, original_pr, payload: dict, status: st
             f"{ts}  {action:<14}  status={status}  "
             f"orig_email={original_email!r:<8}  "
             f"orig_pr={original_pr!r:<8}  "
-            f"forced(email='false', pr=0)  tn={tn:<14} cn={cn:<24} ti={ti}\n"
+            f"orig_cr={original_cr!r:<28}  "
+            f"forced(email='false', pr=0, cr='theleedz.com@gmail.com')  tn={tn:<14} cn={cn:<24} ti={ti}\n"
         )
         with CALL_LOG.open("a", encoding="utf-8") as f:
             f.write(line)
@@ -193,10 +195,11 @@ def handle_tools_list(req_id):
                     "name": "createLeed",
                     "description": (
                         "Post a leed to the Leedz marketplace. The full payload is forwarded "
-                        "to the remote Leedz API. Two fields are HARD-CODED inside this proxy "
+                        "to the remote Leedz API. Three fields are HARD-CODED inside this proxy "
                         "regardless of what the caller sends:\n"
-                        "  - email = 'false' (broadcast-suppression toggle, never broadcasts to subscribers)\n"
-                        "  - pr    = 0       (free-leed policy, no priced leedz from goose)\n"
+                        "  - email = 'false'                    (broadcast-suppression toggle)\n"
+                        "  - pr    = 0                          (free-leed policy)\n"
+                        "  - cr    = 'theleedz.com@gmail.com'   (creator forced to platform admin)\n"
                         "The buyer's contact email lives in `em`, which is forwarded as-is.\n\n"
                         "Standard createLeed fields:\n"
                         "  tn (string, required) -- trade name, lowercase, must be in get_trades()\n"
@@ -278,28 +281,34 @@ def handle_tools_call(req_id, params):
     incoming = dict(params.get("arguments") or {})
     original_email = incoming.get("email", "<not-set>")
     original_pr = incoming.get("pr", "<not-set>")
+    original_cr = incoming.get("cr", "<not-set>")
 
-    # Hard-codes: nothing the caller sent for `email` or `pr` reaches the remote.
+    # Hard-codes: nothing the caller sent for `email`, `pr`, or `cr` reaches the remote.
+    # email = "false"                 -> broadcast suppression (never blast to subscribers)
+    # pr    = 0                       -> free-leed marketplace policy
+    # cr    = "theleedz.com@gmail.com"-> creator forced to platform admin account
+    #                                    regardless of which session JWT authenticated the call
     incoming["email"] = "false"
     incoming["pr"] = 0
+    incoming["cr"] = "theleedz.com@gmail.com"
 
     # Mechanical validation: reject obvious junk before forwarding.
     errors = validate_leed(incoming)
     if errors:
         msg = "Leed REJECTED by proxy validator. Fix and retry:\n  - " + "\n  - ".join(errors)
         log(msg)
-        call_log("createLeed", original_email, original_pr, incoming, "VALIDATE_FAIL")
+        call_log("createLeed", original_email, original_pr, original_cr, incoming, "VALIDATE_FAIL")
         return err(req_id, -32000, msg)
 
     try:
         remote_response = forward_to_remote(incoming)
     except requests.exceptions.RequestException as e:
         log(f"remote request failed: {e}")
-        call_log("createLeed", original_email, original_pr, incoming, f"HTTP_FAIL:{type(e).__name__}")
+        call_log("createLeed", original_email, original_pr, original_cr, incoming, f"HTTP_FAIL:{type(e).__name__}")
         return err(req_id, -32603, f"Remote Leedz API error: {e}")
     except Exception as e:
         log(f"forward failed: {e}\n{traceback.format_exc()}")
-        call_log("createLeed", original_email, original_pr, incoming, f"FAIL:{type(e).__name__}")
+        call_log("createLeed", original_email, original_pr, original_cr, incoming, f"FAIL:{type(e).__name__}")
         return err(req_id, -32603, f"Proxy error: {e}")
 
     # Log a truncated copy of the remote response so we can see what actually came back.
@@ -310,18 +319,18 @@ def handle_tools_call(req_id, params):
     # call failed (error encoded in the body). Treat a body that lacks `result`
     # OR has an `error` key OR has a `result.isError` flag as a failure.
     if not isinstance(remote_response, dict):
-        call_log("createLeed", original_email, original_pr, incoming, f"BAD_SHAPE: {raw_str[:200]}")
+        call_log("createLeed", original_email, original_pr, original_cr, incoming, f"BAD_SHAPE: {raw_str[:200]}")
         return err(req_id, -32603, f"Unexpected remote response shape: {raw_str[:200]}")
 
     if "error" in remote_response:
         e = remote_response["error"]
-        call_log("createLeed", original_email, original_pr, incoming,
+        call_log("createLeed", original_email, original_pr, original_cr, incoming,
                  f"REMOTE_ERR code={e.get('code')} msg={(e.get('message') or '')[:200]}")
         return err(req_id, e.get("code", -32000), e.get("message", "remote error"))
 
     result_payload = remote_response.get("result")
     if not isinstance(result_payload, dict):
-        call_log("createLeed", original_email, original_pr, incoming,
+        call_log("createLeed", original_email, original_pr, original_cr, incoming,
                  f"NO_RESULT: {raw_str[:200]}")
         return err(req_id, -32603, f"Remote returned no result: {raw_str[:300]}")
 
@@ -332,7 +341,7 @@ def handle_tools_call(req_id, params):
         for c in content:
             if isinstance(c, dict) and c.get("type") == "text":
                 msg += c.get("text", "")
-        call_log("createLeed", original_email, original_pr, incoming,
+        call_log("createLeed", original_email, original_pr, original_cr, incoming,
                  f"TOOL_ERR: {msg[:300]}")
         return err(req_id, -32000, f"Remote tool error: {msg[:500]}")
 
@@ -340,7 +349,7 @@ def handle_tools_call(req_id, params):
     # remote almost certainly didn't actually do anything.
     content_blocks = result_payload.get("content")
     if not content_blocks:
-        call_log("createLeed", original_email, original_pr, incoming,
+        call_log("createLeed", original_email, original_pr, original_cr, incoming,
                  f"EMPTY_RESULT: {raw_str[:200]}")
         return err(req_id, -32603, f"Remote returned empty result. Body: {raw_str[:300]}")
 
@@ -350,7 +359,7 @@ def handle_tools_call(req_id, params):
         if isinstance(c, dict) and c.get("type") == "text":
             first_text = (c.get("text") or "")[:200]
             break
-    call_log("createLeed", original_email, original_pr, incoming, f"OK content={first_text}")
+    call_log("createLeed", original_email, original_pr, original_cr, incoming, f"OK content={first_text}")
     return ok(req_id, result_payload)
 
 

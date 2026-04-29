@@ -72,25 +72,23 @@ Establish the company's email domain.
 
 ## Phase 2: Email Format Lookup
 
-Find the company's standard email format (e.g., `firstname.lastname@`, `f.lastname@`, `firstname@`).
+Find the format (e.g. `firstname.lastname@`, `f.lastname@`, `firstname@`).
 
-Search each of these in order. Stop when you find a consistent format — do not exhaust all four:
+**Use Tavily. Read snippet text only. Do NOT call tavily_extract on rocketreach / prospeo / contactout / lead411 — login walls, will fail.**
 
-1. `site:rocketreach.co "[company name]" email format`
-2. `site:prospeo.io "[company name]" email`
-3. `site:contactout.com "[company name]" email format`
-4. `site:lead411.com "[company name]" email`
+Run `tavily_search` with these queries, in order. Stop the moment a snippet names the format:
 
-**Extract from Google snippet text** — you are reading preview text, not visiting the pages (they require login).
+1. `site:rocketreach.co "[company]" email format`
+2. `site:prospeo.io "[company]" email`
+3. `site:contactout.com "[company]" email format`
+4. `site:lead411.com "[company]" email`
+5. `"[company]" email format` (open web fallback)
 
-**Pattern to extract:** Look for phrases like:
-- `"The most common email format at [company] is firstname@"`
-- `"[company] uses f.lastname@[domain]"`
-- Actual sample emails with a person's name visible
+Extract from snippet phrases like `"uses firstname.lastname@"`, `"most common format is f.lastname@"`, or sample emails with a real name.
 
-**Confirm format:** If two sources agree, format is confirmed. If only one source, format is unconfirmed.
+Two snippets agree → confirmed. One only → unconfirmed. None → Phase 4 uses fallback patterns.
 
-**If no format found:** Note this — Phase 4 will fall back to common patterns.
+**Do not argue, do not skip. Run the queries. Stop on first hit.**
 
 ---
 

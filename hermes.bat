@@ -31,9 +31,15 @@ if not exist "%DBPATH%" (
 :: Also set env var for child processes
 set "DATABASE_URL=file:%DBPATH%"
 
-:: API keys for extensions (Tavily search, OpenRouter fallback)
-set "OPENROUTER_API_KEY=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"
-set "TAVILY_API_KEY=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"
+:: --- Load API keys from .env (single source of truth, see .env.sample) ---
+if exist "%~dp0.env" (
+  for /f "usebackq eol=# delims=" %%i in ("%~dp0.env") do set "%%i"
+) else (
+  echo  .env file not found. Copy .env.sample to .env and fill in your API keys.
+  pause & exit /b 1
+)
+if "%OPENROUTER_API_KEY%"=="" ( echo  OPENROUTER_API_KEY missing from .env & pause & exit /b 1 )
+if "%TAVILY_API_KEY%"==""     ( echo  TAVILY_API_KEY missing from .env & pause & exit /b 1 )
 
 echo.
 echo  Pre-Crime (Hermes)

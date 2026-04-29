@@ -101,8 +101,14 @@ Call these names verbatim. Do not invent variants. Do not call `precrime_mcp__*`
 
 ---
 
+## API keys
+
+All keys live in `.env` at the project root (`OPENROUTER_API_KEY`, `TAVILY_API_KEY`). Nothing else hardcodes a key. To rotate: edit `.env`, save, restart `goose.bat`. The .bat scripts load `.env` at startup and fail-fast with a clear error if a required key is missing.
+
+---
+
 ## Key paths
 
-- Product identity: `C:\Users\Admin\Desktop\WKG\PHOTOBOOTH\precrime\DOCS\VALUE_PROP.md`
-- Skills: `C:\Users\Admin\Desktop\WKG\PHOTOBOOTH\precrime\skills\`
-- Logs: `C:\Users\Admin\Desktop\WKG\PHOTOBOOTH\precrime\logs\ROUNDUP.md` (pipeline), `SEEDING_LOG.md`, `DISCOVERY_LOG.md`
+- Product identity: `DOCS/VALUE_PROP.md` (project-relative)
+- Skills: `skills/`
+- Logs: `logs/ROUNDUP.md` (pipeline), `logs/SEEDING_LOG.md` (seeder), `logs/DISCOVERY_LOG.md` (source discovery)

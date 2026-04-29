@@ -1,0 +1,14 @@
+{
+  "mcp": {
+    "name": "gmail-mcp",
+    "version": "1.0.0",
+    "protocolVersion": "2025-06-18"
+  },
+  "http": {
+    "port": 3001,
+    "host": "127.0.0.1"
+  },
+  "gmail": {
+    "apiUrl": "https://gmail.googleapis.com/gmail/v1"
+  }
+}

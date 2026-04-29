@@ -241,6 +241,24 @@ if (fs.existsSync(scoringSrc)) {
   console.warn('    The MCP server will fail fast on startup without it.');
 }
 
+// 2a-bis. Copy gmail MCP server (mcp_gmail.js + gmail_mcp_config.json).
+// Provides gmail_send tool. Receives OAuth token from Chrome extension on port 3001.
+const gmailSrc    = path.join(PRECRIME, 'server', 'mcp', 'mcp_gmail.js');
+const gmailDst    = path.join(outputDir, 'server', 'mcp', 'mcp_gmail.js');
+const gmailCfgSrc = path.join(PRECRIME, 'server', 'mcp', 'gmail_mcp_config.json');
+const gmailCfgDst = path.join(outputDir, 'server', 'mcp', 'gmail_mcp_config.json');
+if (fs.existsSync(gmailSrc)) {
+  copyFile(gmailSrc, gmailDst);
+} else {
+  console.warn(`  ⚠ mcp_gmail.js missing: ${gmailSrc}`);
+  console.warn('    Gmail send will be unavailable in the deployment.');
+}
+if (fs.existsSync(gmailCfgSrc)) {
+  copyFile(gmailCfgSrc, gmailCfgDst);
+} else {
+  console.warn(`  ⚠ gmail_mcp_config.json missing: ${gmailCfgSrc}`);
+}
+
 // 2b. Copy server/package.json
 const pkgSrc = path.join(PRECRIME, 'server', 'package.json');
 const pkgDst = path.join(outputDir, 'server', 'package.json');
@@ -306,11 +324,15 @@ if (!noInstall) {
   console.log('[--no-install] Skipping RSS npm install');
 }
 
-// 2f. Copy tools/ — all files, dynamically (no manual update needed when new tools are added)
+// 2f. Copy tools/ — all files, dynamically (no manual update needed when new tools are added).
+// Filter out directories (e.g. __pycache__) and dotfiles to prevent fs.copyFileSync crashes.
 const toolsSrc = path.join(PRECRIME, 'tools');
 if (fs.existsSync(toolsSrc)) {
   for (const toolFile of fs.readdirSync(toolsSrc)) {
-    copyFile(path.join(toolsSrc, toolFile), path.join(outputDir, 'tools', toolFile));
+    if (toolFile.startsWith('.') || toolFile === '__pycache__') continue;
+    const srcPath = path.join(toolsSrc, toolFile);
+    if (!fs.statSync(srcPath).isFile()) continue;
+    copyFile(srcPath, path.join(outputDir, 'tools', toolFile));
   }
 } else {
   console.warn('  ⚠ PRECRIME/tools/ directory missing');
@@ -474,7 +496,6 @@ if (fs.existsSync(baseIgCfgPath)) {
 console.log('\nSkill playbooks:');
 [
   ['skills/enrichment-agent.md',              'skills/enrichment-agent.md'],
-  ['skills/enrichment-agent-parallel.md',     'skills/enrichment-agent-parallel.md'],
   ['skills/evaluator.md',                     'skills/evaluator.md'],
   ['skills/relevance-judge.md',               'skills/relevance-judge.md'],
   ['skills/rss-factlet-harvester/SKILL.md',   'skills/rss-factlet-harvester/SKILL.md'],
@@ -492,19 +513,38 @@ console.log('\nSkill playbooks:');
   ['skills/source-discovery.md',              'skills/source-discovery.md'],
   ['skills/source-discovery/discovered_directories.md', 'skills/source-discovery/discovered_directories.md'],
   ['skills/init-wizard.md',                   'skills/init-wizard.md'],
-  ['skills/email-finder.md',                  'skills/email-finder.md'],
+  ['skills/client-finder.md',                 'skills/client-finder.md'],
+  ['skills/convention-leed-pipeline.md',      'skills/convention-leed-pipeline.md'],
+  ['skills/draft-checker.md',                 'skills/draft-checker.md'],
+  ['skills/leed-drafter.md',                  'skills/leed-drafter.md'],
+  ['skills/marketplace_flow.md',              'skills/marketplace_flow.md'],
+  ['skills/outreach-drafter.md',              'skills/outreach-drafter.md'],
+  ['skills/outreach_flow.md',                 'skills/outreach_flow.md'],
 ].forEach(([src, dst]) => copyTemplate(src, dst, tokens));
 
-// 8. Copy + substitute doc stubs
+// 8. Copy + substitute doc stubs.
+// MCP_REWRITE.md is a historical engineering design doc and does NOT ship in the distribution.
+// It lives in PRECRIME/templates/docs/ for source-tree reference only.
 console.log('\nDocs:');
 [
-  ['docs/CLAUDE.md',    'DOCS/CLAUDE.md'],
-  ['docs/STATUS.md',    'DOCS/STATUS.md'],
-  ['docs/VALUE_PROP.md','DOCS/VALUE_PROP.md'],
+  ['docs/CLAUDE.md',       'DOCS/CLAUDE.md'],
+  ['docs/STATUS.md',       'DOCS/STATUS.md'],
+  ['docs/VALUE_PROP.md',   'DOCS/VALUE_PROP.md'],
+  ['docs/SCORING.md',      'DOCS/SCORING.md'],
 ].forEach(([src, dst]) => copyTemplate(src, dst, tokens));
 
-// 8b. Write CLAUDE.md to workspace root (Claude Code auto-loads from cwd)
-copyTemplate('docs/CLAUDE.md', 'CLAUDE.md', tokens);
+// 8b. Write CLAUDE.md + GOOSE.md to workspace root (agents auto-load from cwd)
+copyTemplate('CLAUDE.md', 'CLAUDE.md', tokens);
+copyTemplate('GOOSE.md', 'GOOSE.md', tokens);
+
+// 8c. Ship .env.sample at workspace root. Recipient copies to .env and fills keys.
+// .env itself is NEVER shipped or copied. Single source of truth for API keys.
+const envSampleSrc = path.join(TMPL, '.env.sample');
+if (fs.existsSync(envSampleSrc)) {
+  copyFile(envSampleSrc, path.join(outputDir, '.env.sample'));
+} else {
+  console.warn('  ⚠ templates/.env.sample missing — recipient will not know which keys to set');
+}
 
 // 9. Create empty run log
 write(path.join(outputDir, 'logs', 'ROUNDUP.md'),

@@ -8,6 +8,10 @@
       "command": "node",
       "args": ["rss/rss-scorer-mcp/index.js"]
     },
+    "gmail": {
+      "command": "node",
+      "args": ["server/mcp/mcp_gmail.js"]
+    },
     "tavily": {
       "command": "python",
       "args": ["tools/tavily_lean_mcp.py"]

@@ -36,9 +36,12 @@ Call `precrime__pipeline({"action": "status"})`. From the response, read `config
 
 If `config.leedzSession` is empty or null → STOP. Return `{"error": "NO_SESSION"}`.
 
+
 ## Step 2: Get valid trades
 
 Call `precrime__trades()`. You receive an array of trade name strings.
+
+ALL trade names are always lower case.  Always 'photo booth'.  Never 'Photo booth' or 'Photo Booth'. Always lower case
 
 If `booking.trade` (lowercased) is not in that array → STOP. Return `{"error": "INVALID_TRADE", "trade": booking.trade}`.
 

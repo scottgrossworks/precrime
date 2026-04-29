@@ -40,6 +40,16 @@ Runs locally on Windows. Claude is the orchestrator — no local LLM.
 
 ---
 
+## API KEYS — SINGLE SOURCE OF TRUTH
+
+All API keys (`OPENROUTER_API_KEY`, `TAVILY_API_KEY`, `ANTHROPIC_API_KEY`) live in **`.env` at the project root**. Nothing else hardcodes a key. To rotate any key: edit `.env`, save, restart `goose.bat` / `hermes.bat` / `claude.bat`. That's the only place to change.
+
+`.env.sample` ships with the deploy and documents required vars. `.env` itself is NEVER committed or shared.
+
+If a script reports `OPENROUTER_API_KEY missing from .env` or similar, the user has not yet copied `.env.sample` to `.env` and filled in real keys. Tell them to do that.
+
+---
+
 ## DATABASE — SINGLE SOURCE OF TRUTH
 
 **Read `server/mcp/mcp_server_config.json` → `database.path` for the active DB path.**
@@ -49,6 +59,18 @@ That is the single place the DB is configured. Do not hardcode any path here. Do
 Key columns: `dossier`, `targetUrls`, `draft`, `draftStatus`, `warmthScore`, `lastEnriched`, `lastQueueCheck`, `segment`
 
 `draftStatus` values: `"brewing"` | `"ready"` | `"sent"`
+
+---
+
+## "SHOW ME THE LEED" — ABSOLUTE RULE
+
+When in marketplace mode, if the user says any of: "show me the leed", "show me the json", "show me what you'd share", "show the leed", "draft the leed", "preview the leed", "show me the payload" — this means ONE thing:
+
+**Take the booking + linked factlets + client, build the full `createLeed` JSON payload (every field from `skills/share-skill.md` Step 2a, no ellipsis, no abbreviation), print only that JSON. Nothing else. No commentary. No "here is what I would post". No questions back to the user. Just the JSON.**
+
+If required fields are missing (`session, tn, ti, zp, st`), state which one in a single line and stop. Do not invent values.
+
+This rule is non-negotiable. Read `skills/share-skill.md` Rule 0 for the full specification.
 
 ---
 

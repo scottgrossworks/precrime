@@ -38,24 +38,30 @@ from pathlib import Path
 import requests
 
 # ---- API key resolution ----
+# Single source of truth: env var TAVILY_API_KEY (typically loaded from .env at project root by goose.bat / hermes.bat).
+# Fallback: read .env directly from project root if env var not set (useful when running this script standalone).
 
-KEY_FILE = Path(r"C:\Users\Admin\Desktop\WKG\TAVILY_API_KEY.md")
+PROJECT_ROOT = Path(__file__).resolve().parent.parent
+ENV_FILE = PROJECT_ROOT / ".env"
 
 
 def get_api_key() -> str:
-    """Resolve key from env first, then KEY_FILE."""
+    """Resolve TAVILY_API_KEY from env, then from project .env."""
     env = os.environ.get("TAVILY_API_KEY", "").strip()
     if env:
         return env
-    if KEY_FILE.exists():
-        text = KEY_FILE.read_text(encoding="utf-8")
-        # File format: header line + blank + key
-        for line in text.splitlines():
-            line = line.strip()
-            if line.startswith("tvly-"):
-                return line
+    if ENV_FILE.exists():
+        for raw in ENV_FILE.read_text(encoding="utf-8").splitlines():
+            line = raw.strip()
+            if not line or line.startswith("#"):
+                continue
+            if line.startswith("TAVILY_API_KEY="):
+                value = line.split("=", 1)[1].strip().strip('"').strip("'")
+                if value and not value.endswith("REPLACE_ME"):
+                    return value
     raise RuntimeError(
-        f"TAVILY_API_KEY not in env and not found in {KEY_FILE}"
+        f"TAVILY_API_KEY not in environment and not in {ENV_FILE}. "
+        f"Copy .env.sample to .env and fill in your key."
     )
 
 

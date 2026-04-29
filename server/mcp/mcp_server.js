@@ -198,7 +198,7 @@ function handleToolsList(id) {
                 {
                     name: 'pipeline',
                     description: [
-                        'Pre-Crime workflow operations. One tool, four actions.',
+                        'Pre-Crime workflow operations. One tool, five actions.',
                         '',
                         'action="status": Read full system state in one call. Returns { config, stats, completeness, readyDrafts, brewingCount }. completeness is a derived check of whether config has the fields needed for the current defaultBookingAction. Use this at startup and between enrichment rounds.',
                         '',
@@ -206,15 +206,19 @@ function handleToolsList(id) {
                         '',
                         'action="next": Atomically claim the next work item and return it fully hydrated. Pass entity="client" (default) or entity="booking". For clients: returns the client record with all linked factlets and bookings in one payload. The lastQueueCheck is stamped before return so no other agent claims it. Pass optional criteria to filter (company, name, draftStatus). Returns null if queue is empty. Response is automatically trimmed for context efficiency: dossier tail-clipped to last 2000 chars (or override via dossierLimit), factlets capped to 8 most recent (or override via factletLimit). Pass 0 to disable a cap. _clipped metadata is included if anything was trimmed.',
                         '',
-                        'action="save": Atomically persist client work in a single transaction. Two modes: (1) UPDATE existing client - pass id and patch with any of: dossierAppend, draft, draftStatus, targetUrls, intelScore, name, email, phone, company, website, clientNotes, segment, factlets[], bookings[]. (2) CREATE new client - omit id, patch must include name (required), plus optional email, phone, company, website, segment, source, factlets[], bookings[]. After persisting, runs score_target and returns the score plus the (new or existing) clientId.'
+                        'action="save": Atomically persist client work in a single transaction. Two modes: (1) UPDATE existing client - pass id and patch with any of: dossierAppend, draft, draftStatus, targetUrls, intelScore, name, email, phone, company, website, clientNotes, segment, factlets[], bookings[]. (2) CREATE new client - omit id, patch must include name (required), plus optional email, phone, company, website, segment, source, factlets[], bookings[]. After persisting, runs score_target on the client AND re-scores every booking under that client, writing leed_ready status back when shareReady passes the gate in scoring_config.json.\n\naction="rescore": Re-evaluate every non-terminal booking against the current scoring_config.json and update status field (leed_ready or new) accordingly. Use after editing scoring_config.json gates or constants. Pass scope="all" (default), scope="leed_ready" to sanity-check the current queue, or scope=<clientId> to limit to one client. Returns counts: rescored, promoted, demoted, unchanged.'
                     ].join('\n'),
                     inputSchema: {
                         type: 'object',
                         properties: {
                             action: {
                                 type: 'string',
-                                enum: ['status', 'configure', 'next', 'save'],
+                                enum: ['status', 'configure', 'next', 'save', 'rescore'],
                                 description: 'Which pipeline operation to run.'
+                            },
+                            scope: {
+                                type: 'string',
+                                description: 'For action=rescore only. "all" (default) re-scores every non-terminal booking. "leed_ready" sanity-checks only the current ready queue. Or pass a clientId to re-score one client only. Use after editing scoring_config.json.'
                             },
                             entity: {
                                 type: 'string',
@@ -386,16 +390,24 @@ function computeBookingScore(booking, client) {
 
     const total = b.trade + b.date + b.location + b.contact + b.description + b.time;
 
-    // leed_ready requires all three:
-    //   1. named human + direct (non-generic) email  -> contact === 20
-    //   2. demand signal (enforced upstream via factletMultiplier >= 1.0 at booking-target layer)
-    //   3. complete data: trade, date, location with zip
-    const shareReady = total >= 70
-        && b.trade >= 20
-        && b.location >= 15
-        && b.date >= 20
-        && b.contact === 20
-        && hasZip;
+    // shareReady is gated by scoring_config.json -> booking.gates.shareReady.
+    // Note: factletMultiplier is set to 1.0 here because computeBookingScore is
+    // the data-only score. The booking-target layer (computeBookingTargetScore)
+    // re-runs the gate with the real factletMultiplier and is the authoritative
+    // share-ready check. Returning a "shareReadyDataOnly" flag lets the upstream
+    // know data-side gates passed without falsely claiming demand-signal yet.
+    const dataOnlyCtx = {
+        total,
+        trade:    b.trade,
+        date:     b.date,
+        location: b.location,
+        contact:  b.contact,
+        hasZip,
+        factletMultiplier: 1.0   // data-only check; upstream replaces this
+    };
+    const shareReadyDataOnly = evaluateGate(SCORING.booking.gates.shareReady, dataOnlyCtx);
+    // Backward-compat alias used by legacy callers:
+    const shareReady = shareReadyDataOnly;
 
     // Contact quality label
     let contactQuality;
@@ -434,10 +446,51 @@ function computeBookingScore(booking, client) {
     return { total, breakdown: b, shareReady, contactQuality, action };
 }
 
-const SIGNAL_POINTS = { pain: 2, occasion: 2, context: 1 };
-const FACTLET_THRESHOLD = 3;
-const FACTLET_POINTS_PER = 2;
-const DRAFT_THRESHOLD_CLIENT = 5;
+// =============================================================================
+// SCORING POLICY LOADED FROM scoring_config.json AT STARTUP
+// =============================================================================
+// Single source of truth. Edit scoring_config.json (constants, gates, weights),
+// restart the server. Nothing in this JS file hardcodes a scoring number.
+const SCORING_CONFIG_PATH = path.resolve(__dirname, 'scoring_config.json');
+let SCORING;
+try {
+    SCORING = JSON.parse(fs.readFileSync(SCORING_CONFIG_PATH, 'utf8'));
+} catch (e) {
+    console.error(`[MCP] FATAL: scoring_config.json missing or malformed: ${e.message}`);
+    process.exit(1);
+}
+
+const SIGNAL_POINTS = SCORING.client.signalPoints;
+const FACTLET_THRESHOLD = SCORING.factlet.threshold;
+const FACTLET_POINTS_PER = SCORING.factlet.pointsPerFreshFactlet;
+const DRAFT_THRESHOLD_CLIENT = SCORING.client.draftThreshold;
+
+/**
+ * Generic gate evaluator. Reads a gate definition from SCORING.gates and
+ * tests every rule against the provided context.  Returns true only if EVERY
+ * rule passes.  This is the only place gate logic exists -- if the result
+ * is wrong, edit scoring_config.json (the data), not this function.
+ *
+ * @param {object} gate - { all: [{field, op, value}, ...] }
+ * @param {object} ctx  - field name -> value
+ * @returns {boolean}
+ */
+function evaluateGate(gate, ctx) {
+    if (!gate || !Array.isArray(gate.all)) return false;
+    for (const rule of gate.all) {
+        const v = ctx[rule.field];
+        let pass;
+        switch (rule.op) {
+            case '===':     pass = v === rule.value; break;
+            case '>=':      pass = typeof v === 'number' && v >= rule.value; break;
+            case '<=':      pass = typeof v === 'number' && v <= rule.value; break;
+            case 'present': pass = v !== null && v !== undefined && v !== ''; break;
+            default:        pass = false;
+        }
+        if (!pass) return false;
+    }
+    return true;
+}
 
 async function getFactletStaleDays() {
     const cfg = await prisma.config.findFirst();
@@ -464,7 +517,7 @@ async function computeClientScore(clientId, intelOverride) {
         where: { id: clientId },
         include: {
             factlets: {
-                where: { relevance: true },
+                where: { relevance: true },  // gate per DOCS/SCORING.md: only relevant factlets feed factletScore
                 include: { factlet: { select: { id: true, createdAt: true } } }
             }
         }
@@ -527,7 +580,7 @@ async function computeBookingTargetScore(bookingId) {
             client: {
                 include: {
                     factlets: {
-                        where: { relevance: true },
+                        where: { relevance: true },  // gate per DOCS/SCORING.md
                         include: { factlet: { select: { id: true, createdAt: true } } }
                     }
                 }
@@ -544,8 +597,23 @@ async function computeBookingTargetScore(bookingId) {
     const factletMultiplier = Math.min(1.0, fs.score / FACTLET_THRESHOLD);
 
     const total = Math.round(data.total * factletMultiplier);
-    const shareReady = data.shareReady && factletMultiplier >= 1.0;
-    const draftReady = data.shareReady && factletMultiplier >= 0.5;
+
+    // Authoritative shareReady: re-evaluate the gate with the REAL factletMultiplier.
+    // This is the only place that calls scoring_config.json's gate against live data.
+    const fullCtx = {
+        total:             data.total,
+        trade:             data.breakdown.trade,
+        date:              data.breakdown.date,
+        location:          data.breakdown.location,
+        contact:           data.breakdown.contact,
+        hasZip:            !!(booking.zip && String(booking.zip).trim()),
+        factletMultiplier
+    };
+    const shareReady = evaluateGate(SCORING.booking.gates.shareReady, fullCtx);
+    const draftReady = evaluateGate(SCORING.booking.gates.draftReady, {
+        shareReadyDataOnly: data.shareReady,
+        factletMultiplier
+    });
 
     await prisma.booking.update({
         where: { id: bookingId },
@@ -643,9 +711,63 @@ async function handlePipeline(id, params) {
         case 'configure': return await pipelineConfigure(id, args.patch || {});
         case 'next':      return await pipelineNext(id, args.entity || 'client', args.criteria || {}, args.dossierLimit, args.factletLimit);
         case 'save':      return await pipelineSave(id, args.id, args.patch || {});
+        case 'rescore':   return await pipelineRescore(id, args.scope || 'all');
         default:
-            return createErrorResponse(id, -32602, `Unknown pipeline action: "${action}". Must be: status, configure, next, save.`);
+            return createErrorResponse(id, -32602, `Unknown pipeline action: "${action}". Must be: status, configure, next, save, rescore.`);
     }
+}
+
+/**
+ * Re-score every non-terminal booking against the current scoring_config.json
+ * and write status back. Use after editing SCORING constants or gates.
+ *
+ * scope:
+ *   "all"        -> every booking not in shared/taken/expired (default)
+ *   "leed_ready" -> only bookings currently flagged leed_ready (sanity-check the queue)
+ *   "<clientId>" -> only that client's bookings
+ *
+ * Returns a summary: count of bookings touched, before/after status counts.
+ */
+async function pipelineRescore(id, scope) {
+    let where = { status: { notIn: ['shared', 'taken', 'expired'] } };
+    if (scope === 'leed_ready') {
+        where = { status: 'leed_ready' };
+    } else if (scope && scope !== 'all') {
+        // Treat as clientId
+        where = { clientId: scope, status: { notIn: ['shared', 'taken', 'expired'] } };
+    }
+
+    const bookings = await prisma.booking.findMany({ where, select: { id: true, status: true } });
+
+    let promoted = 0;   // new -> leed_ready
+    let demoted  = 0;   // leed_ready -> new
+    let unchanged = 0;
+    const errors = [];
+
+    for (const b of bookings) {
+        try {
+            const score = await computeBookingTargetScore(b.id);
+            if (!score) { errors.push({ id: b.id, msg: 'score returned null' }); continue; }
+            const newStatus = score.shareReady ? 'leed_ready' : 'new';
+            if (newStatus === b.status) {
+                unchanged++;
+            } else {
+                await prisma.booking.update({ where: { id: b.id }, data: { status: newStatus } });
+                if (newStatus === 'leed_ready') promoted++;
+                else                            demoted++;
+            }
+        } catch (e) {
+            errors.push({ id: b.id, msg: e.message });
+        }
+    }
+
+    return createSuccessResponse(id, JSON.stringify({
+        rescored: bookings.length,
+        promoted,
+        demoted,
+        unchanged,
+        errors
+    }, null, 2));
 }
 
 async function pipelineStatus(id) {
@@ -942,11 +1064,6 @@ async function pipelineSave(id, clientId, patch) {
                 if (b.shared !== undefined) bookingData.shared = !!b.shared;
                 if (b.sharedAt !== undefined) bookingData.sharedAt = BigInt(b.sharedAt);
 
-                // Auto-promote to leed_ready
-                if (!bookingData.status && bookingData.trade && bookingData.startDate && (bookingData.location || bookingData.zip)) {
-                    bookingData.status = 'leed_ready';
-                }
-
                 if (b.id) {
                     // Update existing booking
                     const { clientId: _cid, ...updateData } = bookingData;
@@ -958,6 +1075,24 @@ async function pipelineSave(id, clientId, patch) {
             }
         }
     });
+
+    // Re-score every booking just saved and write status back.
+    // computeBookingTargetScore is the single source of truth for leed_ready.
+    const touchedBookings = await prisma.booking.findMany({
+        where: { clientId },
+        select: { id: true, status: true }
+    });
+    for (const b of touchedBookings) {
+        // Skip terminal states
+        if (b.status === 'shared' || b.status === 'taken' || b.status === 'expired') continue;
+        const score = await computeBookingTargetScore(b.id);
+        if (score) {
+            const newStatus = score.shareReady ? 'leed_ready' : 'new';
+            if (newStatus !== b.status) {
+                await prisma.booking.update({ where: { id: b.id }, data: { status: newStatus } });
+            }
+        }
+    }
 
     // Score after transaction completes (scoring reads back from DB)
     const intelOverride = (patch.intelScore !== undefined) ? parseInt(patch.intelScore, 10) : null;

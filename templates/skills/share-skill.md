@@ -43,6 +43,12 @@ Check session context for `defaultBookingAction`:
 
 Note the answer as session context: `defaultBookingAction = [choice]`. Apply to this booking and all subsequent ones.
 
+
+---
+## lower-case trade names
+
+ALL trade names are always lower case.  Always 'photo booth'.  Never 'Photo booth' or 'Photo Booth'. Always lower case
+
 ---
 
 ## Step 2a: Post via Leedz API Gateway (leedz_api)
@@ -68,6 +74,7 @@ Send a JSON-RPC 2.0 body:
 ```
 
 **How to post (use the Bash tool):**
+
 
 ```
 curl -sS -X POST https://jjz8op6uy4.execute-api.us-west-2.amazonaws.com/Leedz_Stage_1/mcp \

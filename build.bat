@@ -74,6 +74,18 @@ if exist "%ROOT%\templates\precrime.bat" (
   rmdir /s /q "%TMPPARENT%"
   exit /b 1
 )
+if exist "%ROOT%\templates\goose.bat" (
+  copy "%ROOT%\templates\goose.bat" "%STAGEDIR%\goose.bat" >nul
+  echo   + goose.bat
+)
+if exist "%ROOT%\templates\goose_config.template.yaml" (
+  copy "%ROOT%\templates\goose_config.template.yaml" "%STAGEDIR%\goose_config.template.yaml" >nul
+  echo   + goose_config.template.yaml
+)
+if exist "%ROOT%\templates\hermes.bat" (
+  copy "%ROOT%\templates\hermes.bat" "%STAGEDIR%\hermes.bat" >nul
+  echo   + hermes.bat
+)
 
 echo.
 echo Packaging zip...

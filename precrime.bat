@@ -45,5 +45,6 @@ if errorlevel 1 (
   exit /b 1
 )
 
-:: Launch Claude -- skip all permission dialogs, pre-seed the startup prompt
-claude --dangerously-skip-permissions --chrome "run precrime (database: %DBNAME%)"
+:: Launch Claude -- skip all permission dialogs, pre-seed the startup prompt.
+:: Pin to Sonnet 4.5. Without --model, Claude Code defaults to Opus which is far more expensive.
+claude --dangerously-skip-permissions --chrome --model claude-sonnet-4-5 "run precrime (database: %DBNAME%)"

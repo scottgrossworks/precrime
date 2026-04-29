@@ -60,6 +60,7 @@ model Booking {
   leedPrice        Int?
   leedId           String?   // returned by createLeed MCP tool
   bookingScore     Int?      // 0–100 procedural readiness score
+  factletScore     Int?      // factlet contribution score
   contactQuality   String?   // none | generic_email | name_only | named_email | named_email_and_name
   createdAt        DateTime  @default(now())
   updatedAt        DateTime  @updatedAt
@@ -78,8 +79,9 @@ model ClientFactlet {
   id         String   @id @default(cuid())
   clientId   String
   factletId  String
-  signalType String   // "pain" | "occasion" | "context"
-  points     Int      // 2 (pain/occasion) or 1 (context)
+  relevance  Boolean  @default(true)  // binary: factlet relevant to VALUE_PROP. The scoring gate per DOCS/SCORING.md. Set by relevance-judge at ingestion.
+  signalType String?  // DEPRECATED — legacy "pain" | "occasion" | "context". Retained for back-compat; not used by score_target.
+  points     Int?     // DEPRECATED — legacy point value. Not used by score_target.
   appliedAt  DateTime @default(now())
   client     Client   @relation(fields: [clientId], references: [id])
   factlet    Factlet  @relation(fields: [factletId], references: [id])
@@ -104,6 +106,7 @@ model Config {
   llmBaseUrl           String?
   llmAnthropicVersion  String?
   llmMaxTokens         Int?     @default(1024)
+  factletStaleDays     Int?     @default(180) // days before a factlet is stale
   createdAt            DateTime @default(now())
   updatedAt            DateTime @updatedAt
 }

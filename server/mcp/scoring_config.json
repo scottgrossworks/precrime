@@ -1,9 +1,16 @@
 {
-  "_comment": "PRECRIME scoring policy. Edit numeric thresholds, weights, and regex patterns here instead of in JS. mcp_server.js loads this at startup and fails fast if missing or malformed. After editing, restart the MCP server.",
-  "_version": "1.0.0",
+  "_comment": "PRECRIME scoring policy. Single source of truth. Loaded by mcp_server.js at startup. Edit numbers, weights, regex patterns, and gate rules here -- the JS only evaluates what's defined in this file. After editing, restart the MCP server.",
+  "_version": "2.0.0",
+
+  "factlet": {
+    "_comment": "Factlet-multiplier and dossier-scoring constants used by both booking and client target scoring.",
+    "threshold": 3,
+    "pointsPerFreshFactlet": 2,
+    "defaultStaleDays": 180
+  },
 
   "client": {
-    "_comment": "Client scoring policy — feeds score_client and link_factlet.",
+    "_comment": "Client target scoring (no booking bound) -- feeds score_client and link_factlet.",
     "draftThreshold": 5,
     "signalPoints": {
       "pain": 2,
@@ -13,15 +20,27 @@
   },
 
   "booking": {
-    "_comment": "Booking readiness policy — feeds score_booking and computeBookingScore. Hard gates are absolute. If any fail, shareReady=false regardless of total.",
+    "_comment": "Booking readiness policy -- feeds score_booking and computeBookingTargetScore. Hard gates are absolute. shareReady requires ALL conditions in gates.shareReady to evaluate true.",
 
-    "hardGates": {
-      "_comment": "ALL of these must pass for shareReady=true. Tuned to the Leedz addLeed Lambda's required fields (tn, lc, zp, st, et).",
-      "totalMin": 70,
-      "tradeMin": 20,
-      "locationMin": 15,
-      "dateMin": 20,
-      "contactMin": 10
+    "gates": {
+      "_comment": "Declarative gate rules. Each rule: {field, op, value}. ops: '>=', '===', 'present'. Gate passes when ALL rules pass.",
+      "shareReady": {
+        "all": [
+          { "field": "total",             "op": ">=",      "value": 70 },
+          { "field": "trade",             "op": ">=",      "value": 20 },
+          { "field": "date",              "op": ">=",      "value": 20 },
+          { "field": "location",          "op": ">=",      "value": 15 },
+          { "field": "contact",           "op": "===",     "value": 20 },
+          { "field": "factletMultiplier", "op": ">=",      "value": 1.0 },
+          { "field": "hasZip",            "op": "===",     "value": true }
+        ]
+      },
+      "draftReady": {
+        "all": [
+          { "field": "shareReadyDataOnly", "op": "===",    "value": true },
+          { "field": "factletMultiplier",  "op": ">=",     "value": 0.5 }
+        ]
+      }
     },
 
     "trade": {
