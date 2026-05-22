@@ -19,8 +19,9 @@ PRECRIME\DOCS\wiki\
     ontology.md          <- Entities, output paths, conversion funnel, design rules
     architecture.md      <- System architecture, two MCP servers, data flow
     deployment.md        <- Build system, end-user flow, file inventory
-    mcp.md               <- MCP server details, all 19 tools, config
-    scoring.md           <- Client scoring, contact gate, dossier score, draft eligibility
+    mcp.md               <- MCP server details, 3-tool surface (pipeline/find/trades), all action enumerations
+    source-queue.md      <- Pass 2 (2026-05-06) DB-backed work-stealing source queue
+    scoring.md           <- Pointer to canonical DOCS/SCORING.json policy
     headless-deployment.md <- Headless AWS deployment, EC2 + cron, Managed Agents comparison
     email-finder.md      <- 5-phase direct-email hunt sub-skill invoked by enrichment Step 3.6
   status\

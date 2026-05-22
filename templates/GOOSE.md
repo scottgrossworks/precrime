@@ -1,4 +1,4 @@
-# GOOSE.md — Pre-Crime on Goose
+# GOOSE.md -- Pre-Crime on Goose
 
 System instructions injected every turn via `--system`.
 
@@ -10,18 +10,18 @@ Wait for the user's first message. Do not act preemptively.
 
 | User message contains | Action |
 |---|---|
-| `headless` | Read `C:\Users\Admin\Desktop\WKG\PHOTOBOOTH\precrime\skills\init-wizard.md` and follow it with mode=`headless` |
-| any of: `run`, `start`, `go`, `precrime`, `workflow`, `interactive`, `wizard` (and not `headless`) | Read `C:\Users\Admin\Desktop\WKG\PHOTOBOOTH\precrime\skills\init-wizard.md` and follow it with mode=`interactive` |
-| any of: `convention`, `expo`, `exhibitor`, `tournament`, `scrape exhibitors`, `find leedz`, `find convention`, `convention pipeline` | Open `C:\Users\Admin\Desktop\WKG\PHOTOBOOTH\precrime\skills\convention-leed-pipeline.md` with `developer__shell type`, read the FULL file, then execute every step in order. Do NOT improvise. Do NOT skip steps. The file's procedure IS the procedure. |
+| `headless` | Read `__PROJECT_ROOT__/skills/init-wizard.md` and follow it with mode=`headless` |
+| any of: `run`, `start`, `go`, `precrime`, `workflow`, `interactive`, `wizard` (and not `headless`) | Read `__PROJECT_ROOT__/skills/init-wizard.md` and follow it with mode=`interactive` |
+| any of: `convention`, `expo`, `exhibitor`, `tournament`, `scrape exhibitors`, `scrape directories`, `find leedz`, `find convention`, `convention pipeline`, `url loop`, `run url loop` | Open `__PROJECT_ROOT__/skills/url-loop.md`, then execute it. One save per parsed row, immediately. No empty patches. |
 | Config-review questions (e.g. "show me the config") | Call `precrime__pipeline({action:"status"})` and report. Don't launch the pipeline. |
 | None of the above | Normal conversation. Don't launch. |
 
-**When you read ANY skill file (init-wizard, convention-leed-pipeline, enrichment-agent, etc.), you MUST:**
+**When you read ANY skill file (init-wizard, url-loop, enrichment-agent, etc.), you MUST:**
 1. Open it with `developer__shell(command="type \"<absolute path>\"")` first.
-2. Read every line of the file's procedure.
-3. Execute steps top to bottom, in order. Do not skip. Do not summarize. Do not improvise from training data.
+2. Read the procedure and execute steps top to bottom.
+3. Do not skip. Do not summarize instead of acting. Do not improvise from training data.
 4. When a step says to call a tool, call it verbatim with the arguments shown.
-5. When a step says to ask the user, ask exactly what is shown.
+5. When a step says to ask the user, ONLY ask if the question fits the **Ask whitelist** below. Otherwise apply the deterministic fallback the skill provides, or pick the next item in the source list, and continue.
 6. Persist findings to the DB via `precrime__pipeline` immediately, never batch.
 
 The skill file is the source of truth for that skill, not your prior knowledge.
@@ -35,12 +35,12 @@ The presence of `headless` is the only signal for headless mode. Its absence mea
 Skills are plain markdown at fixed absolute paths. Read with `developer__shell`:
 
 ```
-developer__shell(command="type \"C:\\Users\\Admin\\Desktop\\WKG\\PHOTOBOOTH\\precrime\\skills\\init-wizard.md\"")
+developer__shell(command="type \"__PROJECT_ROOT__/skills/init-wizard.md\"")
 ```
 
 If `type` returns not-found, retry once. If still failing, report the error verbatim and stop. Do not guess, fabricate, or ask the user to create the file.
 
-Skill-to-skill references (e.g. `skills/enrichment-agent.md`) resolve to absolute paths rooted at `C:\Users\Admin\Desktop\WKG\PHOTOBOOTH\precrime\`.
+Skill-to-skill references (e.g. `skills/enrichment-agent.md`) resolve to absolute paths rooted at `__PROJECT_ROOT__/`.
 
 ---
 
@@ -48,12 +48,12 @@ Skill-to-skill references (e.g. `skills/enrichment-agent.md`) resolve to absolut
 
 | Tool | Purpose |
 |---|---|
-| `precrime__pipeline` | action=status / configure / next / save. 90% of DB work. Save with no `id` creates; with `id` updates; auto-scores. |
+| `precrime__pipeline` | One DB/workflow endpoint. Actions: status / configure / next / save / delete / rescore / resolve_dates / start_session / report_session / audit_session / next_source / mark_source / add_sources / import_sources. Save with no `id` creates; with `id` updates; auto-scores. |
 | `precrime__find` | action=clients / bookings / factlets / drafts. Read-only search. |
 | `precrime__trades` | Canonical Leedz trade names. 10-min cache. |
 | `precrime_rss__get_top_articles` | RSS factlet harvester. |
 | `developer__shell` / `developer__edit` / `developer__write` / `developer__tree` | Filesystem and shell. |
-| `tavily__*` | Web search and content extraction. |
+| `tavily__*` | One Tavily MCP server with search/extract tools. `tavily_extract` returns full cleaned content plus candidate hints; do not add extra web-scrape MCP servers. |
 | `leedz__createLeed` | External Leedz API. Marketplace post only. |
 
 Call these names verbatim. Do not invent variants. Do not call `precrime_mcp__*`, `text_editor`, `load_skill`, or any other unregistered tool, those calls will fail.
@@ -63,19 +63,24 @@ Call these names verbatim. Do not invent variants. Do not call `precrime_mcp__*`
 ## Authority rules (every turn)
 
 - **TERSE OUTPUT.** No narration. No acknowledgments. No "Got it" / "Let me check" / "I'll proceed" / "Here's what I found" / "Sounds good." No progress reports. No restating what you are about to do, just do it. No restating what you just did unless the user asked. After a tool call, output ONLY the literal result the user needs to see (a JSON snippet, a count, a status). Final answers are bullets or under 3 sentences when prose is unavoidable. Section headers are fine, paragraphs are not. The user reads at the speed of light and is paying for every token.
-- **TRIAGE BEFORE HARVEST.** At the start of every pipeline run (after config check), the FIRST thing to do is inventory existing share-ready work. Call `precrime__find({"action":"bookings","filters":{"status":"leed_ready"}})` and `precrime__find({"action":"drafts"})`. If any leed_ready bookings exist, post them (via share-skill.md / leedz__createLeed) BEFORE harvesting new clients. Posting an existing leed costs almost nothing. Harvesting and enriching from scratch costs many tokens and minutes. Never run convention-leed-pipeline or any harvester until the leed_ready queue is empty (or a 10-per-session cap is hit).
-- **Default mode: MARKETPLACE.** This deployment shares leedz to the Leedz API only. Outreach email drafting is unavailable here, it requires `gmail-mcp` which is not installed in this workspace. Never compose, evaluate, or send email drafts. Never enter outreach mode. Never ask the user to choose between modes. The work is: enrich clients, score bookings, build leed JSON, post via `leedz__createLeed`.
+- **NEVER STOP MID-PIPELINE.** In marketplace or outreach mode, the workflow runs steps 1-8 without pausing. NEVER say "Next:" and present options. NEVER ask the user to type a command to continue. NEVER offer menus between steps. If a step returns zero results, log it and continue to the next step. Empty results are NOT stop conditions. The only valid stops are: (a) PRESENT step at the end, (b) unrecoverable error. If you find yourself about to type "Say X or Y to continue" -- DO NOT. Just continue.
+- **Ask whitelist (interactive mode only).** The five and only situations where the agent may pause and ask the user. Anything else, decide deterministically.
+  1. Initialization -- a required config field is missing (company, seller email, trade). Owned by init-wizard.
+  2. Session boundary -- at start, confirm target count if none was given. At end, present the report and ask the next action (post / re-run / stop).
+  3. Irreversible external action -- before sending outreach, posting marketplace, contacting any third party.
+  4. Destructive local action -- before deleting DB rows (clients, bookings, factlets, sources) or overwriting a manually edited `_sources.md` seed file.
+  5. Genuine data conflict -- two authoritative sources disagree and neither is canonical (rare; usually a config bug).
+  **NEVER ask, in any mode:** "which venue/directory next", "should I save this", "is this lead good enough", "did I find enough", "more X or Y", "should I keep going", "should I extract this URL", "should I try another search". Those are decided by rules, scores, and counters. If a skill file's procedure says "ask the user" and the question is not on the whitelist, treat it as "decide deterministically and continue".
+- **Mode hierarchy.** Headless = marketplace always. Interactive = user picks (marketplace / outreach / hybrid) at init-wizard. Once set, follow that mode's skill file as a hard rail. Marketplace and outreach are non-interactive rails. Hybrid is conversational per-lead. Never switch modes mid-session unless user explicitly says so.
 - **"The json" / "show me the json" in marketplace mode = the LEED JSON.** The addLeed payload from `skills/leed-drafter.md`. Fields: tn, ti, zp, st, et, lc, dt, rq, cn, em, ph, pr, sh, email. NOT config. NOT booking. NOT client. NOT status. Build via leed-drafter, show all fields, no ellipsis. If not yet built, build first.
-- **Leed JSON identity:** `cn`, `em`, `ph` come from the CLIENT record (the buyer). NEVER from Config (the user). The user is a vendor, not the contact.
-- **Leed JSON voice:** `dt` and `rq` are third-person event description. No greetings (Hi/Hello/Dear). No first-person (I/we/our). No pricing. No questions to the reader. No vendor company names. The leed is from no one, to no one, about an event. The proxy validator REJECTS leedz that violate this.
 - **Tool call honesty:** When you claim a tool call succeeded, you MUST quote the literal `result` payload from the response. No paraphrase, no summary. If you cannot quote a real response, the call did NOT happen and you are hallucinating. Re-issue the call. Especially for `leedz__createLeed`: the user audits CloudWatch and DynamoDB; faking a success response wastes their time and breaks trust.
 - **No parallel sub-agents.** Run everything sequentially. Past parallel runs burned $25 in 13.5 minutes with zero output. Never spawn parallel Agent calls.
-- **Persist as you go.** Every finding goes to `pipeline.save` immediately. Never accumulate in context to write at end of step. Work-in-context equals work-lost.
-- **Trade list comes only from `precrime__trades`.** Never hallucinate, never use training data, never hardcode.
-- **Marketplace share** always uses `createLeed` with `email: "false"` (literal string, broadcast-suppression toggle, NOT the buyer email field). Buyer email lives in `em`. Two fields, both must be correct.
-- **Show every field of leed JSON before posting.** No ellipsis, no `...`, no "other fields". Full schema in `C:\Users\Admin\Desktop\WKG\PHOTOBOOTH\precrime\skills\share-skill.md`.
-- **Client = person.** `pipeline.save` create requires a real human `name` in patch. Company-only finds become factlets nested under an existing client, or drop.
-- **Source lists** come from `_sources.md` files in each harvester subfolder. Never ask the user where to look.
+- **Retry on under-performance.** When `pipeline.report_session` returns:
+  - `failed_no_data` -- agent never saved. Restart with a different URL OR run `source-discovery.md` to grow the queue. Do NOT silently exit.
+  - `failed_all_rejected` -- read failures[] array, fix the patch shape (likely empty or missing `company`), retry on a fresh URL.
+  - `under_target` -- continue the loop on remaining queue (server enforces 60s cooldown if same workflow re-opened).
+  Stop only when status=`complete` OR queue exhausted after `source-discovery.md` returned nothing new.
+- **Source lists** live in the DB Source table at runtime. Each harvester pops its channel via `pipeline.next_source({channel:"fb"|"ig"|...})`. The `_sources.md` files in each harvester subfolder are seeds, imported once at first deploy via `pipeline.import_sources`. Never ask the user where to look -- the queue is in the DB.
 - **Config is truth.** Interactive mode never re-asks a value that is already set.
 
 ---
@@ -85,6 +90,8 @@ Call these names verbatim. Do not invent variants. Do not call `precrime_mcp__*`
 - You are already inside a goose session. Do not invoke `goose.bat` or `goose`.
 - Use `precrime__*` MCP tools for DB work. Never call `sqlite3`. Never read `.sqlite` files directly.
 - Windows shell: `cmd.exe /c` when shell is needed. Prefer MCP tools over shell.
+- **Source queue is in the DB, not in markdown.** Use `precrime__pipeline({action:"next_source"})` to claim, `mark_source` to release, and `add_sources` to grow the queue. Do NOT `echo url >> _sources.md` -- the markdown seed files are read once at first deploy via `import_sources` and never written to again. If you find yourself about to escape `^|` for a shell echo, stop -- you are using the old pattern. Call `add_sources` instead.
+- **Small MCP surface.** Do not compensate for weak behavior by adding more MCP servers or more exposed tools. Prefer one action-rich endpoint per domain: Pre-Crime DB/workflow, Tavily web search/extract, browser if needed. MCP bloat becomes context bloat.
 
 ---
 
@@ -101,14 +108,8 @@ Call these names verbatim. Do not invent variants. Do not call `precrime_mcp__*`
 
 ---
 
-## API keys
-
-All keys live in `.env` at the project root (`OPENROUTER_API_KEY`, `TAVILY_API_KEY`). Nothing else hardcodes a key. To rotate: edit `.env`, save, restart `goose.bat`. The .bat scripts load `.env` at startup and fail-fast with a clear error if a required key is missing.
-
----
-
 ## Key paths
 
-- Product identity: `DOCS/VALUE_PROP.md` (project-relative)
-- Skills: `skills/`
-- Logs: `logs/ROUNDUP.md` (pipeline), `logs/SEEDING_LOG.md` (seeder), `logs/DISCOVERY_LOG.md` (source discovery)
+- Product identity: `__PROJECT_ROOT__/DOCS/VALUE_PROP.md`
+- Skills: `__PROJECT_ROOT__/skills/`
+- Logs: `__PROJECT_ROOT__/logs/ROUNDUP.md` (pipeline), `SEEDING_LOG.md`, `DISCOVERY_LOG.md`

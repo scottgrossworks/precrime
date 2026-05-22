@@ -1,4 +1,4 @@
-# {{DEPLOYMENT_NAME}} — Value Proposition Reference
+# {{DEPLOYMENT_NAME}} -- Value Proposition Reference
 
 This document is the Composer's reference. The enrichment agent reads it before writing any outreach draft.
 **Complete this document before running the pipeline.** The quality of this document directly determines the quality of every draft.
@@ -8,7 +8,8 @@ This document is the Composer's reference. The enrichment agent reads it before 
 ## THE PRODUCT
 
 **[YOUR PRODUCT NAME]**
-**Seller:** [YOUR NAME] — [YOUR COMPANY]
+**Trade:** [LEEDZ TRADE CATEGORY -- must match a name returned by precrime__trades()]
+**Seller:** [YOUR NAME] -- [YOUR COMPANY]
 **Website:** [YOUR WEBSITE]
 **Geography:** [GEOGRAPHY SERVED]
 **Pricing:** [PRICING]
@@ -21,21 +22,21 @@ This document is the Composer's reference. The enrichment agent reads it before 
 
 ---
 
-## WHY US — DIFFERENTIATORS
+## WHY US -- DIFFERENTIATORS
 
-*[List 3-5 specific differentiators. Not "professional" or "experienced" — name facts.]*
+*[List 3-5 specific differentiators. Not "professional" or "experienced" -- name facts.]*
 
 ---
 
 ## WHO BUYS THIS
 
-**Primary buyers:** [TARGET ROLES — e.g., "HR Managers, Event Coordinators"]
-**Segments:** [AUDIENCE SEGMENTS — e.g., "Corporate events, Weddings, Private parties"]
-**Buying occasions:** [TRIGGER EVENTS — what makes someone need this now?]
+**Primary buyers:** [TARGET ROLES -- e.g., "HR Managers, Event Coordinators"]
+**Segments:** [AUDIENCE SEGMENTS -- e.g., "Corporate events, Weddings, Private parties"]
+**Buying occasions:** [TRIGGER EVENTS -- what makes someone need this now?]
 
 ---
 
-## THE SALE — HOW TO MAKE IT
+## THE SALE -- HOW TO MAKE IT
 
 <!-- FILL IN THIS SECTION MANUALLY
      ==============================
@@ -59,13 +60,13 @@ This document is the Composer's reference. The enrichment agent reads it before 
      - Name the pain clearly
      - Describe the emotional weight of it (what does it feel like to have this problem?)
      - Explain how your product addresses it specifically
-     - If you have metrics, case studies, or testimonials — add them here
+     - If you have metrics, case studies, or testimonials -- add them here
      Example:
 
      ### Pain: [Name the pain]
      [What does this feel like from the buyer's perspective?]
      **How the product helps:** [specific capability or outcome]
-     **Evidence:** [metric, testimonial, case study — no invented stats]
+     **Evidence:** [metric, testimonial, case study -- no invented stats]
 -->
 
 ### Pain 1: [Name it]
@@ -93,7 +94,7 @@ This document is the Composer's reference. The enrichment agent reads it before 
      [Your response]
 
      ### "Send me more information"
-     [Your response — usually: ask for a 15-minute call instead]
+     [Your response -- usually: ask for a 15-minute call instead]
 -->
 
 *[Complete manually]*
@@ -112,7 +113,7 @@ This document is the Composer's reference. The enrichment agent reads it before 
      - Years in business, volume served
 -->
 
-*[Complete manually — only use facts you can verify]*
+*[Complete manually -- only use facts you can verify]*
 
 ---
 
@@ -135,10 +136,10 @@ This document is the Composer's reference. The enrichment agent reads it before 
      ==============================
      Add 2-3 real examples of outreach drafts that worked (got replies).
      The Composer will use these as style reference.
-     Format: [Client type] → [Draft text]
+     Format: [Client type] -> [Draft text]
 -->
 
-*[Add working examples here — these are the single highest-value content in this document]*
+*[Add working examples here -- these are the single highest-value content in this document]*
 
 ---
 
@@ -146,22 +147,22 @@ This document is the Composer's reference. The enrichment agent reads it before 
 
 The enrichment agent and harvesters use these to filter articles, posts, and scraped content. Fill in after you know your audience.
 
-### Relevant — High Signal (strong buying intent)
+### Relevant -- High Signal (strong buying intent)
 
 *[List phrases or topics that indicate someone needs your product RIGHT NOW.
 Example: "looking for [your service]", "need [your product type]", "[specific buying phrase for your audience"]*
 
-### Relevant — Medium Signal (context, not urgent)
+### Relevant -- Medium Signal (context, not urgent)
 
 *[Topics that are relevant background but not an active buying signal.
 Example: "planning a corporate event", "event entertainment ideas"]*
 
-### Relevant — Timing Signals
+### Relevant -- Timing Signals
 
 *[Words that suggest a deadline or booking window is open.
 Example: "save the date", "planning for", "event is in [month]"]*
 
-### Not Relevant — Skip These
+### Not Relevant -- Skip These
 
 *[Topics that look adjacent but aren't. Keeps the relevance filter tight.
 Example: "digital art commission", "graphic design job posting"]*
@@ -172,20 +173,20 @@ Example: "digital art commission", "graphic design job posting"]*
      ==========================================
      Priority order for completion:
 
-     1. OUTREACH EXAMPLES — fill these in first if you have any
+     1. OUTREACH EXAMPLES -- fill these in first if you have any
         Real working drafts are better than any instruction.
 
-     2. DIFFERENTIATORS — what makes you different?
+     2. DIFFERENTIATORS -- what makes you different?
         Be specific. "Professional" is not a differentiator. "Warner Bros. veteran,
         12-15 faces/hour" is a differentiator.
 
-     3. PAIN POINTS — what problems do you solve?
+     3. PAIN POINTS -- what problems do you solve?
         Name the emotional experience of the problem, not just the functional one.
 
-     4. THE SALE — what happens after the first email?
+     4. THE SALE -- what happens after the first email?
         If you don't know the sales motion, the Composer can't close.
 
-     5. PROOF POINTS — evidence only, no invented stats.
+     5. PROOF POINTS -- evidence only, no invented stats.
         One real testimonial is worth 10 marketing bullets.
 
      The enrichment agent reads this file at Step 5 (Compose).

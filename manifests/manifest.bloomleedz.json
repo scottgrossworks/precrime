@@ -1,6 +1,5 @@
 {
   "_comment": "BloomLeedz deployment manifest — Bloomsights K-12 outreach to 318 school principals/admins in Los Angeles.",
-
   "deployment": {
     "name": "BloomLeedz",
     "version": "1.0",
@@ -8,7 +7,6 @@
     "dbFile": "data/temp_dummy.sqlite",
     "_dbFile_note": "DUMMY PATH — deploy.js writes blank.sqlite here. After deploy, patch server/.env and server/mcp/mcp_server_config.json to point at ../../data/ca_schools.sqlite"
   },
-
   "seller": {
     "name": "Adam Rockenbach",
     "company": "Bloomsights",
@@ -16,7 +14,6 @@
     "website": "https://bloomsights.com",
     "phone": "970.413.4535"
   },
-
   "product": {
     "name": "Bloomsights",
     "description": "Bloomsights is a student behavioral health platform for K-12 schools. Students self-report their emotional wellbeing, social connectedness, and peer relationships through adaptive check-ins every 4-6 weeks. Educators get dashboards, sociograms, 16 behavioral health indicators, MTSS-aligned tiered support tools, and intervention logs. Not a survey tool — a continuous measurement system that makes the invisible visible: who's connected, who's isolated, who's struggling, and what school climate actually looks like from the student's perspective.",
@@ -30,7 +27,6 @@
     "geography": "Los Angeles metro area — K-12 schools (public, charter, private, religious)",
     "pricing": "Contact adam@bloomsights.com for district and school pricing."
   },
-
   "audience": {
     "segments": [
       {
@@ -56,21 +52,35 @@
         "seasonalWindows": [
           {
             "name": "Back-to-School Planning",
-            "months": [5, 6, 7],
-            "event_months": [8, 9],
+            "months": [
+              5,
+              6,
+              7
+            ],
+            "event_months": [
+              8,
+              9
+            ],
             "lead_weeks": 8
           },
           {
             "name": "Spring Budget Cycle",
-            "months": [1, 2, 3],
-            "event_months": [4, 5, 6],
+            "months": [
+              1,
+              2,
+              3
+            ],
+            "event_months": [
+              4,
+              5,
+              6
+            ],
             "lead_weeks": 6
           }
         ]
       }
     ]
   },
-
   "relevanceSignals": {
     "high": [
       "student mental health",
@@ -122,7 +132,6 @@
       "fundraiser"
     ]
   },
-
   "factletTopics": [
     "student mental health K-12 Los Angeles",
     "school counselor shortage California",
@@ -140,7 +149,6 @@
     "charter school SEL program",
     "private school counseling resources"
   ],
-
   "factletNotTopics": [
     "sports scores or athletics",
     "school construction or facilities",
@@ -149,7 +157,6 @@
     "school board politics unrelated to student health",
     "curriculum adoption unrelated to SEL"
   ],
-
   "warmthScoring": {
     "categories": [
       {
@@ -219,7 +226,6 @@
       "warmthScore < 9 → draftStatus = brewing always"
     ]
   },
-
   "evaluatorCriteria": [
     {
       "name": "Specificity",
@@ -252,7 +258,6 @@
       "failExample": "Finger on delete by sentence two — feels like a sales blast"
     }
   ],
-
   "outreachRules": {
     "maxWords": 150,
     "tone": "direct, knowledgeable, collegial — sounds like someone who understands schools, not a vendor pitching software",
@@ -275,7 +280,6 @@
       "in today's world"
     ]
   },
-
   "rssConfig": {
     "additionalKeywords": [
       "student mental health",
@@ -289,22 +293,8 @@
       "student isolation loneliness",
       "LAUSD wellness"
     ],
-    "feeds": [
-      {
-        "url": "https://www.eschoolnews.com/feed/",
-        "name": "eSchool News",
-        "category": "education_tech",
-        "keywords": ["mental health", "SEL", "student wellbeing", "counseling"]
-      },
-      {
-        "url": "https://www.k12dive.com/feeds/news/",
-        "name": "K-12 Dive",
-        "category": "education_policy",
-        "keywords": ["mental health", "student wellbeing", "MTSS", "SEL", "counselor"]
-      }
-    ]
+    "_feeds": "RSS feeds live in templates/skills/rss-factlet-harvester/rss_sources.md and deployed skills/rss-factlet-harvester/rss_sources.md, not manifest.json."
   },
-
   "fbSources": [
     "https://www.facebook.com/nceaorg/",
     "https://www.facebook.com/CatholicNewsAgency/",
@@ -362,34 +352,54 @@
     "https://www.facebook.com/capovalleychristian/",
     "https://www.facebook.com/BrethrenChristian/"
   ],
-
   "bookingConfig": {
     "defaultTrade": "K-12 Student Wellbeing Platform",
     "defaultBookingAction": "email_user",
     "leadCaptureEnabled": false,
     "marketplaceEnabled": false
   },
-
   "redditConfig": {
     "subreddits": [
       {
         "name": "K12",
-        "keywords": ["student mental health", "SEL", "school counselor", "student wellbeing", "MTSS"],
+        "keywords": [
+          "student mental health",
+          "SEL",
+          "school counselor",
+          "student wellbeing",
+          "MTSS"
+        ],
         "category": "intelligence"
       },
       {
         "name": "education",
-        "keywords": ["student mental health", "social emotional learning", "school climate", "counselor shortage"],
+        "keywords": [
+          "student mental health",
+          "social emotional learning",
+          "school climate",
+          "counselor shortage"
+        ],
         "category": "intelligence"
       },
       {
         "name": "LosAngeles",
-        "keywords": ["LAUSD mental health", "school counselor", "student wellbeing", "LA schools"],
+        "keywords": [
+          "LAUSD mental health",
+          "school counselor",
+          "student wellbeing",
+          "LA schools"
+        ],
         "category": "intelligence"
       },
       {
         "name": "Teachers",
-        "keywords": ["student mental health", "SEL program", "counselor", "student isolation", "school climate"],
+        "keywords": [
+          "student mental health",
+          "SEL program",
+          "counselor",
+          "student isolation",
+          "school climate"
+        ],
         "category": "intelligence"
       }
     ],
@@ -401,7 +411,6 @@
       "student belonging schools"
     ]
   },
-
   "igConfig": {
     "accounts": [
       {

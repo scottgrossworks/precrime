@@ -60,15 +60,21 @@ if (dryRun) console.log('\n*** DRY RUN — no files will be modified ***\n');
 // ---------------------------------------------------------------------------
 
 const GUTS_FILES = [
-  // Skills
+  // Skills -- top-level
   'skills/enrichment-agent.md',
-  'skills/enrichment-agent-parallel.md',
-  'skills/evaluator.md',
   'skills/relevance-judge.md',
+  'skills/init-wizard.md',
+  'skills/url-loop.md',                  // Pass 1/2: numbered tool-call backbone
+  'skills/marketplace_flow.md',          // Pass 1: Step 9 RECURSE
+  'skills/outreach_flow.md',             // Pass 1: Step 7 RECURSE
+  'skills/headless_flow.md',             // Pass 1: NEW non-interactive flow
+  'skills/hybrid_flow.md',
+  'skills/client-seeder.md',             // Pass 2: next_source / mark_source / add_sources
+  'skills/source-discovery.md',          // Pass 2: add_sources per channel
+  'skills/source-discovery/discovered_directories.md',  // header-only seed (entries protected by MEMORY_PATTERNS below)
+  // Skills -- harvesters (each pre-flight migrated to next_source(channel:X, maxAgeDays:0))
   'skills/rss-factlet-harvester/SKILL.md',
   'skills/rss-factlet-harvester/rss_sources.md',
-  'skills/source-discovery.md',
-  'skills/source-discovery/discovered_directories.md',
   'skills/fb-factlet-harvester/SKILL.md',
   'skills/fb-factlet-harvester/fb_sources.md',
   'skills/reddit-factlet-harvester/SKILL.md',
@@ -77,18 +83,19 @@ const GUTS_FILES = [
   'skills/ig-factlet-harvester/ig_sources.md',
   'skills/x-factlet-harvester/SKILL.md',
   'skills/x-factlet-harvester/x_sources.md',
-  'skills/init-wizard.md',
   // Server
-  'server/mcp/mcp_server.js',
+  'server/mcp/mcp_server.js',                // Pass 2: ensureSourceTable + 4 new actions
   'server/mcp/mcp_server_config.json',
-  'server/prisma/schema.prisma',
+  'server/prisma/schema.prisma',             // Pass 2: Source model
   // MCP config
   '.mcp.json',
   // Docs (NOT VALUE_PROP.md)
   'DOCS/CLAUDE.md',
   'DOCS/STATUS.md',
-  // Root CLAUDE.md
+  'DOCS/FOUNDATION.md',                  // Pass 1: Numbered Orchestrator Procedure
+  // Root files
   'CLAUDE.md',
+  'GOOSE.md',                            // Pass 2: forbidden-syntax block dropped
 ];
 
 // Memory patterns — NEVER overwrite these even if they somehow end up in GUTS_FILES
@@ -187,6 +194,21 @@ const PC_SCHEMA = {
     ['signalType', 'TEXT',     null],
     ['points',     'INTEGER',  null],
     ['appliedAt',  'DATETIME', "CURRENT_TIMESTAMP"],
+  ],
+  Source: [
+    ['id',             'TEXT',     null],
+    ['url',            'TEXT',     null],
+    ['channel',        'TEXT',     null],
+    ['subtype',        'TEXT',     null],
+    ['label',          'TEXT',     null],
+    ['category',       'TEXT',     null],
+    ['scrapedAt',      'DATETIME', null],
+    ['claimedAt',      'DATETIME', null],
+    ['claimedBy',      'TEXT',     null],
+    ['clientsFound',   'INTEGER',  '0'],
+    ['failedReason',   'TEXT',     null],
+    ['discoveredAt',   'DATETIME', "CURRENT_TIMESTAMP"],
+    ['discoveredFrom', 'TEXT',     null],
   ],
   Config: [
     ['id',                   'TEXT',    null],

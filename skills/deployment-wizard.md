@@ -249,7 +249,7 @@ Two targeted questions:
 
 For each URL provided:
 - If it looks like a Facebook page URL → add to `fbSources`
-- If it looks like a website/blog → add to `rssConfig.feeds` (Claude will suggest likely RSS URL based on CMS type)
+- If it looks like a website/blog → add it to `templates/skills/rss-factlet-harvester/rss_sources.md` or the deployed `skills/rss-factlet-harvester/rss_sources.md`.
 - If the user says "research it" → do a quick web search for relevant feeds and pages for this industry/geography
 
 Update the manifest with any additions before writing to disk.
@@ -486,12 +486,7 @@ For reference when generating the manifest (all field names and types):
   },
   "rssConfig": {
     "additionalKeywords": ["string"],
-    "feeds": [{
-      "url": "string",
-      "name": "string",
-      "category": "string",
-      "keywords": ["string"]
-    }]
+    "_feeds": "RSS feeds live in skills/rss-factlet-harvester/rss_sources.md"
   },
   "fbSources": ["https://www.facebook.com/..."]
 }

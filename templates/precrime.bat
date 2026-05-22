@@ -36,6 +36,17 @@ echo  Pre-Crime
 echo  Database: data\%DBNAME%
 echo.
 
+:: Preflight: confirm claude CLI is on PATH (parity with goose.bat preflight).
+where claude >nul 2>&1
+if errorlevel 1 (
+  echo.
+  echo  claude CLI not found on PATH.
+  echo  Install: npm install -g @anthropic-ai/claude-code
+  echo.
+  pause
+  exit /b 1
+)
+
 :: Setup: install deps + generate Prisma client. Idempotent -- fast if already done.
 call setup.bat
 if errorlevel 1 (

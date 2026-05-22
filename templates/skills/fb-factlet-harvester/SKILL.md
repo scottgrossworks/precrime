@@ -1,163 +1,86 @@
 ---
-name: MyProject-fb-factlet-harvester
-description: Scrape curated Facebook pages for relevant news and create factlets
+name: {{DEPLOYMENT_NAME}}-fb-factlet-harvester
+description: Scrape Facebook pages for relevant posts, create factlets.
 triggers:
-  - harvest facebook factlets
-  - scrape facebook for factlets
-  - run the fb harvester
-  - check facebook for news
+  - harvest facebook
+  - scrape fb
+  - check facebook
 ---
-<!-- v2-compat: tools migrated to precrime__pipeline / precrime__find / precrime__trades surface -->
 
-# MyProject — Facebook Factlet Harvester
+# Facebook Factlet Harvester
 
-You scrape curated Facebook pages for broadly applicable news relevant to selling the product (per `DOCS/VALUE_PROP.md`) and create factlets for the broadcast queue.
+Scrape curated Facebook pages/groups for relevant posts and create factlets.
 
-**Before running: read `DOCS/VALUE_PROP.md`** for product name, audience, and relevance signals.
-
-**Detect mode before running (Step 0).** Chrome is preferred; headless (tavily__tavily_search) is the automatic fallback. Do NOT stop if Chrome is unavailable.
-
-## Source File
-
-`skills/fb-factlet-harvester/fb_sources.md`
-
-Only scrape URLs listed in that file. Never add new pages mid-run.
-
-## Tools
-
-| Tool | Purpose |
-|------|---------|
-| `mcp__Claude_in_Chrome__tabs_context_mcp` | Verify Chrome is connected (call ONCE) |
-| `mcp__Claude_in_Chrome__navigate` | Navigate to each FB page |
-| `mcp__Claude_in_Chrome__computer` | Wait, scroll |
-| `mcp__Claude_in_Chrome__get_page_text` | Extract post text |
-| `precrime__find` | Look up clients (`action: "clients"`) and existing factlets (`action: "factlets"`) |
-| `precrime__pipeline` | Attach a factlet under a client via `action: "save", patch: { factlets: [...] }` |
+---
 
 ## Procedure
 
 ### Step 0: Pre-flight
 
-1. **Detect mode:** if `mcp__Claude_in_Chrome__tabs_context_mcp` is in your available tools, call `tabs_context_mcp({ createIfEmpty: false })`. If the tool is missing or the call fails → **HEADLESS mode** automatically. Do NOT stop. Do NOT mention Chrome to the user. Proceed.
-2. Read `fb_sources.md`. Parse all URLs (skip lines starting with `#` or blank).
-3. `precrime__find({ action: "factlets", filters: { since: "1970-01-01T00:00:00Z" } })` — load full queue for dedup.
+1. **Use latched mode.** The caller already selected interactive or headless. Do not run a separate mode probe.
+   - Interactive (Chrome available) -> scrape via Chrome navigate + get_page_text.
+   - Headless -> skip this harvester. Log `FB_SKIPPED_HEADLESS`. Facebook requires a browser session.
+2. Open a session:
+   ```
+   precrime__pipeline({ action: "start_session", workflow: "fb-factlet-harvester", target_count: 25 })
+   ```
+   Hold the returned `session_id` as `sid`.
+3. Iterate FB sources from the DB via:
+   ```
+   precrime__pipeline({ action: "next_source", channel: "fb", maxAgeDays: 0, session_id: sid })
+   ```
+   `maxAgeDays: 0` makes every previously-scraped source eligible too -- harvesters revisit feeds for fresh content. Loop until `QUEUE_EMPTY`. Pair every `next_source` with `mark_source` (clientsFound: <factlets created from this page>) before the next claim. Do NOT read `fb_sources.md` -- it's a seed file, imported once at first deploy.
+4. Load existing factlets for dedup: `precrime__find({ action: "factlets", filters: { sinceTimestamp: "<ISO timestamp for 30 days ago>" }, limit: 100 })`
 
-**If HEADLESS:** skip Steps 0.5, 1, 1.5, 2 below. Go directly to Step 0H.
+### Step 1: Scrape Each Page
 
-### Step 0H: Headless Harvesting (no Chrome)
+For each FB URL:
+1. `navigate({ url, tabId })` -> wait 2s -> scroll down -> `get_page_text({ tabId })`
+2. Extract recent posts (within 30 days).
+3. For each post with substantive content (not just a photo or share with no text):
+   - **Relevant** to VALUE_PROP config? If not: skip.
+   - **Broadly applicable or specific?**
+     - BROAD -> factlet candidate.
+     - SPECIFIC -> run `skills/shared/classify-contact.md`.
+   - **Duplicate?** Same topic as existing factlet -> skip.
 
-For each URL in fb_sources.md, extract the page name from the URL (e.g. `facebook.com/SomeGroup` → "SomeGroup"). Then:
+### Step 2: Create Factlets
+
+Follow `skills/shared/factlet-rules.md`.
+
+### Step 3: Source Growth
+
+If a scraped page links to other relevant FB pages/groups, add them to the Source table:
 
 ```
-tavily__tavily_search({ query: "[page name] facebook recent posts 2026" })
-tavily__tavily_search({ query: "[page name] facebook event news 2026" })
+precrime__pipeline({
+  action: "add_sources",
+  entries: [
+    { url: "https://facebook.com/<page>", channel: "fb", subtype: "page", discoveredFrom: "<current page url>" },
+    { url: "https://facebook.com/groups/<id>", channel: "fb", subtype: "group", discoveredFrom: "<current page url>" }
+  ]
+})
 ```
 
-Evaluate any snippets returned against the same relevance criteria in Steps 3–4. Create factlets for qualifying findings. Skip Steps 0.5–2 entirely. Jump to Step 5 (report) when done.
+Server dedups on URL; do NOT touch `fb_sources.md`.
 
-### Step 0.5: Discover AI Assistant
+### Step 4: Report
 
-Scan open tabs for `gemini.google.com` or `grok.com`. Store as `SESSION_AI = { gemini: <tabId> | null, grok: <tabId> | null }`. Chrome is already connected (required above) — this is just a tab scan, no extra overhead. If neither found, set `SESSION_AI = null`; Gemini steps below will be skipped.
+For every claimed FB source:
 
-### Step 1: Activity Screen (fast pass)
-
-Before deep-scraping any page, do a quick activity check:
-
-1. Navigate to the page
-2. Wait 2 seconds
-3. `get_page_text` — scan for the most recent post date
-4. **If most recent post is older than 60 days:** mark as STALE, skip. Note it in the report.
-5. **If the page has recent posts:** proceed to Step 2.
-
-This prevents wasting tokens on dead pages. Move fast — ~3 seconds per page.
-
-### Step 1.5: Bulk Relevance Pre-filter via Gemini (if SESSION_AI available)
-
-**Skip to Step 2 if SESSION_AI is null.**
-
-After the activity screen, you have a list of active (non-stale) pages plus a short text sample from each. Use Gemini to filter before spending Chrome cost on deep scrapes.
-
-1. Compile a numbered list of active pages: `[N] [page URL] — [first 50 words of activity-screen text]`
-2. Navigate to Gemini tab and paste:
-   > "We sell [PRODUCT_NAME] to [AUDIENCE_DESCRIPTION]. From this numbered list of Facebook pages, return ONLY the numbers of pages likely to contain relevant buying signals, industry trends, or pain points for this audience. Comma-separated numbers only, no explanation."
-   (Fill [PRODUCT_NAME] and [AUDIENCE_DESCRIPTION] from DOCS/VALUE_PROP.md)
-3. Wait 5 seconds. Read response via `get_page_text`.
-4. Parse the comma-separated list. Only run Step 2 deep scrape on those pages. Mark the rest as `GEMINI_FILTERED` in the report.
-5. Log: `Gemini pre-filter: [N active pages] → [M selected for deep scrape]`
-
-### Step 2: Deep Scrape (Gemini-selected pages only)
-
-1. Scroll down twice: `scroll down 5 ticks` → wait 1s → `scroll down 5 ticks`
-2. `get_page_text` — capture full visible post feed
-
-### Step 3: Evaluate Posts
-
-For each post, apply the same three questions as the RSS harvester:
-
-**Q1: Is this relevant to selling [PRODUCT_NAME] to [AUDIENCE_DESCRIPTION]?**
-(Use product name and audience from DOCS/VALUE_PROP.md)
-
-RELEVANT:
-(See "Relevance Signals — Relevant" section in DOCS/VALUE_PROP.md)
-
-NOT RELEVANT:
-(See "Relevance Signals — Not Relevant" section in DOCS/VALUE_PROP.md)
-
-**Q2: Is this broadly applicable — or specific to one org/person?**
-
-BROAD → create factlet. Affects multiple orgs in the audience. Proceed to Q3.
-
-SPECIFIC to one org/person → four-path classification:
-- Already in DB? `precrime__find({ action: "clients", filters: { company: "[name]" }, summary: true, limit: 1 })` → YES: append to dossier via `precrime__pipeline({ action: "save", id, patch: { factlets: [{ content, source, signalType: "context" }] } })`, no broadcast factlet. NO: continue.
-- Has trade + date + location/zip AND `leadCaptureEnabled`? → Lead HOT: `precrime__pipeline({ action: "save", patch: { name, company, source, bookings: [{ status: "leed_ready", trade, startDate, location, zip }], factlets: [{...}] } })`, run Booking Completeness Check.
-- Missing booking details AND `leadCaptureEnabled`? → Lead THIN: `precrime__pipeline({ action: "save", patch: { name, company, source, factlets: [{...}] } })`.
-- `leadCaptureEnabled = false`? → skip. Log: `LEAD_CAPTURE_OFF — [name/org]`
-
-**Q3: Is this post-2023?**
-
-Recency is a bonus, not a gate. Only skip if pre-2023 AND superseded by newer data.
-
-### Step 4: Create Factlets
-
-v2 has no standalone factlet creation. Factlets must attach to a client.
-
-OPTION A (preferred): if the post maps to an existing client, look them up and attach:
 ```
-precrime__find({ action: "clients", filters: { company: "[name]" }, summary: true, limit: 1 })
-precrime__pipeline({ action: "save", id: clientId, patch: { factlets: [{ content: "[2-3 sentences. What. Why it matters for the target decision-makers. Implication.]", source: "[Facebook page URL]", signalType: "context" }] } })
+precrime__pipeline({
+  action: "mark_source",
+  url: "<fb source url>",
+  clientsFound: <factlets created + leads captured>,
+  failedReason: <only if browser/fetch failed or yielded nothing useful>
+})
 ```
 
-OPTION B (fallback): if the intel is broad-applicable but has no client target yet, append to `logs/UNLINKED_INTEL.md` with the same content + source. Promote to a client save when one surfaces. Do not invent a placeholder client.
+Then close:
 
-Rules: same as RSS harvester. 2-3 sentences. No opinions. No mention of the product.
-One factlet per distinct news item — not one per post.
+```
+precrime__pipeline({ action: "report_session", session_id: sid })
+```
 
-### Step 5: Report
-
-- Total pages in source file
-- Pages screened as STALE (with URLs — recommend removal from fb_sources.md)
-- Pages active (passed activity screen)
-- Gemini pre-filter: N active → M selected (or "Gemini not available — all active pages deep-scraped")
-- Pages deep-scraped
-- Posts evaluated
-- Factlets created (with summaries)
-- Duplicates skipped
-- Gemini-filtered skipped: N
-
-## Performance Targets
-
-- Activity screen: ~3 seconds/page
-- Deep scrape: ~8 seconds/page
-- Expected factlet yield: 2–5 per full run
-
-## Rules
-
-- Reuse the same Chrome tab for every page — do NOT create new tabs
-- Do NOT scrape pages not in fb_sources.md
-- Do NOT create factlets for single-org events (dossier material)
-- In headless mode use tavily__tavily_search only, do NOT attempt Chrome tools
-- Do NOT interact with the page (no likes, comments, shares)
-- Do NOT follow links to external articles — evaluate post text only
-
----
-
+Report pages scraped, posts processed, factlets created, leads captured, duplicates skipped, sources added.

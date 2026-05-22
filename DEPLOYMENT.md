@@ -91,7 +91,7 @@ Each file in `skills/` was generated with your manifest tokens substituted in. H
 | File | What to tune |
 |------|-------------|
 | `skills/enrichment-agent.md` | Discovery steps, warmth scoring table, compose rules |
-| `skills/evaluator.md` | The 5 pass/fail criteria and their examples |
+| `skills/draft-checker.md` | Draft readiness checks and quality criteria |
 | `skills/relevance-judge.md` | RELEVANT / NOT RELEVANT topic lists |
 | `skills/factlet-harvester.md` | Q1 topic filter, recency threshold |
 | `skills/fb-factlet-harvester/fb_sources.md` | Add Facebook page URLs to monitor |

@@ -1,14 +1,14 @@
-# {{DEPLOYMENT_NAME}} — X/Twitter Sources for Factlet Harvesting
+# {{DEPLOYMENT_NAME}} -- X/Twitter Sources for Factlet Harvesting
 #
 # Add one source per line using the formats below.
 # Lines starting with # are comments and will be ignored.
 #
 # Three source types are supported:
 #
-# ─────────────────────────────────────────────────────────────────────────────
+# -----------------------------------------------------------------------------
 # ACCOUNTS (public profiles to monitor)
-# ─────────────────────────────────────────────────────────────────────────────
-# Format: @handle — description
+# -----------------------------------------------------------------------------
+# Format: @handle -- description
 #
 # Good candidates:
 #   - Industry association accounts
@@ -17,17 +17,17 @@
 #   - Competitor accounts (market intelligence)
 #   - Community hub accounts where your buyers post
 #
-# ─────────────────────────────────────────────────────────────────────────────
-# ACCOUNTS — ADD BELOW
-# ─────────────────────────────────────────────────────────────────────────────
+# -----------------------------------------------------------------------------
+# ACCOUNTS -- ADD BELOW
+# -----------------------------------------------------------------------------
 
-# example: @YourIndustryAssociation — national trade body
-# example: @LocalChamberOfCommerce — regional business news
+# example: @YourIndustryAssociation -- national trade body
+# example: @LocalChamberOfCommerce -- regional business news
 
-# ─────────────────────────────────────────────────────────────────────────────
+# -----------------------------------------------------------------------------
 # HASHTAGS (trending topics and buying signals)
-# ─────────────────────────────────────────────────────────────────────────────
-# Format: #hashtag — what it signals
+# -----------------------------------------------------------------------------
+# Format: #hashtag -- what it signals
 #
 # Good candidates for FACTLETS:
 #   - Industry trend hashtags (#corporateeventplanning, #SELpolicy)
@@ -38,22 +38,22 @@
 #   - Event planning hashtags (#weddingplanning2026, #holidayparty)
 #   - Location + service hashtags (#LAevents, #NYCwedding)
 #
-# ─────────────────────────────────────────────────────────────────────────────
-# HASHTAGS — ADD BELOW
-# ─────────────────────────────────────────────────────────────────────────────
+# -----------------------------------------------------------------------------
+# HASHTAGS -- ADD BELOW
+# -----------------------------------------------------------------------------
 
-# example: #examplehashtag — buying intent signal
+# example: #examplehashtag -- buying intent signal
 
-# ─────────────────────────────────────────────────────────────────────────────
+# -----------------------------------------------------------------------------
 # KEYWORD SEARCHES (freeform X search queries)
-# ─────────────────────────────────────────────────────────────────────────────
-# Format: keyword: "search phrase" — why this matters
+# -----------------------------------------------------------------------------
+# Format: keyword: "search phrase" -- why this matters
 #
 # These run as X search queries. Use quotes for exact phrases.
 # Combine trade + geography for local relevance.
 #
-# ─────────────────────────────────────────────────────────────────────────────
-# KEYWORD SEARCHES — ADD BELOW
-# ─────────────────────────────────────────────────────────────────────────────
+# -----------------------------------------------------------------------------
+# KEYWORD SEARCHES -- ADD BELOW
+# -----------------------------------------------------------------------------
 
-# example: keyword: "event vendor needed Los Angeles" — buying intent, local
+# example: keyword: "event vendor needed Los Angeles" -- buying intent, local

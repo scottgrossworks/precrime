@@ -1,9 +1,39 @@
 ---
 title: Pre-Crime — Current Project State
-tags: [status, done, pending, sessions, decisions, warmth, x-harvester, sentAt, hermes, docker]
+tags: [status, done, pending, sessions, decisions, warmth, x-harvester, sentAt, hermes, docker, pass-1, pass-2, source-queue]
 source_docs: [DOCS/STATUS.md, DOCS/HERMES.md]
-last_updated: 2026-04-17 (session 16 — Hermes integration day 3)
+last_updated: 2026-05-06 (session 17 — Pass 1 + Pass 2 workflow refactor)
 staleness: none
+---
+
+## Session 17 — Workflow refactor (Pass 1 + Pass 2), 2026-05-06
+
+**Goal:** make the recursive workflow legible and durable to any tool-calling orchestrator (goose, hermes, claude code), not just frontier models.
+
+**Pass 1 — markdown surface cleanup (no server changes):**
+- `templates/skills/url-loop.md` rewritten from pseudocode to numbered tool-call procedure with explicit Step 7 termination contract.
+- `templates/skills/marketplace_flow.md` got Step 9 RECURSE; existing share-error rule renumbered to Step 10.
+- `templates/skills/outreach_flow.md` got Step 7 RECURSE.
+- `templates/docs/FOUNDATION.md` gained the **Numbered Orchestrator Procedure** section: 9-step state machine with branches, three named recursion arms (source/client/booking), four-condition termination, and a server-vs-agent ownership table.
+- `templates/skills/headless_flow.md` (NEW) — non-interactive marketplace pipeline with explicit override-map for every approval gate. Init-wizard now routes `headless` mode here instead of `marketplace_flow.md`.
+
+**Pass 2 — queue moved to DB (server changes):**
+- New `Source` model in `server/prisma/schema.prisma`. Fields: url (unique), channel, subtype, label, category, scrapedAt, claimedAt, claimedBy, clientsFound, failedReason, discoveredAt, discoveredFrom. Indexes on channel, scrapedAt, claimedAt.
+- `server/mcp/mcp_server.js` — added `ensureSourceTable()` startup migration (CREATE TABLE IF NOT EXISTS, idempotent — handles deployed DBs without rebuild). Added four pipeline actions: `next_source`, `mark_source`, `add_sources`, `import_sources`. Channel taxonomy: directory|rss|fb|ig|reddit|x|blog|website. Server normalizes handle/tag inputs (`r/sub`, `@handle`, `#tag`) to canonical URLs. Work-stealing semantics: 10-min claim timeout means crashed agents auto-release their rows.
+- `pipeline` tool description in tools/list updated to enumerate all 13 actions. inputSchema enum extended; new fields added (channel, maxAgeDays, url, scrapedAt, clientsFound, failedReason, entries).
+- `scripts/migrate-db.js` PC_SCHEMA — Source entry added per the three-file schema sync rule.
+- Skills migrated off shell-echo: url-loop.md (next_source / mark_source), source-discovery.md (add_sources per channel), client-seeder.md "Follow Links" (add_sources), each harvester's Source Growth step (rss / fb / reddit). init-wizard.md Step 1.5 calls `import_sources` (idempotent, safe on every startup).
+- `templates/GOOSE.md` — the 14-line "FORBIDDEN syntax" block for shell echo to `_sources.md` files dropped; replaced with one line pointing at `add_sources`.
+
+**State management decision (locked):** the DB IS the state. Agents hold session_id and the in-flight URL only. Work-stealing queue pattern. No per-agent state object, no continuation tokens, no stateful agent-side files.
+
+**Source-agnostic confirmed:** Source table covers RSS / FB / IG / Reddit / X / blog / directory / generic website via channel taxonomy + URL normalization. LLM queries (Gemini, Grok) are explicitly out of scope -- they're transient lookups inside source-discovery, not durable sources.
+
+**Pending follow-ups:**
+- Regenerate `data/blank.sqlite` and `data/template.sqlite` via `npx prisma db push --force-reset` against absolute path. Not strictly required (CREATE TABLE IF NOT EXISTS handles deployed DBs) but per three-file sync rule.
+- Rebuild zip via `build.bat` and redeploy DALLAS, OR copy server/ + scripts/ + templates/ into DALLAS\precrime and run setup.bat to regenerate Prisma client.
+- Watch first DALLAS run for QUEUE_EMPTY reports to confirm import_sources picked up all seed files.
+
 ---
 
 ## Session 16 — Hermes Integration (in progress)
@@ -34,7 +64,7 @@ Manifest-driven agentic enrichment engine. Enriches contacts, scores warmth, com
 
 ## What's Done (Sessions 1-9)
 
-- All 19 MCP tools in `mcp_server.js`; registered as `precrime-mcp`
+- All MCP tools in `mcp_server.js` (originally 22 CRUD tools, since collapsed into 3 workflow tools — pipeline / find / trades — see [[mcp]]); registered as `precrime-mcp`
 - All skill templates: init-wizard, enrichment-agent, evaluator, factlet-harvester, fb-factlet-harvester, reddit-factlet-harvester, ig-factlet-harvester, relevance-judge
 - `deploy.js` with `--no-install` flag and correct path resolution
 - `build.bat` — zero args, handles staging/zipping/cleanup
@@ -96,13 +126,14 @@ Manifest-driven agentic enrichment engine. Enriches contacts, scores warmth, com
 | File | `server/mcp/mcp_server.js` | Remote Lambda |
 | Transport | Local stdin/stdout | Remote POST /mcp |
 | Backend | Prisma 5 → SQLite | DynamoDB |
-| Tools | 19 | createLeed + reads |
+| Tools | 3 (pipeline / find / trades — pipeline has 13 actions) | createLeed + reads |
 
 ---
 
 ## Related
 - [[architecture]] — full architecture details
-- [[mcp]] — all 19 MCP tools
+- [[mcp]] — current 3-tool MCP, all action enumerations
+- [[source-queue]] — Pass 2 work-stealing source queue
 - [[scoring]] — dual-gate scoring system, warmth rubric, sentAt tracking
-- [[ontology]] — entity model, four output paths
+- [[ontology]] — entity model, four output paths, Source entity
 - [[deployment]] — build system, end-user flow

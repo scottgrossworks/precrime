@@ -1,177 +1,131 @@
 ---
-title: Pre-Crime MCP Server — All 19 Tools
-tags: [mcp, tools, prisma, sqlite, json-rpc, booking, client, factlet, config, scoring]
-source_docs: [DOCS/STATUS.md, DOCS/MCP_BRIEFING.md, DOCS/DEPLOYMENT.md, DOCS/PLAN.md]
-last_updated: 2026-04-08
+title: Pre-Crime MCP Server — 3 tools, current surface
+tags: [mcp, tools, prisma, sqlite, json-rpc, pipeline, find, trades, pass-2]
+source_docs: [server/mcp/mcp_server.js, server/prisma/schema.prisma]
+last_updated: 2026-05-06
 staleness: none
 ---
 
-The Pre-Crime MCP server is a local stdio JSON-RPC 2.0 subprocess. Uses Prisma 5, writes to a local SQLite DB, and exposes 19 tools to Claude Code. No HTTP server. No Express. No additional npm packages beyond Prisma, readline, fs, and path.
-
-> WARNING — STALE? `MCP_BRIEFING.md` (dated 2026-04-02) lists 4 issues as "broken/missing" (Prisma schema has no Booking model, Config missing v2.0 fields, `update_booking` doesn't auto-evaluate `leed_ready`, `get_stats` missing booking counts). `STATUS.md` (authoritative, sessions 1-8 complete) says all 15 tools are done and working, and the blank DB ships pre-built with the full schema. The issues in MCP_BRIEFING.md have been resolved. Treat MCP_BRIEFING.md as a historical implementation record, not a current bug list.
-
-> WARNING — STALE? `MCP_BRIEFING.md` says the schema to edit is at `BLOOMLEEDZ\server\prisma\schema.prisma`. `STATUS.md` uses `PRECRIME\server\prisma\schema.prisma`. BLOOMLEEDZ is the old project name. The correct path is `PRECRIME\server\prisma\`.
+The Pre-Crime MCP server is a local stdio JSON-RPC 2.0 subprocess. Prisma 5 → SQLite. Three tools. The 22-tool CRUD surface from the early sessions was collapsed into 3 workflow-level tools (the MCP_REWRITE) so weaker orchestrators (goose, hermes) don't drown in a tool router. Pass 2 added four queue actions to the `pipeline` tool.
 
 ---
 
 ## Transport
 
 ```
-Claude Code ←→ server/mcp/mcp_server.js (stdin/stdout JSON-RPC 2.0)
+Orchestrator (Claude Code | goose | hermes) ←→ server/mcp/mcp_server.js  (stdin/stdout JSON-RPC 2.0)
+                                                  |
+                                                  | PrismaClient (Prisma 5)
+                                                  |
+                                              data/myproject.sqlite
 ```
 
-Wired via `.mcp.json` in the workspace root. Claude Code reads `.mcp.json` at startup. MCP connects once — no mid-session reconnect.
+Wired via `.mcp.json` in the workspace root. MCP connects once at orchestrator startup — no mid-session reconnect.
 
 ---
 
-## Configuration Files
+## Three tools
+
+| Tool | Purpose |
+|---|---|
+| `pipeline` | All write operations + read-state. 13 actions. Queue management, sessions, scoring, sources. |
+| `find` | Read-only search. 4 actions: clients / bookings / factlets / drafts. |
+| `trades` | Canonical Leedz trade names. 10-minute cache. |
+
+All other interactions (skill files, agent prose) reference these names verbatim. There are no `create_client`, `update_booking`, `score_client`, etc. tools anymore — those collapsed into `pipeline.save` and `pipeline.next`.
+
+---
+
+## `pipeline` — 13 actions
+
+| action | Purpose |
+|---|---|
+| `status` | Full system state in one call. config + stats + completeness + readyDrafts + brewingCount. |
+| `configure` | Update Config fields. |
+| `next` | Atomically claim and return the next client (or booking) work item, fully hydrated. Stamps `lastQueueCheck` so other agents skip it. |
+| `save` | Create or update a Client. Server auto-dedups by company, auto-scores, auto-promotes attached Bookings to `leed_ready` only when `DOCS/SCORING.json` passes. |
+| `delete` | Remove a Booking, Client, or Factlet. Cascades. |
+| `rescore` | Re-evaluate every non-terminal Booking against the current `DOCS/SCORING.json`. Use after editing scoring policy. |
+| `start_session` | Open a server-issued workflow session. Returns `session_id`. |
+| `report_session` | Close session and return server-computed truth: `requested / actually_saved / failed / saved_clients[] / failures[]`. ONLY sanctioned summary. |
+| `audit_session` | Inspect session events without closing. Use when the user says "what did you do" / "show the audit". |
+| `next_source` | (Pass 2) Atomically claim a Source row for scraping. Returns `CLAIMED` or `QUEUE_EMPTY`. |
+| `mark_source` | (Pass 2) Release the claim and persist scrape result. |
+| `add_sources` | (Pass 2) Bulk-insert new Source URLs with dedup on URL. |
+| `import_sources` | (Pass 2) One-time migration: read seed `_sources.md` files, populate Source table. Idempotent. |
+
+See [[source-queue]] for the four Pass 2 actions in detail and the work-stealing semantics.
+
+### `pipeline.save` — what the server enforces
+
+Every save call:
+- Rejects empty patches (-32602).
+- Dedups by company name (merges with existing record).
+- Runs `score_target` on the client.
+- Re-scores every booking under that client.
+- Writes `leed_ready` status back when the canonical `DOCS/SCORING.json` gate passes.
+- If `session_id` is passed, logs a `SessionEvent` row.
+
+Agents do not call score_client manually. Save is the only write path; scoring is its side effect.
+
+### Session truth: `start_session` / `report_session`
+
+`report_session` is the ONLY sanctioned summary of session results. It returns `{session_id, workflow, requested, actually_saved, failed, saved_clients[], failures[], duration_ms}` derived from the server-side `SessionEvent` log. The agent cannot fake counts because the events are server-recorded.
+
+`start_session` enforces a 60s cooldown if you re-open the same `workflow` string. A 3-min save-or-terminate watchdog applies on the read actions (`status`, `next`, `rescore`) — if you read state but never save, the server terminates your access until you save.
+
+---
+
+## `find` — 4 read actions
+
+| action | Filters |
+|---|---|
+| `clients` | search, name, email, company, segment, draftStatus, warmthScore, minWarmthScore, maxWarmthScore |
+| `bookings` | status, trade, search, id |
+| `factlets` | sinceTimestamp, clientId |
+| `drafts` | minScore (drafts with `draftStatus=ready`) |
+
+Default `summary=true` returns slim records (no dossier/draft/targetUrls). Pass `summary=false` only when you need full records.
+
+---
+
+## `trades`
+
+Returns canonical Leedz trade names from the Leedz API. Cached 10 minutes. Serves stale cache on network failure. The ONLY authoritative source for valid Leedz trade names — never guess from training data.
+
+---
+
+## Configuration files
 
 | File | Contents |
-|------|---------|
-| `server/mcp/mcp_server_config.json` | DB path: `../data/myproject.sqlite` (relative to `server/mcp/`) |
-| `server/.env` | `DATABASE_URL="file:../data/myproject.sqlite"` (relative to `server/`) |
-| `server/package.json` | `@prisma/client: 5.22.0`, dotenv |
-| `server/prisma/schema.prisma` | Prisma 5 schema — Client, Booking, Factlet, ClientFactlet, Config |
-
----
-
-## All 19 Tools
-
-### Client Tools (8)
-
-| Tool | Args | Purpose |
-|------|------|---------|
-| `get_next_client` | `criteria?` | Atomic cursor fetch — stamps `lastQueueCheck`. Use for the enrichment loop. |
-| `get_client` | `id` | Fetch one client by CUID |
-| `create_client` | `fields` | Create a new client. Requires `name` OR `company`. Defaults `draftStatus` to `"brewing"`. Always set `source`. |
-| `search_clients` | `query` | Filter by name, company, segment, draftStatus |
-| `update_client` | `id, fields` | Write any Client columns. Use for dossier append, draftStatus change, etc. |
-| `get_ready_drafts` | — | All clients with `draftStatus=ready`, sorted by dossierScore desc |
-| `get_stats` | — | Counts by draftStatus, contactGate pass/fail, dossierScore distribution, factlet/linked factlet counts, booking counts by status |
-| `get_config` | — | Read the Config table (single row, id="config") |
-
-**`get_stats` response includes:**
-- Client counts: total, by draftStatus (brewing, ready, sent)
-- Contact gate: pass/fail counts
-- Dossier scores: high (>=10), mid (5-9), low (<5), unscored
-- Factlet counts: total factlets, total linked factlet associations
-- Booking counts: total, by status (new, leed_ready, taken, shared, expired)
-
-### Factlet Tools (3)
-
-| Tool | Args | Purpose |
-|------|------|---------|
-| `create_factlet` | `content, source` | Add to broadcast queue |
-| `get_new_factlets` | `since` | Factlets after a timestamp (ISO date). Use for dedup check. |
-| `delete_factlet` | `id` | Remove from broadcast queue |
-
-### Config Tools (1)
-
-| Tool | Args | Purpose |
-|------|------|---------|
-| `update_config` | `fields` | Write any Config columns |
-
-**Config fields writable via `update_config`:**
-- `businessName`, `description`, `serviceArea`
-- `activeEntities` (JSON string)
-- `defaultTrade`, `marketplaceEnabled`, `leadCaptureEnabled`
-- `leedzEmail` — user's theleedz.com email (set during init-wizard Step 5a)
-- `leedzSession` — pre-generated HS256 JWT for The Leedz MCP `createLeed` calls
-
-### Booking Tools (4)
-
-| Tool | Args | Purpose |
-|------|------|---------|
-| `create_booking` | `clientId, fields` | Create Booking record. Auto-evaluates Booking Action Criterion. |
-| `update_booking` | `id, fields` | Update booking status, leedId, etc. Also auto-evaluates Booking Action Criterion. |
-| `get_bookings` | `filters?` | List bookings, optionally filtered by status |
-| `get_client_bookings` | `clientId` | All bookings for one client |
-
-**Booking Action Criterion (auto-evaluated by both `create_booking` and `update_booking`):**
-- If `trade` + `startDate` + (`location` OR `zip`) are all present AND status wasn't explicitly set → auto-set `status: "leed_ready"`
-- For `update_booking`: fetches existing record, merges with update, then re-evaluates
-
-### Scoring Tools (3) — added 2026-04-08
-
-| Tool | Args | Purpose |
-|------|------|---------|
-| `link_factlet` | `clientId, factletId, signalType` | Associate a broadcast factlet with a client. Signal types: `pain` (2 pts), `occasion` (2 pts), `context` (1 pt). Idempotent — upserts on unique(clientId, factletId). |
-| `get_client_factlets` | `clientId` | Hydrate all linked factlets for a client. Returns factlet content, signalType, points, appliedAt. Used at start of enrichment to load broadcast intel context. |
-| `score_client` | `clientId, intelScore?` | Procedural client scoring (no LLM). Computes contactGate (binary), factletScore (sum from join table), dossierScore (intel + factlets), canDraft (gate AND threshold). Writes scores back to DB. Returns full breakdown + recommended action. |
-
-**`score_client` details:**
-- Contact gate reuses `isGenericEmail()` — same 34-prefix list used by `score_booking`
-- Draft threshold: `dossierScore >= 5` (hardcoded, minimum intel bar). Full ready threshold also requires `warmthScore >= 9` (set by enrichment agent).
-- `intelScore` param (D2+D3, max 7) set by enrichment agent after scraping. Stored on client for recomputation.
-- See [[scoring]] for the full scoring system design.
+|---|---|
+| `server/mcp/mcp_server_config.json` | Logging metadata (DB path is set via `DATABASE_URL` env var, not this file). |
+| `DOCS/SCORING.json` | Canonical booking + client scoring weights, gates, regex patterns, generic-email prefixes, and Leedz readiness requirements. |
+| `server/.env` | `DATABASE_URL="file:../data/myproject.sqlite"` — set by `precrime.bat`. |
+| `server/package.json` | `@prisma/client: 5.22.0`, dotenv. |
+| `server/prisma/schema.prisma` | Prisma 5 schema — Client, Booking, Factlet, ClientFactlet, Session, SessionEvent, **Source**, Config. |
 
 ---
 
 ## JWT for The Leedz MCP (leedz-share plugin only)
 
-`Config.leedzSession` stores a pre-generated HS256 JWT. Only needed if the `plugins/leedz-share/` plugin is installed. Generated at workspace setup (init-wizard Step 5a).
-
-```
-jwt.encode(
-  {'email': leedzEmail, 'type': 'session', 'exp': <1yr from now>},
-  JWT_SECRET,
-  algorithm='HS256'
-)
-```
-
-JWT_SECRET: `648373eeea08d422032db0d1e61a1bc096fe08dd2729ce611092c7a1af15d09c`
-
-If the leedzEmail doesn't exist in Leedz_DB yet, `addLeed` will auto-create a stub user on first post.
+`Config.leedzSession` stores a pre-generated HS256 JWT. Required only when the optional `plugins/leedz-share/` plugin is installed and the user posts a leed via `leedz__createLeed`. Generated at workspace setup.
 
 ---
 
-## What NOT To Do With This Server
+## What NOT to do with this server
 
 - Do NOT add an HTTP server. stdin/stdout only.
-- Do NOT modify tool handler signatures or tool names. Skill files reference exact names.
+- Do NOT split `pipeline` back into per-entity tools. The collapse to 3 was deliberate and fixed weaker orchestrators' tool routers.
 - Do NOT add new npm packages. Prisma + readline + fs + path is the full dependency list.
-- Do NOT touch the RSS scorer (`rss-scorer-mcp/`). Separate concern.
-- Do NOT wire marketplace posting in this server. Marketplace sharing is handled by the optional `plugins/leedz-share/` plugin.
-
----
-
-## Skill References to Tool Names
-
-Skill files in `templates/skills/` reference tools using the `mcp__precrime-mcp__` prefix format when called from Claude:
-
-```
-mcp__precrime-mcp__create_client
-mcp__precrime-mcp__create_factlet
-mcp__precrime-mcp__get_new_factlets
-mcp__precrime-mcp__search_clients
-mcp__precrime-mcp__update_client
-mcp__precrime-mcp__create_booking
-mcp__precrime-mcp__get_config
-mcp__precrime-mcp__link_factlet
-mcp__precrime-mcp__get_client_factlets
-mcp__precrime-mcp__score_client
-```
-
----
-
-## The Leedz MCP (Separate — Reference Only)
-
-Not part of this server. Listed here to prevent conflation.
-
-| | Value |
-|--|--|
-| File | `FRONT_3\py\mcp_server\lambda_function.py` |
-| Transport | Remote `POST /mcp` on API Gateway |
-| Backend | boto3 → Lambdas → DynamoDB |
-| Phase 1 tools | `getTrades`, `getStats`, `getLeedz`, `getUser`, `createLeed` |
-
-`createLeed` calls the `addLeed` Lambda. There is a separate SSR Lambda also named `createLeed` — never invoke it.
+- Do NOT touch the RSS scorer (`rss/rss-scorer-mcp/`). Separate MCP, separate concern.
+- Do NOT bypass `pipeline.save` to write the DB. Direct Prisma writes from anywhere outside this file skip scoring + session logging.
 
 ---
 
 ## Related
-- [[scoring]] — Client scoring system, contact gate, dossier score, draft eligibility
-- [[ontology]] — Booking entity, status values, field definitions
+- [[source-queue]] — Pass 2 queue: Source table, four new actions, work-stealing
+- [[ontology]] — entity definitions
+- [[scoring]] — pointer to canonical `DOCS/SCORING.json`
 - [[architecture]] — DB path resolution, Prisma version constraint
-- [[deployment]] — MCP config file locations, troubleshooting
-- [[current]] — `createLeed` with JWT verified; `share_booking` removed (see `plugins/leedz-share/`)
+- [[current]] — session log

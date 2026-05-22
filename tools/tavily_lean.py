@@ -74,6 +74,15 @@ EMAIL_RE = re.compile(
 PHONE_RE = re.compile(
     r"(?:\+?1[\s.-]?)?\(?[2-9]\d{2}\)?[\s.-]?\d{3}[\s.-]?\d{4}"
 )
+URL_RE = re.compile(r"https?://[^\s<>)\"']+")
+COMPANY_SUFFIX_RE = re.compile(
+    r"\b(?:LLC|L\.L\.C\.|Inc\.?|Corp\.?|Corporation|Co\.?|Company|Ltd\.?|"
+    r"Group|Studio|Studios|Events?|Productions?|Catering|Rentals?|Designs?|"
+    r"Planning|Entertainment|Photography|Photo Booth|Florals?|Venue|Bakery|"
+    r"DJ|Media|Creative|Agency)\b",
+    re.IGNORECASE,
+)
+NAMEISH_LINE_RE = re.compile(r"^[A-Z][A-Za-z0-9&'.,/+\- ]{2,80}$")
 # Drop common cookie/nav/footer boilerplate
 BOILERPLATE_PATTERNS = [
     re.compile(r"(?i)cookie\s*(policy|consent|preferences)"),
@@ -83,6 +92,8 @@ BOILERPLATE_PATTERNS = [
     re.compile(r"(?i)skip\s*to\s*(main\s*)?content"),
     re.compile(r"(?i)subscribe\s*to\s*(our\s*)?newsletter"),
     re.compile(r"(?i)follow\s*us\s*on"),
+    re.compile(r"(?i)^(book|contact|learn|read|view|see|sign|get|log)\s+(now|more|in|up|started|quote|tickets?)$"),
+    re.compile(r"(?i)^(home|about|contact|login|search|menu|vendors?|categories|featured|top rated)$"),
 ]
 
 
@@ -230,10 +241,101 @@ def search_lean(
     return lean
 
 
-def extract_lean(url: str, query_hint: str = "", timeout: int = 30) -> dict:
+def clean_for_extract(text: str) -> str:
     """
-    Extract one URL, return only relevant snippets + structured data.
-    query_hint biases snippet selection toward what you care about.
+    Mild cleanup for full-page extraction: strip markdown image syntax,
+    empty links, and inline link URLs (keep visible link text).
+    PRESERVE list structure, headers, paragraphs -- vendor directories
+    use lists and the agent needs to see them.
+    """
+    text = MD_IMAGE_RE.sub("", text)
+    text = EMPTY_LINK_RE.sub("", text)
+    text = MD_LINK_RE.sub(r"\1", text)
+    text = re.sub(r"\n{3,}", "\n\n", text)
+    return text.strip()
+
+
+def _visible_lines(text: str) -> list[str]:
+    """Return readable lines while preserving page-list structure."""
+    cleaned = clean_for_extract(text)
+    lines = []
+    for raw in cleaned.splitlines():
+        line = re.sub(r"\s+", " ", raw).strip(" -\t\r")
+        if len(line) < 2 or is_boilerplate(line):
+            continue
+        lines.append(line)
+    return lines
+
+
+def _candidate_kind(line: str) -> str | None:
+    if EMAIL_RE.search(line) or PHONE_RE.search(line):
+        return "contact_line"
+    if COMPANY_SUFFIX_RE.search(line):
+        return "companyish"
+    if NAMEISH_LINE_RE.match(line):
+        words = [w for w in re.split(r"\s+", line) if w]
+        if 1 <= len(words) <= 7:
+            return "heading_or_card"
+    return None
+
+
+def extract_candidates(content: str, limit: int = 80) -> dict:
+    """
+    Assistive extraction pass for the LLM, not a final classifier.
+
+    It pulls obvious structure (emails, phones, URLs, heading/card-like lines)
+    so the agent can hand a smaller evidence set plus raw text to the LLM for
+    strict JSON extraction. Regex does not decide relevance or save records.
+    """
+    lines = _visible_lines(content)
+    candidates = []
+    seen = set()
+    for i, line in enumerate(lines):
+        kind = _candidate_kind(line)
+        if not kind:
+            continue
+        key = line.lower()
+        if key in seen:
+            continue
+        seen.add(key)
+        before = lines[i - 1] if i > 0 else ""
+        after = lines[i + 1] if i + 1 < len(lines) else ""
+        candidates.append({
+            "text": line,
+            "kind": kind,
+            "context": " | ".join(p for p in [before, line, after] if p)[:500],
+        })
+        if len(candidates) >= limit:
+            break
+
+    urls = list(dict.fromkeys(URL_RE.findall(content)))[:40]
+    emails = list(dict.fromkeys(EMAIL_RE.findall(content)))[:20]
+    phones = list(dict.fromkeys(PHONE_RE.findall(content)))[:10]
+    return {
+        "emails": emails,
+        "phones": phones,
+        "urls": urls,
+        "structured_lines": candidates,
+        "note": (
+            "Procedural hints only. LLM must classify into clients, factlets, "
+            "and sources against VALUE_PROP before saving."
+        ),
+    }
+
+
+def extract_lean(url: str, query_hint: str = "", timeout: int = 30, mode: str = "full") -> dict:
+    """
+    Extract one URL.
+
+    mode="full" (default): cleaned full page content. Strips markdown image syntax,
+        inline link URLs, empty links. PRESERVES list structure, headers, vendor
+        names. Use this for vendor lists, exhibitor rosters, contact directories.
+
+    mode="snippet": legacy behavior. Picks 5 query-relevance-scored sentences
+        (~800 chars max). Useful for teasing a long article. Will destroy vendor
+        lists via snippet selection + bullet-salad regex; do not use for extraction.
+
+    query_hint biases snippet selection in mode="snippet". Ignored in mode="full".
     """
     api_key = get_api_key()
     payload = {
@@ -250,16 +352,24 @@ def extract_lean(url: str, query_hint: str = "", timeout: int = 30) -> dict:
 
     r = results[0]
     content = r.get("raw_content") or r.get("content") or ""
-    snippet = pick_relevant_snippets(content, query_hint or url, max_snippets=5, max_chars=800)
-    emails = list(dict.fromkeys(EMAIL_RE.findall(content)))[:10]
-    phones = list(dict.fromkeys(PHONE_RE.findall(content)))[:5]
+
+    if mode == "snippet":
+        body = pick_relevant_snippets(content, query_hint or url, max_snippets=5, max_chars=800)
+    else:
+        body = clean_for_extract(content)
+
+    emails = list(dict.fromkeys(EMAIL_RE.findall(content)))[:20]
+    phones = list(dict.fromkeys(PHONE_RE.findall(content)))[:10]
+    candidates = extract_candidates(content)
 
     lean = {
         "url": url,
         "ok": True,
-        "snippet": snippet,
+        "mode": mode,
+        "content": body,
         "emails": emails,
         "phones": phones,
+        "candidates": candidates,
     }
     lean_chars = len(json.dumps(lean))
     lean["stats"] = {

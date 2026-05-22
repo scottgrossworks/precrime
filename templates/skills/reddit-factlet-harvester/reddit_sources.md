@@ -1,9 +1,9 @@
-# {{DEPLOYMENT_NAME}} — Reddit Sources for Factlet Harvesting
+# {{DEPLOYMENT_NAME}} -- Reddit Sources for Factlet Harvesting
 #
 # Add one subreddit per line using the format below.
 # Lines starting with # are comments and will be ignored.
 #
-# Format: r/subredditname — description
+# Format: r/subredditname -- description
 #
 # Guidelines:
 # - Active subreddits only (posts within last 30 days)

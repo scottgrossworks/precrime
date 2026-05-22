@@ -230,18 +230,7 @@ if (fs.existsSync(mcpSrc)) {
   console.warn('    Copy server/mcp/mcp_server.js into the generated workspace manually.');
 }
 
-// 2a. Copy scoring_config.json — policy file loaded at MCP server startup.
-// Tuning the booking/client scorer means editing this JSON, not the JS.
-const scoringSrc = path.join(PRECRIME, 'server', 'mcp', 'scoring_config.json');
-const scoringDst = path.join(outputDir, 'server', 'mcp', 'scoring_config.json');
-if (fs.existsSync(scoringSrc)) {
-  copyFile(scoringSrc, scoringDst);
-} else {
-  console.warn(`  ⚠ scoring_config.json missing: ${scoringSrc}`);
-  console.warn('    The MCP server will fail fast on startup without it.');
-}
-
-// 2a-bis. Copy gmail MCP server (mcp_gmail.js + gmail_mcp_config.json).
+// 2a. Copy gmail MCP server (mcp_gmail.js + gmail_mcp_config.json).
 // Provides gmail_send tool. Receives OAuth token from Chrome extension on port 3001.
 const gmailSrc    = path.join(PRECRIME, 'server', 'mcp', 'mcp_gmail.js');
 const gmailDst    = path.join(outputDir, 'server', 'mcp', 'mcp_gmail.js');
@@ -259,7 +248,16 @@ if (fs.existsSync(gmailCfgSrc)) {
   console.warn(`  ⚠ gmail_mcp_config.json missing: ${gmailCfgSrc}`);
 }
 
-// 2b. Copy server/package.json
+// 2b. Copy sync-config.js
+const syncSrc = path.join(PRECRIME, 'server', 'sync-config.js');
+const syncDst = path.join(outputDir, 'server', 'sync-config.js');
+if (fs.existsSync(syncSrc)) {
+  copyFile(syncSrc, syncDst);
+} else {
+  console.warn(`  ⚠ sync-config.js missing: ${syncSrc}`);
+}
+
+// 2c. Copy server/package.json
 const pkgSrc = path.join(PRECRIME, 'server', 'package.json');
 const pkgDst = path.join(outputDir, 'server', 'package.json');
 if (fs.existsSync(pkgSrc)) {
@@ -268,7 +266,7 @@ if (fs.existsSync(pkgSrc)) {
   console.warn(`  ⚠ server/package.json missing: ${pkgSrc}`);
 }
 
-// 2c. Copy server/prisma/schema.prisma
+// 2d. Copy server/prisma/schema.prisma
 const schemaSrc = path.join(PRECRIME, 'server', 'prisma', 'schema.prisma');
 const schemaDst = path.join(outputDir, 'server', 'prisma', 'schema.prisma');
 if (fs.existsSync(schemaSrc)) {
@@ -277,7 +275,7 @@ if (fs.existsSync(schemaSrc)) {
   console.warn(`  ⚠ server/prisma/schema.prisma missing: ${schemaSrc}`);
 }
 
-// 2d. npm install + prisma generate in generated workspace
+// 2e. npm install + prisma generate in generated workspace
 if (!noInstall) {
   console.log('\nInstalling server dependencies (npm install)...');
   try {
@@ -298,7 +296,7 @@ if (!noInstall) {
   console.log('\n[--no-install] Skipping npm install + prisma generate (run setup.bat on target)');
 }
 
-// 2e. Copy RSS scorer (index.js + package.json) and install its deps
+// 2f. Copy RSS scorer (index.js + package.json) and install its deps
 const rssSrc    = path.join(PRECRIME, 'rss', 'rss-scorer-mcp', 'index.js');
 const rssDst    = path.join(outputDir, 'rss', 'rss-scorer-mcp', 'index.js');
 const rssPkgSrc = path.join(PRECRIME, 'rss', 'rss-scorer-mcp', 'package.json');
@@ -324,7 +322,7 @@ if (!noInstall) {
   console.log('[--no-install] Skipping RSS npm install');
 }
 
-// 2f. Copy tools/ — all files, dynamically (no manual update needed when new tools are added).
+// 2g. Copy tools/ — all files, dynamically (no manual update needed when new tools are added).
 // Filter out directories (e.g. __pycache__) and dotfiles to prevent fs.copyFileSync crashes.
 const toolsSrc = path.join(PRECRIME, 'tools');
 if (fs.existsSync(toolsSrc)) {
@@ -458,9 +456,6 @@ if (mc.additionalKeywords && mc.additionalKeywords.length) {
   rssCfg.keywords.global.push(...mc.additionalKeywords);
   rssCfg.keywords.global = [...new Set(rssCfg.keywords.global)];
 }
-if (mc.feeds && mc.feeds.length) {
-  console.warn('  ⚠ manifest.rssConfig.feeds is ignored — edit skills/rss-factlet-harvester/rss_sources.md instead');
-}
 write(path.join(outputDir, 'rss', 'rss-scorer-mcp', 'rss_config.json'), JSON.stringify(rssCfg, null, 2));
 
 // 6b. Generate reddit_config.json (merge base template + manifest subreddits)
@@ -496,7 +491,6 @@ if (fs.existsSync(baseIgCfgPath)) {
 console.log('\nSkill playbooks:');
 [
   ['skills/enrichment-agent.md',              'skills/enrichment-agent.md'],
-  ['skills/evaluator.md',                     'skills/evaluator.md'],
   ['skills/relevance-judge.md',               'skills/relevance-judge.md'],
   ['skills/rss-factlet-harvester/SKILL.md',   'skills/rss-factlet-harvester/SKILL.md'],
   ['skills/rss-factlet-harvester/rss_sources.md', 'skills/rss-factlet-harvester/rss_sources.md'],
@@ -514,12 +508,18 @@ console.log('\nSkill playbooks:');
   ['skills/source-discovery/discovered_directories.md', 'skills/source-discovery/discovered_directories.md'],
   ['skills/init-wizard.md',                   'skills/init-wizard.md'],
   ['skills/client-finder.md',                 'skills/client-finder.md'],
-  ['skills/convention-leed-pipeline.md',      'skills/convention-leed-pipeline.md'],
   ['skills/draft-checker.md',                 'skills/draft-checker.md'],
   ['skills/leed-drafter.md',                  'skills/leed-drafter.md'],
   ['skills/marketplace_flow.md',              'skills/marketplace_flow.md'],
+  ['skills/hybrid_flow.md',                   'skills/hybrid_flow.md'],
+  ['skills/headless_flow.md',                 'skills/headless_flow.md'],
+  ['skills/url-loop.md',                      'skills/url-loop.md'],
   ['skills/outreach-drafter.md',              'skills/outreach-drafter.md'],
   ['skills/outreach_flow.md',                 'skills/outreach_flow.md'],
+  ['skills/value-prop-validator.md',          'skills/value-prop-validator.md'],
+  ['skills/shared/booking-detect.md',        'skills/shared/booking-detect.md'],
+  ['skills/shared/classify-contact.md',      'skills/shared/classify-contact.md'],
+  ['skills/shared/factlet-rules.md',         'skills/shared/factlet-rules.md'],
 ].forEach(([src, dst]) => copyTemplate(src, dst, tokens));
 
 // 8. Copy + substitute doc stubs.
@@ -530,18 +530,26 @@ console.log('\nDocs:');
   ['docs/CLAUDE.md',       'DOCS/CLAUDE.md'],
   ['docs/STATUS.md',       'DOCS/STATUS.md'],
   ['docs/VALUE_PROP.md',   'DOCS/VALUE_PROP.md'],
-  ['docs/SCORING.md',      'DOCS/SCORING.md'],
+  ['docs/SCORING.json',    'DOCS/SCORING.json'],
+  ['docs/SUMMARY.md',      'DOCS/SUMMARY.md'],
+  ['docs/FOUNDATION.md',   'DOCS/FOUNDATION.md'],
 ].forEach(([src, dst]) => copyTemplate(src, dst, tokens));
 
 // 8b. Write CLAUDE.md + GOOSE.md to workspace root (agents auto-load from cwd)
 copyTemplate('CLAUDE.md', 'CLAUDE.md', tokens);
 copyTemplate('GOOSE.md', 'GOOSE.md', tokens);
 
-// 8c. Ship .env.sample at workspace root. Recipient copies to .env and fills keys.
-// .env itself is NEVER shipped or copied. Single source of truth for API keys.
+// 8c. Ship .env.sample and a starter .env (with REPLACE_ME placeholders).
+// goose.bat detects REPLACE_ME and shows a clear message with the exact file path.
 const envSampleSrc = path.join(TMPL, '.env.sample');
 if (fs.existsSync(envSampleSrc)) {
   copyFile(envSampleSrc, path.join(outputDir, '.env.sample'));
+  // Only create .env if it doesn't already exist (don't clobber a configured install)
+  const envDst = path.join(outputDir, '.env');
+  if (!fs.existsSync(envDst)) {
+    copyFile(envSampleSrc, envDst);
+    console.log('  ✓ .env (starter — fill in API keys before running)');
+  }
 } else {
   console.warn('  ⚠ templates/.env.sample missing — recipient will not know which keys to set');
 }
@@ -561,7 +569,7 @@ ${'='.repeat(65)}
 Next steps:
   1. Fill in DOCS/VALUE_PROP.md (drives draft quality)
   2. Review and tune skill files in skills/
-  3. Add RSS feeds: rss/rss-scorer-mcp/rss_config.json
+  3. Add RSS feeds: skills/rss-factlet-harvester/rss_sources.md
   4. Add Facebook pages: skills/fb-factlet-harvester/fb_sources.md
   5. Add Reddit subreddits: skills/reddit-factlet-harvester/reddit_sources.md
   6. Add Instagram accounts/hashtags: ig/ig_config.json

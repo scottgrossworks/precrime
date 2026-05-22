@@ -5,10 +5,12 @@ Exposes two tools (matching the legacy tavily-prefix pattern so skill files usin
 `tavily__tavily_search` and `tavily__tavily_extract` continue to work):
 
   tavily_search   { query, max_results?, search_depth?, include_answer? }
-  tavily_extract  { url, query_hint? }
+  tavily_extract  { url, query_hint?, mode? }
 
-Both go through tools/tavily_lean.py which strips raw_content, markdown noise,
-nav chains, bullet salads, and returns only relevant snippets + emails + phones.
+Both go through tools/tavily_lean.py. Search returns compact snippets. Extract
+defaults to cleaned full text plus assistive candidates (emails, phones, URLs,
+heading/card-like lines) so the LLM can do strict semantic extraction without
+adding another MCP server.
 
 JSON-RPC over stdio. Same protocol as mcp_server_v2.js. No SDK required.
 
@@ -122,19 +124,29 @@ def handle_tools_list(req_id):
                 {
                     "name": "tavily_extract",
                     "description": (
-                        "Extract content from a single URL via Tavily, with response bloat "
-                        "trimmed before return. Strips markdown image/link syntax, nav chains, "
-                        "bullet salads, footers. Returns relevance-scored snippets plus any "
-                        "extracted emails/phones. Roughly 80-90% smaller than raw extract output. "
-                        "Pass query_hint to bias snippet selection."
+                        "Extract content from a single URL via Tavily. Default mode='full' "
+                        "returns the cleaned full page content (markdown image syntax and link "
+                        "URLs stripped, structure preserved) plus candidates: obvious emails, "
+                        "phones, outbound URLs, and heading/card-like lines. The candidates are "
+                        "hints, not final classification; the LLM should emit strict clients / "
+                        "factlets / sources JSON against VALUE_PROP. Use this for vendor lists, "
+                        "exhibitor rosters, contact directories -- anywhere structured names "
+                        "matter. mode='snippet' returns only 5 relevance-scored sentences "
+                        "(~800 chars), useful for teasing a long article but destructive for "
+                        "list pages -- do not use for vendor extraction."
                     ),
                     "inputSchema": {
                         "type": "object",
                         "properties": {
                             "url": {"type": "string", "description": "URL to extract"},
+                            "mode": {
+                                "type": "string",
+                                "enum": ["full", "snippet"],
+                                "description": "full (default): cleaned full content. snippet: 5 best sentences (legacy).",
+                            },
                             "query_hint": {
                                 "type": "string",
-                                "description": "Optional. Biases snippet selection toward this intent.",
+                                "description": "Used only in mode='snippet' to bias selection. Ignored in mode='full'.",
                             },
                         },
                         "required": ["url"],
@@ -167,7 +179,11 @@ def handle_tools_call(req_id, params):
             url = args.get("url")
             if not url:
                 return err(req_id, -32602, "tavily_extract requires 'url'")
-            result = extract_lean(url=url, query_hint=str(args.get("query_hint", "")))
+            result = extract_lean(
+                url=url,
+                query_hint=str(args.get("query_hint", "")),
+                mode=str(args.get("mode", "full")),
+            )
             call_log("tavily_extract", url, result.get("stats", {}))
             return ok(req_id, {"content": [{"type": "text", "text": json.dumps(result, ensure_ascii=False, indent=2)}]})
 

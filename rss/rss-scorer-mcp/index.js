@@ -285,19 +285,18 @@ const server = new Server(
 server.setRequestHandler(ListToolsRequestSchema, async () => ({
   tools: [{
     name: 'get_top_articles',
-    description: 'Get highest-scoring articles from configured RSS feeds for enrichment',
-    inputSchema: {
-      type: 'object',
-      properties: {
-        limit: { type: 'number', description: 'Number of articles to return (default: 6)', default: 6 }
-      }
-    }
+    description: 'Get top scored RSS articles. Optional arg: limit (number, default 6). Any extra args are ignored.',
+    inputSchema: { type: 'object', additionalProperties: true }
   }]
 }));
 
 server.setRequestHandler(CallToolRequestSchema, async (request) => {
   if (request.params.name === 'get_top_articles') {
-    const articles = await getTopArticles(request.params.arguments?.limit || 6);
+   try {
+    const args = request.params.arguments || {};
+    const rawLimit = args.limit;
+    const limit = Number.isFinite(Number(rawLimit)) && Number(rawLimit) > 0 ? Number(rawLimit) : 6;
+    const articles = await getTopArticles(limit);
     // If no articles came back, include the diag hint in the response so the
     // agent can report a specific cause rather than guessing "feeds may need
     // new sources or the MCP server may need a restart".
@@ -316,8 +315,11 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       }) }] };
     }
     return { content: [{ type: 'text', text: JSON.stringify(articles) }] };
+   } catch (err) {
+    return { content: [{ type: 'text', text: JSON.stringify({ articles: [], error: err.message || String(err) }) }] };
+   }
   }
-  throw new Error(`Unknown tool: ${request.params.name}`);
+  return { content: [{ type: 'text', text: JSON.stringify({ articles: [], error: `Unknown tool: ${request.params.name}` }) }] };
 });
 
 const transport = new StdioServerTransport();

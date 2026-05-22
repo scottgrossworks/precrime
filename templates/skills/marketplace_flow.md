@@ -1,85 +1,92 @@
 ---
 name: marketplace-flow
-description: Marketplace mode pipeline. Generate leedz with high probability of conversion and share to The Leedz marketplace via the addLeed API.
+description: Full workflow -- discover sources, harvest intel, enrich clients, share ready leedz.
 triggers:
   - run marketplace
+  - run workflow
   - share leedz
   - marketplace mode
-  - run precrime marketplace
 ---
-<!-- v2-compat: tools migrated to precrime__pipeline / precrime__find / precrime__trades surface -->
 
 # Marketplace Flow
 
-## Goal
+Run the full Pre-Crime pipeline. See `DOCS/FOUNDATION.md` for the conceptual model: DISCOVER -> ENRICH -> PRESENT.
 
-Generate leedz with **HIGH PROBABILITY OF CONVERSION** and share them to The Leedz marketplace. A leed is "high probability" when `score_target` says `shareReady: true` — driven by data completeness AND by relevant, fresh factlets connecting the client to `DOCS/VALUE_PROP.md`.
+The spine is recursion: every source you scrape can produce clients, factlets, and more sources. Save the clients/factlets immediately. Add every relevant new URL to the Source table immediately. Then keep following the queue with the source-specific skill that owns that channel. The workflow is not "one pass then stop"; it is "process everything newly discovered until the queues stop producing useful work."
 
-**Out of scope (do not do here):**
-- Drafting outreach emails — see `skills/outreach_flow.md`
-- Tuning scoring weights — see `DOCS/SCORING.md`
-- Asking the user where to find sources — use seed files only
+## Triage before harvest
 
----
+First, inventory existing share-ready work:
+```
+precrime__find({"action":"bookings","filters":{"status":"leed_ready"}})
+```
+If any leed_ready bookings exist, jump to Step 8 PRESENT and post them. If the result is `[]`, immediately continue to Step 1. Empty ready queue is not a stop condition.
 
-## Hard Gates (every leed)
-
-| Gate | Rule |
-|------|------|
-| Trade | Must match `precrime__trades()` (lowercase). Determined from `DOCS/VALUE_PROP.md` by `init-wizard.md`. |
-| `pr` | Always `0` (free) |
-| `email` | Always literal string `"false"` (broadcast suppressed) |
-| Share path | Only via `skills/share-skill.md`. No raw curl in this skill. |
-| Booking shareReady | Comes from `precrime__pipeline({ action: "next" })` scoring only. Do not invent gates. |
+Otherwise run Steps 1-8 in order. Non-interactive rail per GOOSE.md: no menus, no "should I continue?" between steps. Only valid stop is Step 8 PRESENT or unrecoverable error.
 
 ---
 
 ## Pipeline
 
-Run sequentially. On step error, log to `logs/ROUNDUP.md` and continue. Per-step cap: 20 min. Per-URL cap: 30 sec.
-
-1. **`skills/source-discovery.md`** — expand source lists from VALUE_PROP.md + `*_sources.md` seeds.
-2. **`skills/convention-leed-pipeline.md`** — search local conventions, harvest convention factlets, create exhibitor clients.
-3. **All enabled `skills/*-factlet-harvester/SKILL.md`** per Config (`rss` / `fb` / `ig` / `reddit` / `x`). Each harvester calls `relevance-judge.md` per factlet.
-4. **`skills/client-seeder.md`** — for clients without contacts, find named contact (name + email + phone).
-5. **`skills/enrichment-agent.md`** — link relevant factlets to clients, extract Bookings (trade + date + location + contact).
-6. **For each Booking with `status = "new"`:**
+1. **Work status.** Call:
    ```
-   precrime__pipeline({ action: "next", id: bookingId })
+   precrime__pipeline({ action: "work_status" })
    ```
-   Read `shareReady` from response.
-7. **If `shareReady = true`:**
-   1. `skills/leed-drafter.md` — build addLeed JSON payload.
-   2. `skills/draft-checker.md` with `mode: marketplace` — quality check the payload.
-   3. If verdict = `brewing` → log reason, mark `Booking.status = "needs_enrichment"`, continue to next booking.
-   4. If verdict = `ready` → proceed to step 8.
-8. **Mode branch:**
-   - **Interactive:** print full JSON (every field, no truncation per `share-skill.md` Rule 8). Ask `yes / no / edit`. On `no` → mark `status: "hold"`, log `USER_DECLINED_SHARE`. On `edit` → loop. On `yes` → step 9.
-   - **Headless:** skip preview, proceed to step 9.
-9. **`skills/share-skill.md`** Step 2a — POST to Leedz `addLeed`.
-10. **On success:**
-    ```
-    precrime__pipeline({ action: "save", id, patch: { leedId, status: "shared", sharedTo: "leedz_api", sharedAt: Date.now() } })
-    ```
-11. **On share error: STOP the entire workflow.** Save full payload to `logs/ROUNDUP.md`, log error with HTTP code/message, exit. Do not retry. Do not skip to next booking — the system may be misconfigured.
+   If `recommendation = "present"` go to Step 8. If `recommendation = "process_sources"` go to Step 3. If `recommendation = "enrich"` go to Step 6. If `recommendation = "discover_sources"` or `"done"`, go to Step 2. Never stop here.
 
----
+2. **Source discovery.** Read and follow `skills/source-discovery.md`. It calls `pipeline.add_sources` per channel based on VALUE_PROP config; the Source table grows. When complete, proceed immediately.
 
-## Logging — `logs/ROUNDUP.md`
+3. **URL loop.** Read and follow `skills/url-loop.md`. It claims source rows via `pipeline.next_source` for Tavily-friendly URLs (`directory`, `rss`, `reddit`, `blog`, `website`). If the queue says empty, retry once with `maxAgeDays: 0` before moving on; old preserved source rows may have stale `scrapedAt` values but still need a fresh run in this deployment. Scrape full content, extract clients/factlets/sources, save each finding immediately, mark via `pipeline.mark_source`, and repeat. Any new URLs discovered here feed back into the same Source table.
 
-```
-SHARED: {trade} / {startDate} / {location} → leedId {id}
-NEEDS_ENRICHMENT: {trade} / {client.name} → {draft-checker reason}
-DECLINED: {trade} / {startDate} → user said no
-ERROR: {step} → {message}
-```
+4. **Channel harvesters -- run every one, in order, no stopping:**
+   - `skills/rss-factlet-harvester/SKILL.md`
+   - `skills/fb-factlet-harvester/SKILL.md`
+   - `skills/reddit-factlet-harvester/SKILL.md`
+   - `skills/x-factlet-harvester/SKILL.md`
+   - `skills/ig-factlet-harvester/SKILL.md`
+   - Each harvester owns its channel: claim source -> extract -> save clients/factlets -> add newly discovered sources -> mark source -> claim the next source for that channel. Skip a harvester only when both its seed import and Source channel are empty. When all complete, proceed.
+
+5. **Client seeding.** Read and follow `skills/client-seeder.md`. Find named contacts for clients missing them. When complete, proceed.
+
+6. **Enrichment.** Read and follow `skills/enrichment-agent.md`. Link factlets, scrape client URLs, score, compose drafts for qualifying clients.
+
+7. **Health check -- rescore the leed_ready queue** before presenting anything:
+   ```
+   precrime__pipeline({ action: "rescore", scope: "leed_ready" })
+   ```
+   This demotes any bookings that no longer pass `DOCS/SCORING.json` (e.g., after policy was tightened). Only bookings that CURRENTLY qualify survive.
+
+8. **PRESENT -- fetch all actionable results:**
+   ```
+   precrime__find({ action: "bookings", filters: { status: "leed_ready" }, limit: 50 })
+   ```
+   For each leed_ready booking:
+   - Read and follow `skills/leed-drafter.md` to build the addLeed JSON.
+   - Read and follow `skills/draft-checker.md` with `mode: marketplace` to quality check.
+   - If verdict = `brewing` -> log reason, mark `status: "needs_enrichment"`, next booking.
+   - If verdict = `ready` -> show full JSON to user. Ask: `yes / no / edit`.
+     - `yes` -> follow `skills/share-skill.md` to POST.
+     - `no` -> `skills/share-skill.md` skip path (demotes to `needs_enrichment`).
+     - `edit` -> loop.
+
+9. **RECURSE if work remains.** This is the heartbeat. Sum the deltas across this iteration:
+   - Step 2 source-discovery added 0 entries, AND
+   - Step 3 url-loop produced 0 client saves, 0 factlets, and 0 new sources, AND
+   - Step 4 harvesters created 0 clients, 0 factlets, and 0 new sources, AND
+   - Step 5 seeding created 0 clients, AND
+   - Step 6 enrichment promoted 0 bookings, AND
+   - Step 8 PRESENT yielded 0 leed_ready
+   - -> **terminal.** All queues empty. Stop.
+
+   Otherwise -> **GOTO Step 2.** Each iteration discovers more: a new factlet can re-qualify a brewing client; a new sparse client can become a real prospect during enrichment; a new directory/RSS/profile URL found mid-scrape feeds the next channel worker. The pipeline is built to recurse, not to be re-launched manually.
+
+10. **On share error: STOP.** Log full payload to `logs/ROUNDUP.md`. Do not retry. Do not skip to next booking.
 
 ---
 
 ## Rules
 
-1. **Sources come from seed files.** Never ask the user where to look.
-2. **`pipeline.next` shareReady is the only share gate.** Do not invent gates.
-3. **`share-skill.md` is the only path to Leedz.** No curl here.
-4. **On share error, STOP.** Do not chain retries. Diagnose first.
-5. **Scoring is opaque to this skill.** Do not re-implement or duplicate `DOCS/SCORING.md`.
+1. Sources come from seed files. Never ask the user where to look.
+2. Scoring is handled by `pipeline.save` automatically. Do not re-implement.
+3. `share-skill.md` is the only path to the Leedz API. No direct curl.
+4. On share error, STOP. Diagnose first.

@@ -1,370 +1,95 @@
 ---
 name: precrime-startup
-description: First-run startup — installs deps if needed, walks user through config, launches harvesters and enrichment
+description: Startup -- verify pipeline, detect mode, route to workflow.
 triggers:
   - start
-  - start precrime
-  - start the precrime workflow
-  - start the workflow
   - run precrime
-  - let's go
   - go
+  - wizard
+  - workflow
+  - headless
 ---
 
-# Pre-Crime Startup
+# Init Wizard
 
-You are getting Pre-Crime ready to run. Ask questions in order. One topic at a time. Don't ask everything at once. Write each answer to Config as you go — don't batch at the end.
-
-**When to run:** First launch, or any time the user says the config is stale/wrong.
-
----
-
-## Step -1: Verify Tools
-
-`precrime.bat` already ran `setup.bat` before Claude started. Dependencies are installed, DB exists, MCP should be connected.
-
-Try calling `get_config()`.
-
-- **If it works** → proceed to Step 0 (Detect Returning User).
-- **If it fails for ANY reason** — MCP not connected, DB missing, table missing, any error at all — say:
-
-> "Something's not right. Close this window and run `precrime` again."
-
-**Then STOP. One sentence. No diagnosis. No manual fixes. No reading files. No running setup.bat. No running npm or prisma. Just say run precrime and stop.**
-
----
-
-## Step 0: Detect Returning User
-
-The database is set by `precrime.bat` via the `DATABASE_URL` environment variable. The user's startup prompt includes `(database: <filename>)` — note it for display but no config file is needed.
-
-Call both in sequence:
-```
-get_config()
-get_stats()
-```
-
-**Inspect `get_stats()` output:**
-
-If `clients > 0` AND (`enrichedClients > 0` OR `brewingDrafts > 0` OR `readyDrafts > 0`):
-
-> "Welcome back. Here's where things stand:
-> - Clients in DB: {clients}
-> - Already enriched: {enrichedClients}
-> - Drafts ready to review: {readyDrafts}
-> - Still in queue: {brewingDrafts + unenriched}
->
-> Resume the enrichment queue, or start fresh? (resume / fresh)"
-
-- **Resume** → skip to Step 7 (summary) and then Step 8 (launch). Do NOT re-ask config questions that are already set. Factlets in the DB are intact — the enrichment agent will check for new ones since each client's last queue check.
-- **Fresh** → proceed to Step 1 below. (Config values already set will be shown but not re-asked.)
-
-If stats show `clients = 0` OR no enrichment data at all → this is a first-run. Say:
-
-> "Starting fresh with an empty database. If you have a migrated database you'd like to use instead, close this window and run:
-> `precrime your_database_name`
->
-> Otherwise — let's get started."
-
-Wait for the user to respond before proceeding to Step 1.
-
----
-
-## Step 0.5: Check Existing Config
-
-Call `get_config()` (already fetched above — reuse the result). Report what's already set and what's missing:
-
-> "I found your config. Here's what's already set:
-> - Company: {companyName or '(not set)'}
-> - Email: {companyEmail or '(not set)'}
-> - Business description: {businessDescription or '(not set)'}
-> - Default booking action: {defaultBookingAction or '(not set)'}
-> - Marketplace enabled: {marketplaceEnabled}
->
-> I'll only ask about the missing or blank fields. Ready?"
-
-If everything is set, say so and offer to review/update any field.
-
----
-
-## Step 1: Who Are You?
-
-Ask:
-
-> "What's your name, company, and email address? (One line is fine — e.g., 'Jane Smith / Acme Events / jane@acmeevents.com')"
-
-Parse and call:
-```
-update_config({ companyName: "...", companyEmail: "..." })
-```
-
-Confirm: "Got it — {companyName} / {companyEmail}. Saved."
-
----
-
-## Step 2: What Are You Selling?
-
-Ask:
-
-> "Describe what you're selling in 2–4 sentences. What is it, who buys it, why does it matter?"
-
-Call:
-```
-update_config({ businessDescription: "..." })
-```
-
-If the user says "it's already in VALUE_PROP.md" — that's fine. The businessDescription in Config is a short summary (2–4 sentences) that gets injected into prompts. Ask them to summarize it.
-
-Confirm: "Saved."
-
----
-
-## Step 3: Value Prop File
-
-Ask:
-
-> "Is there a VALUE_PROP.md (or equivalent) file in this workspace? If yes — what's the path? If no — I can help you draft one after setup."
-
-This is informational only — no Config write needed here. Note the path if given, so you can reference it when running the enrichment workflow.
-
-If they want to draft it now: "I can help with that after we finish config. Let's keep going."
-
----
-
-## Step 3.5: Gig or B2B?
-
-Ask:
-
-> "Is this a gig or service business where you might share bookings to The Leedz marketplace? Or is this B2B outreach? (gig / B2B)"
-
-**If gig/Leedz (or unsure — default to gig):**
-
-Fetch the canonical trade list:
-```
-WebFetch("https://jjz8op6uy4.execute-api.us-west-2.amazonaws.com/Leedz_Stage_1/getTrades")
-```
-
-Present the list:
-> "Here are valid Leedz trade categories: [list]. Does your service match one of these?"
-
-- **Trade matches** → note as session context: `leedzMode = true`, `defaultTrade = [matched trade]`. Proceed to Step 4.
-- **No match** → say: "Your trade isn't in The Leedz marketplace yet — marketplace sharing will be disabled. Bookings will be emailed to you instead." Note: `leedzMode = false`, `marketplaceEnabled = false`. Skip Step 5a. Proceed to Step 5.
-
-**If B2B/non-gig:**
-
-Note as session context: `leedzMode = false`. Skip Steps 4, 5, 5a, 6. Jump to Step 7.
-
----
-
-## Step 3.6: Run Mode
-
-**Skip if `leedzMode = false`** — B2B/outreach-only runs always produce drafts. Set `SESSION_RUN_MODE = "outreach"` silently and skip to Step 4.
-
-Ask:
-
-> "Last config question — what's the goal for this run?
->
-> **1 — Outreach:** I research each contact and write a personalized email. Good for when you want to reach prospects directly.
->
-> **2 — Marketplace only:** I find booking opportunities and share them to The Leedz. No outreach emails written. Good for generating leedz to share.
->
-> **3 — Both:** Research contacts, write emails, AND share bookings.
->
-> (1 / 2 / 3)"
-
-| Answer | SESSION_RUN_MODE | Effect |
-|--------|-----------------|--------|
-| 1 | `outreach` | Drafts ON. Booking share OFF. |
-| 2 | `marketplace` | **Zero emails written.** Booking share ON. |
-| 3 | `hybrid` | Drafts ON. Booking share ON. |
-
-Note the answer as session context: `SESSION_RUN_MODE = [outreach|marketplace|hybrid]`. Do NOT write to Config — this is a run-time decision, not a persistent setting.
-
-Confirm:
-- **outreach:** "Got it — I'll research contacts and write emails. No marketplace posts this run."
-- **marketplace:** "Got it — marketplace mode. I'll find and share bookings, but I will NOT write any outreach emails this run."
-- **hybrid:** "Got it — doing both: emails and marketplace posts."
-
----
-
-## Step 4: Default Trade
-
-**Skip if `leedzMode = false`.**
-
-If trade was confirmed in Step 3.5: say "Got it — [trade]. Using that as your default trade." Skip the question.
-
-If trade is still unset (user was unsure):
-> "What trade category does your work fall under? (From the list above.)"
-
-Note the answer as session context: `defaultTrade = [trade]`.
-
----
-
-## Step 5: What to Do With a Hot Lead
-
-This is the most important config question. Ask it clearly.
-
-> "When the lead harvester finds a booking that hits `leed_ready` — meaning it has a trade, a date, and a location — what should I do with it by default?
->
-> **Option 1 — Post to The Leedz marketplace (leedz_api)**
-> I call the createLeed API automatically. The booking goes live on theleedz.com. Fully hands-off.
-> *Requires: your Leedz account email and a session token (I'll ask for those next if you choose this).*
->
-> **Option 2 — Email to share@theleedz.com (email_share)**
-> I send the booking details to The Leedz share inbox for manual review and posting.
-> *Requires: Gmail sender MCP connected.*
->
-> **Option 3 — Email to you (email_user)**
-> I send the booking details to your email ({companyEmail}). You decide what to do.
-> *Requires: Gmail sender MCP connected.*
->
-> Which default? (1 / 2 / 3)"
-
-Note the answer. Use it as context for the rest of the session — the evaluator will use it when a booking hits `leed_ready`.
-
-If they chose option 1 (leedz_api) → proceed to Step 5a. Otherwise skip to Step 6.
-
----
-
-## Step 5a: Leedz Marketplace Credentials (only if leedz_api chosen)
-
-Ask:
-> "Your Leedz account email?"
-
-Save the email and generate a session JWT immediately using Bash:
-
-```bash
-python -c "
-import jwt, time
-payload = {
-    'email': 'LEEDZ_EMAIL',
-    'type': 'session',
-    'exp': int(time.time()) + 31536000
-}
-secret = '648373eeea08d422032db0d1e61a1bc096fe08dd2729ce611092c7a1af15d09c'
-print(jwt.encode(payload, secret, algorithm='HS256'))
-"
-```
-
-Substitute `LEEDZ_EMAIL` with the email they provided. Capture the printed token.
-
-Then write both to Config in one call:
-```
-mcp__precrime-mcp__update_config({ leedzEmail: "[email]", leedzSession: "[token]", marketplaceEnabled: true })
-```
-
-Confirm:
-> "Done — marketplace credentials saved. Session token is valid for 1 year."
-
-**If PyJWT is not installed:** run `pip install PyJWT` first, then retry. If Python is unavailable, tell the user:
-> "I can't generate the token automatically. Run this in a terminal and paste the result:
-> `python -c \"import jwt, time; print(jwt.encode({'email':'YOUR_EMAIL','type':'session','exp':int(time.time())+31536000}, '648373eeea08d422032db0d1e61a1bc096fe08dd2729ce611092c7a1af15d09c', algorithm='HS256'))\"`"
-
----
-
-## Step 6: Enable Lead Capture
-
-Call:
-```
-update_config({ leadCaptureEnabled: true })
-```
-
-No question needed — always enabled.
-
----
-
-## Step 7: Confirm and Summary
-
-Print a summary from what was set in previous steps (no need to call `get_config()` again):
+## Step 1: Pipeline status
 
 ```
-=================================================================
-Configuration Set — {{DEPLOYMENT_NAME}}
-=================================================================
-Company:          {companyName}
-Email:            {companyEmail}
-Mode:             {leedzMode ? 'gig/Leedz' : 'B2B/outreach'}
-Run mode:         {SESSION_RUN_MODE} — {outreach: 'emails only' | marketplace: 'NO DRAFTS — marketplace share only' | hybrid: 'emails + marketplace'}
-Trade:            {defaultTrade or '(not set)'}
-Booking action:   {defaultBookingAction or '(not set)'}
-Marketplace:      {marketplaceEnabled}
-Lead capture:     {leadCaptureEnabled}
-Leedz account:    {leedzEmail or '(not set)'}
-=================================================================
+precrime__pipeline({ action: "status" })
 ```
 
-If VALUE_PROP.md still needs to be written: remind them once — "Fill in DOCS/VALUE_PROP.md before the first run — that document drives draft quality."
+Error -> STOP. Say: `Pipeline not connected. Re-run launcher.`
 
----
+## Step 1.5: Source table seed (always run, idempotent)
 
-## Step 7.5: Where to Harvest
+ALWAYS run this on every startup:
 
-**Skip if `leedzMode = false` AND `leadCaptureEnabled = false`.**
+```
+precrime__pipeline({ action: "import_sources" })
+```
 
-Ask:
+This reads every `_sources.md` and `discovered_directories.md` seed file and bulk-inserts new URLs into the Source table. Dedup is on URL, so re-running is cheap and safe. This is how the user adds new FB pages / RSS feeds / subreddits / IG handles between runs: they edit the relevant seed file, and Step 1.5 picks up the additions on the next launch.
 
-> "Where should the harvesters look for leads? I can monitor Facebook groups/pages, subreddits, X/Twitter accounts, Instagram profiles/hashtags, or any public community.
->
-> Examples: 'LA Wedding Planning' Facebook group, r/weddingplanning, r/LAevents, @EventProNews on X, @VenueNameLA on Instagram, #LAevents, a local events news feed.
->
-> List what you know — or say 'skip' and I'll start with a broad keyword search."
+Do NOT skip this step "because nothing changed" -- the agent has no reliable way to know if the user edited a seed file since last run. The cost (one query per seed file) is trivial.
 
-For each source mentioned:
-- Facebook page or group URL → append to `skills/fb-factlet-harvester/fb_sources.md` (create if missing)
-- Subreddit name → append to `skills/reddit-factlet-harvester/reddit_sources.md`
-- X handle or keyword → append to `skills/x-factlet-harvester/x_sources.md`
-- Instagram account or hashtag → append to `skills/ig-factlet-harvester/ig_sources.md`
-- RSS URL → note as session context (add to RSS config)
+Returns `{ byChannel: { directory:{added,duplicates,...}, rss:{...}, ... }, total_added, total_duplicates, total_invalid }`.
 
-If user says 'skip':
-> "No problem — I'll do a broad search first and build the source list as I go."
+After Step 1.5, the agent uses `next_source` / `mark_source` / `add_sources` for the queue. Seed files are not consulted again during the run.
 
-After collecting:
-> "Got it. Starting with [N source(s)]."
+## Step 1.7: Trade gate (BLOCKING)
 
----
+Trade is the marketplace category and the seed for demand-signal detection. The loop does not start until config has a `defaultTrade` that matches a canonical Leedz trade.
 
-## Step 8: Launch
+```
+trades = precrime__trades()
+status = precrime__pipeline({ action: "status" })   // already have this
+cfg    = status.config
+```
 
-Say:
+**A. Config already has a valid trade.** If `cfg.defaultTrade` is set AND `trades` contains it (case-insensitive exact match) -> proceed to Step 2.
 
-> "Config is set. Launching now — factlet harvesters first, then enrichment.
-> Watch `logs/ROUNDUP.md` for live progress."
+**B. Infer from VALUE_PROP.** Read `DOCS/VALUE_PROP.md`. Lowercase the product name + description. For each trade in `trades`, check whether the trade name (or its singular form) appears as a substring.
 
-**If `leedzMode = true` OR `leadCaptureEnabled = true`:**
-1. Run `skills/source-discovery.md` — expand FB pages, subreddits, RSS feeds, IG accounts, directories from VALUE_PROP.md
-2. Run `skills/client-seeder.md` — scrape discovered sources for contacts, create thin client records
-3. Run `skills/fb-factlet-harvester/SKILL.md` — harvest Facebook factlets (also discovers clients)
-4. Run `skills/ig-factlet-harvester/SKILL.md` — harvest Instagram factlets (also discovers clients, requires Chrome)
-5. Run `skills/reddit-factlet-harvester/SKILL.md` — harvest Reddit factlets (also discovers clients)
-6. Run `skills/x-factlet-harvester/SKILL.md` — harvest X factlets (also discovers clients)
-7. Run `skills/rss-factlet-harvester/SKILL.md` — harvest RSS factlets (also discovers clients)
-8. Run `skills/enrichment-agent.md` — enrich all clients (new + old), score, draft emails
+- Exactly one match -> set it: `precrime__pipeline({ action: "configure", patch: { defaultTrade: "<trade>" } })`. Tell the user: `Trade inferred: <trade>`. Proceed.
+- Zero matches OR multiple matches -> ambiguous. Go to C.
 
-**If outreach-only (`leedzMode = false`, `leadCaptureEnabled = false`):**
-1. Run `skills/source-discovery.md` — expand source list
-2. Run `skills/client-seeder.md` — scrape for contacts
-3. Run `skills/ig-factlet-harvester/SKILL.md` — harvest Instagram factlets (requires Chrome)
-4. Run `skills/reddit-factlet-harvester/SKILL.md` — harvest Reddit factlets
-5. Run `skills/x-factlet-harvester/SKILL.md` — harvest X factlets
-6. Run `skills/rss-factlet-harvester/SKILL.md` — harvest RSS factlets
-7. Run `skills/enrichment-agent.md` — enrich, score, draft
+**C. Prompt (interactive only).** Show the user the candidate list (matches if any, else the full `trades` list trimmed to 20). Ask: `Which Leedz trade describes <product name>?` Wait for answer, validate the answer is in `trades`, then `configure` it.
 
-Source discovery and client seeding run first — they populate the source configs and seed the DB with contacts. Harvesters run next — their factlets enrich the client records. Enrichment runs last — it takes every client (new and old) through deep research, scoring, and draft composition.
+**Headless mode:** if A and B both fail, STOP with `TRADE_UNRESOLVED: defaultTrade not set and inference ambiguous. Edit DOCS/VALUE_PROP.md to clarify, or set Config.defaultTrade.` No prompt.
 
-**CRITICAL: Run all steps sequentially regardless of intermediate results. Zero articles from RSS is not a failure. Zero factlets is not a failure. An empty DB is not a failure. Do NOT stop between steps to ask the user what to do. Do NOT present options. Execute all steps and report at the end.**
+After this step, `cfg.defaultTrade` is set and validated. Demand-signal detection and marketplace post both depend on it.
 
-**PER-STEP TIME LIMIT: Each step has a maximum of 20 minutes. If a step is still running after 20 minutes, write whatever results exist to the log, mark the step TIMEOUT in the report, and move on to the next step. Never let one step block the rest of the pipeline.**
+## Step 2: Greeting
 
-**PER-URL TIME LIMIT: If any single WebFetch or WebSearch does not return within 30 seconds, log `SKIP_TIMEOUT: [url]` and move to the next URL. Do not wait indefinitely.**
+From status:
+- clients > 0 -> `Pre-Crime online -- X clients, Y ready, Z in queue.`
+- clients = 0 -> `Pre-Crime online -- empty database.`
 
----
+## Step 3: Mode detection
+
+**If headless** (user message contained `headless`):
+- Set mode = headless.
+- Skip to Step 4. No questions.
+
+**If interactive:**
+- Ask:
+```
+Mode?
+  (1) Marketplace -- find leads, build leed JSON, post to Leedz API
+  (2) Outreach -- find leads, compose email drafts to gmail
+  (3) Hybrid -- explore leads interactively, decide per-lead
+```
+- Wait for answer.
+
+## Step 4: Route
+
+- Mode = headless     -> follow `skills/headless_flow.md`
+- Mode = marketplace  -> follow `skills/marketplace_flow.md`
+- Mode = outreach     -> follow `skills/outreach_flow.md`
+- Mode = hybrid       -> follow `skills/hybrid_flow.md`
 
 ## Rules
 
-- **One question at a time.** Don't stack questions.
-- **Write to Config immediately** after each answer. Don't batch.
-- **Skip what's already set.** Check Step 0 before asking anything.
-- **Don't invent values.** If the user doesn't know — leave it unset and move on.
-- **No sales pitch.** Don't explain Pre-Crime. They're already here.
-- **No engineer talk.** Never say "initialization", "wizard", "configure", "deployment", "infrastructure", "bootstrap". Say "setup", "getting started", "ready to go".
+- Config (name, email, pitch, trade, bookingAction) is set by sync-config.js before goose launches. Never ask for it.
+- If any config field is empty at Step 1, say: `Config incomplete. Fill in DOCS/VALUE_PROP.md and restart.` STOP.
+- Never auto-launch. Wait for mode selection (interactive) or detect headless.

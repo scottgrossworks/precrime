@@ -1,73 +1,101 @@
 ---
 name: outreach-drafter
-description: Compose pro-forma outreach email from client + booking + factlets + VALUE_PROP.md. Deterministic template.
+description: Compose outreach email from client + dossier + factlets + VALUE_PROP config.
 triggers:
   - draft outreach
-  - draft email
-  - compose draft
+  - compose email
+  - write draft
 ---
-<!-- v2-compat: tools migrated to precrime__pipeline / precrime__find / precrime__trades surface -->
 
 # Outreach Drafter
 
-Pro-forma email composer. The score gate (computed inside `precrime__pipeline.save`) has already passed, your job is to template a clean, sendable draft. Quality is verified afterward by `skills/draft-checker.md`.
-
-## Inputs
-
-- `client` (name, email, company, segment, dossier)
-- `booking` (trade, startDate, location)
-- Linked factlets, normally already hydrated on the client returned by `precrime__pipeline({ action: "next", entity: "client" })`. If not present, fetch via `precrime__find({ action: "factlets", filters: { clientId } })`. Filter to `relevance: true`.
-- `DOCS/VALUE_PROP.md` — read every time. Source of truth for voice, closing line, forbidden phrases, word limit.
-
-## Output
-
-Plain-text email body. Persisted via:
-
-```
-precrime__pipeline({ action: "save", id: client.id, patch: { draft: "<body>", draftStatus: "brewing" } })
-```
-
-`draftStatus` flips to `ready` only after `draft-checker.md` passes.
+Compose a cold outreach email for a specific client.
 
 ---
 
-## Template
+## Input
 
-```
-Dear {client.name},
-
-{HOOK — 1 sentence referencing the most specific recent factlet (event, post, hire, program). NOT a generic fact about their org.}
-
-{BRIDGE — 1 sentence connecting that factlet to a specific capability in VALUE_PROP.md. The reader thinks "they understand my situation".}
-
-{ASK — 1 sentence asking for a specific next step (15-min call, sample, etc.). Imperative, not passive.}
-
-{CLOSING — copy verbatim from DOCS/VALUE_PROP.md "Permitted closing line".}
-
-{SIGNOFF — Config.companyName per VALUE_PROP.md voice section.}
-```
-
-Total: ≤4 short paragraphs, under VALUE_PROP.md word limit.
+- Client record (name, company, email, dossier, linked factlets)
+- VALUE_PROP config: PRODUCT, RATE, SIGNATURE, differentiators, outreach examples, forbidden phrases
 
 ---
 
-## Rules baked into the template
+## Draft Structure
 
-1. **Open `Dear {client.name},` on its own line.** Never "Hello", "Hi", "Greetings". Never start with the hook.
-2. **One factlet citation, one bridge, one ask.** No more, no less.
-3. **No em-dash, en-dash, `--`, or smart quotes.** Anywhere. Replace with comma, period, or restructure.
-4. **No forbidden phrases.** Check `DOCS/VALUE_PROP.md` "Forbidden phrases" section.
-5. **No "X is great BUT Y" / negging / interrogation patterns.** Warm and collegial, never adversarial.
-6. **No filler.** Banned: "I hope this finds you well", "I'm reaching out because", "I am writing to", "I would love to".
-7. **Closing line is exact text from VALUE_PROP.md.** No paraphrasing.
+Three paragraphs. Each one earns its place. They should read as natural prose, not as labeled sections.
+
+### Paragraph 1: Their Event + The Question
+
+Open with a salutation, then go straight into their world.
+
+**SALUTATION RULE:** Use first name only ("Dear Bob,") or honorific + last name ("Dear Mr. Jones,"). NEVER use full name ("Dear Bob Jones,"). Full-name salutations are the hallmark of automated mail. If the client record has "Bob Jones", the salutation is "Dear Bob," -- always.
+
+State their specific event, date, venue, and any milestone or context from the dossier and factlets. Then, in the same paragraph, ask a question where the answer is obviously YES. The question should frame the need the product fills, using language specific to their situation.
+
+The reader must recognize their own event in the first sentence. Weave dossier facts and factlet context naturally. Do not mechanically list them.
+
+**Example:**
+> Dear Marina,
+>
+> Lifeway Foods is celebrating its 40th anniversary at TheFitExpo Anaheim this August. With the launch of Muscle Mates and your focus on wellness leadership, would you be interested in a celebratory draw to drive traffic and mark this milestone?
+
+### Paragraph 2: The Scene
+
+Paint what it looks like when the product is at their event. Do not just declare "this is a good fit." Show it. Describe what happens for their attendees, their staff, their brand. Use VALUE_PROP differentiators to make the scene concrete and specific to their context.
+
+The reader should be able to visualize the product working at their event after reading this paragraph.
+
+**Example:**
+> A live caricature activation is the perfect way to reward health-conscious attendees at your booth. It provides a 5-minute window for your staff to discuss Lifeway's probiotic innovations while I create a personalized, high-quality keepsake that guests actually frame and keep at home.
+
+### Paragraph 3: Credentials + Rate + Close
+
+State what you provide and where, grounding it in the client's geography or venue type. Anchor the rate. Close with an **imperative** -- a direct statement of what should happen next, not a question or a soft ask.
+
+**The close is a command, not a request.** "Let's add live art to your booth!" not "Would you be interested in discussing..." The reader should feel momentum, not a door to politely decline.
+
+**Example:**
+> I provide professional live entertainment for major activations at the Anaheim Convention Center. Rates start at [RATE] with no deposit required. Let's add live art to the Lifeway booth!
+
+Then the signature block:
+> [SIGNATURE from VALUE_PROP]
+
+**RATE is mandatory.** Comes from VALUE_PROP config. Anchor with "Rates start at [RATE]" plus any notes (deposits, payment methods). If VALUE_PROP has no rate, do not compose. Log `MISSING_RATE`.
+
+**SIGNATURE is mandatory.** Comes from VALUE_PROP config. If missing, do not compose. Log `MISSING_SIGNATURE`.
 
 ---
 
-## Failure modes (do not draft, set `draftStatus: "brewing"`, log reason, return)
+## Banned Patterns
 
-| Condition | Log line |
-|---|---|
-| Client has zero factlets with `relevance=true` | `NO_FACTLETS` |
-| All factlets stale (zero weight per `pipeline.save` factletStats) | `STALE_INTEL` |
-| `client.email` missing or generic | `NO_DIRECT_EMAIL` (failsafe, pipeline.save scoring should catch) |
-| `DOCS/VALUE_PROP.md` contains placeholder text | STOP entire flow. Tell user. |
+- Auto-mail tells: "I'm writing to...", "I'm reaching out because...", "I hope this finds you well"
+- Soft closes: "Would you be open to...", "Let me know if you're interested", "Feel free to reach out". Close with an imperative.
+- Full-name salutations ("Dear Bob Jones,"). Use first name only or honorific.
+- Em-dashes, en-dashes, double hyphens (corrupt in email clients).
+- Any phrase in VALUE_PROP config `forbidden` list.
+
+---
+
+## Procedure
+
+1. Read the client's dossier. Identify the strongest hook (most specific, most recent).
+2. Read linked factlets. If any add urgency or milestone context, weave into paragraph 1.
+3. Read VALUE_PROP config outreach examples. Match their style, tone, and structure.
+4. Compose the three paragraphs. Read the draft aloud in your head. Does it flow?
+5. Self-check: banned patterns? Rate included? Signature? Close is client-specific?
+6. Save:
+   ```
+   precrime__pipeline({ action: "save", id: clientId, patch: {
+     draft: "[the email text]",
+     draftStatus: "ready"
+   }})
+   ```
+
+---
+
+## Rules
+
+1. Never invent facts. If the dossier is thin, the draft is thin.
+2. Never reference facts not in the dossier or factlets.
+3. Drafts land at `draftStatus: "ready"` for human review. Never auto-send.
+4. If RATE or SIGNATURE is missing from VALUE_PROP config, do not compose.

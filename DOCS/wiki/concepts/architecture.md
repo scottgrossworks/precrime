@@ -1,8 +1,8 @@
 ---
 title: Pre-Crime System Architecture
-tags: [architecture, mcp, prisma, sqlite, leedz, data-flow]
-source_docs: [DOCS/STATUS.md, DOCS/MCP_BRIEFING.md, DOCS/DEPLOYMENT.md, DOCS/EMAIL_FINDER.md]
-last_updated: 2026-04-11
+tags: [architecture, mcp, prisma, sqlite, leedz, data-flow, source-queue, pass-2]
+source_docs: [DOCS/STATUS.md, DOCS/MCP_REWRITE.md, DOCS/DEPLOYMENT.md, DOCS/EMAIL_FINDER.md]
+last_updated: 2026-05-06
 staleness: none
 ---
 
@@ -18,7 +18,7 @@ Pre-Crime is a manifest-driven agentic enrichment engine. It enriches contacts, 
 | **File** | `server/mcp/mcp_server.js` | `FRONT_3\py\mcp_server\lambda_function.py` (AWS us-west-2) |
 | **Transport** | Local stdin/stdout JSON-RPC 2.0 | Remote `POST /mcp` on API Gateway |
 | **Backend** | Prisma 5 → SQLite | boto3 → existing Lambdas → DynamoDB |
-| **Tools** | 19 tools | createLeed + reads (getTrades, getStats, getLeedz, getUser) |
+| **Tools** | 3 tools (`pipeline` / `find` / `trades`) collapsed from 22 CRUD tools, see [[mcp]] | createLeed + reads (getTrades, getStats, getLeedz, getUser) |
 | **Design doc** | `PRECRIME\README.md` | `FRONT_3\DOCS\AGENTIC_FUTURE.md` |
 
 Marketplace sharing is handled by the optional `plugins/leedz-share/` plugin — not in core. When a Booking reaches `leed_ready`, core Pre-Crime logs and stops. The plugin calls the Leedz API Gateway directly via HTTP.
@@ -34,11 +34,12 @@ Claude Code session
     |
     | stdin/stdout (JSON-RPC 2.0)
     |
-server/mcp/mcp_server.js   (19 tools, precrime-mcp)
+server/mcp/mcp_server.js   (3 tools: pipeline, find, trades)
     |
     | PrismaClient (Prisma 5)
     |
-data/myproject.sqlite
+data/myproject.sqlite      (tables: Client, Booking, Factlet, ClientFactlet,
+                            Session, SessionEvent, Source, Config)
 ```
 
 No HTTP server. No Express. Stdio transport only.
@@ -151,8 +152,8 @@ All skills live in `templates/skills/` (source) and are copied/token-substituted
 | `templates/precrime.bat` | User-facing launcher. The ONLY thing the user runs. |
 | `templates/setup.bat` | npm install + prisma generate. Called by precrime.bat. Never run manually. |
 | `templates/docs/CLAUDE.md` | What Claude reads in deployed workspace. Uses `{{TOKEN}}` substitution. |
-| `server/mcp/mcp_server.js` | Pre-Crime MCP — 19 tools, registered as `precrime-mcp`, Prisma → SQLite |
-| `server/prisma/schema.prisma` | Prisma 5 schema — Client, Booking, Factlet, Config |
+| `server/mcp/mcp_server.js` | Pre-Crime MCP — 3 tools (pipeline / find / trades), Prisma → SQLite |
+| `server/prisma/schema.prisma` | Prisma 5 schema — Client, Booking, Factlet, ClientFactlet, Session, SessionEvent, Source, Config |
 | `server/package.json` | npm deps: @prisma/client 5.22.0, dotenv |
 
 All paths relative to PRECRIME source root.
@@ -161,7 +162,8 @@ All paths relative to PRECRIME source root.
 
 ## Related
 - [[ontology]] — entity definitions, output paths, design rules
-- [[mcp]] — all 19 MCP tools, configuration details
+- [[mcp]] — 3-tool MCP surface, all action enumerations
+- [[source-queue]] — Pass 2 Source table, work-stealing queue, four new actions
 - [[deployment]] — build system, end-user flow, file inventory
 - [[email-finder]] — direct-email hunt sub-skill
 - [[current]] — current project state

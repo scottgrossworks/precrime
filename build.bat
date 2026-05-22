@@ -77,10 +77,18 @@ if exist "%ROOT%\templates\precrime.bat" (
 if exist "%ROOT%\templates\goose.bat" (
   copy "%ROOT%\templates\goose.bat" "%STAGEDIR%\goose.bat" >nul
   echo   + goose.bat
+) else (
+  echo FATAL: templates\goose.bat not found -- cannot include Goose launcher
+  rmdir /s /q "%TMPPARENT%"
+  exit /b 1
 )
 if exist "%ROOT%\templates\goose_config.template.yaml" (
   copy "%ROOT%\templates\goose_config.template.yaml" "%STAGEDIR%\goose_config.template.yaml" >nul
   echo   + goose_config.template.yaml
+) else (
+  echo FATAL: templates\goose_config.template.yaml not found -- goose.bat requires this template
+  rmdir /s /q "%TMPPARENT%"
+  exit /b 1
 )
 if exist "%ROOT%\templates\hermes.bat" (
   copy "%ROOT%\templates\hermes.bat" "%STAGEDIR%\hermes.bat" >nul

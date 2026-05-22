@@ -1,89 +1,53 @@
 ---
 name: outreach-flow
-description: Outreach mode pipeline. Compose outreach emails to high-probability-of-conversion clients enriched against VALUE_PROP.md.
+description: Outreach pipeline -- compose emails to high-probability clients.
 triggers:
   - run outreach
   - outreach mode
-  - run precrime outreach
 ---
-<!-- v2-compat: tools migrated to precrime__pipeline / precrime__find / precrime__trades surface -->
 
 # Outreach Flow
 
-## Goal
+Run the outreach pipeline. Same DISCOVER -> ENRICH -> PRESENT pattern as marketplace flow, but the output is outreach emails instead of marketplace leedz.
 
-Compose outreach emails ONLY to clients whose Bookings score `draftReady: true` per `DOCS/SCORING.md`. Same scoring as marketplace mode — different terminal action (email instead of marketplace post).
-
-**Out of scope (do not do here):**
-- Sharing leedz to marketplace — see `skills/marketplace_flow.md`
-- Tuning scoring weights — see `DOCS/SCORING.md`
-- Drafting for low-scoring clients — the score is the gate
-
-**Email send dependency:** sending requires the `gmail-sender` MCP server (configured separately). If not installed: drafts still get composed and saved as `draftStatus: "ready"`, but cannot be sent.
-
----
-
-## Hard Gates (every draft)
-
-| Gate | Rule |
-|------|------|
-| Booking draftReady | Comes from `precrime__pipeline({ action: "next" })` scoring only |
-| Salutation | Must open `Dear {client.name},` on its own line |
-| Banned chars | No em-dash, en-dash, `--`, smart quotes |
-| Forbidden phrases | Per `DOCS/VALUE_PROP.md` |
-| Word limit | Per `DOCS/VALUE_PROP.md` |
-| Closing line | Exact text from `DOCS/VALUE_PROP.md` |
+**Do not stop between steps.** Keep going until PRESENT.
 
 ---
 
 ## Pipeline
 
-Run sequentially. On step error, log and continue. Per-step cap: 20 min.
+1. **Use latched mode.** Init-wizard/GOOSE already selected the rail. Do not run a separate mode probe.
+2. **Source discovery.** `skills/source-discovery.md`
+3. **Harvesters.** All enabled harvesters in order (RSS, FB, Reddit, X, IG). Skip empty sources.
+4. **Client seeding.** `skills/client-seeder.md`
+5. **Enrichment.** `skills/enrichment-agent.md` -- includes draft composition for qualifying clients.
+6. **PRESENT -- fetch ready drafts:**
+   ```
+   precrime__find({ action: "clients", filters: { draftStatus: "ready" }, summary: false, limit: 20 })
+   ```
+   For each client with a ready draft:
+   - Show the draft to the user.
+   - `skills/draft-checker.md` with `mode: outreach`.
+   - If `ready` -> ask: `Send this email? (yes / edit / skip)`
+     - `yes` -> send via `gmail__gmail_send`, then mark `draftStatus: "sent"`, `sentAt: now`.
+     - `edit` -> loop.
+     - `skip` -> leave as `ready`.
+   - If `brewing` -> log reasons, leave as `brewing`.
 
-1. **`skills/source-discovery.md`** — expand sources from VALUE_PROP.md + seeds.
-2. **All enabled `skills/*-factlet-harvester/SKILL.md`** per Config.
-3. **`skills/client-seeder.md`** — find named contacts.
-4. **`skills/enrichment-agent.md`** — link factlets, extract Bookings.
-5. **For each Booking with `status = "new"`:**
-   ```
-   precrime__pipeline({ action: "next", id: bookingId })
-   ```
-   Read `draftReady` from response.
-6. **If `draftReady = true`:**
-   1. `skills/outreach-drafter.md` — compose email from VALUE_PROP.md voice + linked factlets + booking context.
-   2. `skills/draft-checker.md` with `mode: outreach` — quality check the draft.
-   3. If verdict = `brewing` → mark `draftStatus: "brewing"`, save reason, continue.
-   4. If verdict = `ready` → save draft, mark `draftStatus: "ready"`, proceed to step 7.
-7. **Mode branch:**
-   - **Interactive:** print draft, ask `send / hold / edit`. On `hold` → leave `draftStatus: "ready"` for later. On `edit` → loop. On `send` → step 8.
-   - **Headless:** mark `draftStatus: "ready"` and stop. Headless mode does NOT auto-send. Sending requires user oversight.
-8. **Send via gmail-sender MCP:**
-   ```
-   mcp__gmail-sender__gmail_send({ to: client.email, subject, body, draft: false })
-   ```
-   If gmail-sender MCP is missing: log `NO_EMAIL_CONFIG`, leave `draftStatus: "ready"`, continue.
-9. **On send success:**
-   ```
-   precrime__pipeline({ action: "save", id: client.id, patch: { draftStatus: "sent", sentAt: Date.now() } })
-   ```
-10. **On send error:** save draft to `logs/ROUNDUP.md`, log error, leave `draftStatus: "ready"` (preserves work). Continue to next client.
+7. **RECURSE if work remains.** Sum the deltas across this iteration:
+   - Step 2 source-discovery added 0 entries, AND
+   - Step 3 harvesters created 0 factlets, AND
+   - Step 4 seeding created 0 clients, AND
+   - Step 5 enrichment composed 0 new drafts, AND
+   - Step 6 PRESENT yielded 0 ready drafts
+   - -> **terminal.** All queues empty. Stop.
 
----
-
-## Logging — `logs/ROUNDUP.md`
-
-```
-SENT: {client.name} / {trade} / {startDate}
-READY: {client.name} → awaiting send
-BREWING: {client.name} → {draft-checker reason}
-ERROR: {step} → {message}
-```
+   Otherwise -> **GOTO Step 2.** Each iteration uncovers more: a new factlet can re-qualify a brewing client; a freshly-found email can lift a thin contact past `contactGate`; a new directory feeds the next seed pass. The pipeline is built to recurse, not to be re-launched manually.
 
 ---
 
 ## Rules
 
-1. **`pipeline.next` draftReady is the only draft gate.** Do not invent gates.
-2. **A draft must cite ≥1 fresh relevant factlet.** Drafter refuses otherwise.
-3. **Drafts never auto-send.** Interactive confirms; headless does not send at all.
-4. **On send error, continue.** Stop only the affected client, not the whole workflow.
+1. Never auto-send. Every email requires user `yes`.
+2. `gmail__gmail_send` then `pipeline.save draftStatus: "sent"` are atomic. Never mark sent without sending.
+3. If send fails, leave as `ready` and log the error.

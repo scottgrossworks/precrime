@@ -1,13 +1,11 @@
 {
   "_comment": "Pre-Crime Deployment Manifest — copy this file, fill it in, then run: node deploy.js --manifest your-manifest.json",
-
   "deployment": {
     "name": "MyProject",
     "version": "1.0",
     "rootDir": "C:\\Users\\YourName\\Projects\\MYPROJECT",
     "dbFile": "data/myproject.sqlite"
   },
-
   "seller": {
     "name": "Your Name",
     "company": "Your Company Name",
@@ -15,7 +13,6 @@
     "website": "https://yourwebsite.com",
     "phone": ""
   },
-
   "product": {
     "name": "Name of what you are selling",
     "description": "2-3 sentence description of the product or service. What it does. Who it's for. Why it's valuable.",
@@ -27,7 +24,6 @@
     "geography": "Cities/regions you serve — e.g., 'Los Angeles metro area'",
     "pricing": "e.g., '$175/hour, one-hour deposit to hold date'"
   },
-
   "audience": {
     "segments": [
       {
@@ -44,8 +40,15 @@
         "seasonalWindows": [
           {
             "name": "Season or buying period name",
-            "months": [1, 2, 3],
-            "event_months": [4, 5],
+            "months": [
+              1,
+              2,
+              3
+            ],
+            "event_months": [
+              4,
+              5
+            ],
             "lead_weeks": 8
           }
         ]
@@ -53,13 +56,16 @@
       {
         "id": "segment_two",
         "label": "Second segment (delete if not needed)",
-        "targetRoles": ["Role title"],
-        "events": ["trigger event"],
+        "targetRoles": [
+          "Role title"
+        ],
+        "events": [
+          "trigger event"
+        ],
         "seasonalWindows": []
       }
     ]
   },
-
   "relevanceSignals": {
     "high": [
       "phrase or keyword that strongly signals buying intent",
@@ -79,17 +85,14 @@
       "e.g. 'college admissions' or 'sports scores'"
     ]
   },
-
   "factletTopics": [
     "Broad industry or audience topic worth tracking in RSS feeds",
     "e.g. 'corporate event planning trends' or 'student mental health policy'"
   ],
-
   "factletNotTopics": [
     "Topics that are NOT worth factleting",
     "e.g. 'individual school sports results' or 'college admissions'"
   ],
-
   "warmthScoring": {
     "categories": [
       {
@@ -158,7 +161,6 @@
       "warmthScore < 9 → draftStatus = brewing always"
     ]
   },
-
   "evaluatorCriteria": [
     {
       "name": "Specificity",
@@ -191,7 +193,6 @@
       "failExample": "Finger on delete by sentence two"
     }
   ],
-
   "outreachRules": {
     "maxWords": 150,
     "tone": "confident, direct, human — sounds like a person who did their homework",
@@ -206,27 +207,17 @@
       "My name is [as opening sentence]"
     ]
   },
-
   "rssConfig": {
     "additionalKeywords": [
       "keyword relevant to your audience",
       "another keyword"
     ],
-    "feeds": [
-      {
-        "url": "https://example-feed.com/rss",
-        "name": "Feed Display Name",
-        "category": "category_label",
-        "keywords": ["keyword1", "keyword2", "keyword3"]
-      }
-    ]
+    "_feeds": "RSS feeds live in templates/skills/rss-factlet-harvester/rss_sources.md and deployed skills/rss-factlet-harvester/rss_sources.md, not manifest.json."
   },
-
   "fbSources": [
     "https://www.facebook.com/YourFirstPage/",
     "https://www.facebook.com/YourSecondPage/"
   ],
-
   "bookingConfig": {
     "_comment": "Applies only to lead-capture / booking deployments. Leave blank for pure outreach deployments.",
     "defaultTrade": "Your trade category — e.g. DJ, Photographer, Caterer, Caricature Artist",
@@ -245,17 +236,22 @@
       "hybrid      — both: draft outreach emails AND share bookings. (default)"
     ]
   },
-
   "redditConfig": {
     "subreddits": [
       {
         "name": "YourIndustrySubreddit",
-        "keywords": ["keyword relevant to your buyers", "another keyword"],
+        "keywords": [
+          "keyword relevant to your buyers",
+          "another keyword"
+        ],
         "category": "industry"
       },
       {
         "name": "AnotherSubreddit",
-        "keywords": ["buying signal phrase", "pain point keyword"],
+        "keywords": [
+          "buying signal phrase",
+          "pain point keyword"
+        ],
         "category": "leads"
       }
     ],
@@ -263,7 +259,6 @@
       "keyword to add to global list"
     ]
   },
-
   "igConfig": {
     "accounts": [
       {

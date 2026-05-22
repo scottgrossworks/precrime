@@ -53,7 +53,7 @@ QUESTION_TO_READER_RE = re.compile(
 )
 EMAIL_BASIC_RE = re.compile(r"^[^@\s]+@[^@\s]+\.[A-Za-z]{2,}$")
 
-REQUIRED_FIELDS = ("session", "tn", "ti", "zp", "st", "lc", "dt", "cn", "em")
+REQUIRED_FIELDS = ("session", "tn", "ti", "zp", "st", "et", "lc", "dt", "cn", "em")
 
 
 _user_identity_cached: dict | None = None  # populated by lazy_user_identity()
@@ -88,6 +88,14 @@ def lazy_user_identity() -> dict:
     return out
 
 
+def as_number(value):
+    """Return float(value) for epoch checks, or None when not numeric."""
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None
+
+
 def validate_leed(payload: dict) -> list[str]:
     """Return a list of validation error messages. Empty list = pass."""
     errors: list[str] = []
@@ -97,6 +105,20 @@ def validate_leed(payload: dict) -> list[str]:
         v = payload.get(f)
         if v is None or (isinstance(v, str) and not v.strip()):
             errors.append(f"missing required field '{f}'")
+
+    # 1b. Time sanity. Leedz marketplace dates must be machine-produced epoch ms.
+    st_num = as_number(payload.get("st"))
+    et_num = as_number(payload.get("et"))
+    if payload.get("st") is not None and st_num is None:
+        errors.append("st must be an epoch-ms number produced by precrime resolve_dates.")
+    if payload.get("et") is not None and et_num is None:
+        errors.append("et must be an epoch-ms number produced by precrime resolve_dates. Never share without an end time.")
+    if st_num is not None and et_num is not None and et_num <= st_num:
+        errors.append("et must be after st. Never share a leed without a real end time.")
+    if st_num is not None and st_num < time.time() * 1000:
+        errors.append("st is in the past. Marketplace leedz must be current or future bookings.")
+    if st_num is not None and et_num is not None and (et_num - st_num) > 14 * 24 * 60 * 60 * 1000:
+        errors.append("date span is too large for a marketplace booking. Verify source date text and create a tighter booking window.")
 
     # 2. Identity confusion: cn / em must NOT match the user's identity
     user = lazy_user_identity()
@@ -205,8 +227,8 @@ def handle_tools_list(req_id):
                         "  tn (string, required) -- trade name, lowercase, must be in get_trades()\n"
                         "  ti (string, required) -- title\n"
                         "  zp (string, required) -- zip\n"
-                        "  st (number, required) -- start epoch ms\n"
-                        "  et (number) -- end epoch ms\n"
+                        "  st (number, required) -- start epoch ms from precrime resolve_dates\n"
+                        "  et (number, required) -- end epoch ms from precrime resolve_dates\n"
                         "  lc (string, required) -- full address\n"
                         "  dt (string, required) -- description\n"
                         "  rq (string) -- requirements / sellable hook\n"
@@ -224,8 +246,8 @@ def handle_tools_list(req_id):
                             "tn": {"type": "string", "description": "REQUIRED. Trade name, lowercase. Must be in precrime__trades()."},
                             "ti": {"type": "string", "description": "REQUIRED. Event-focused title."},
                             "zp": {"type": "string", "description": "REQUIRED. Zip code."},
-                            "st": {"type": "number", "description": "REQUIRED. Start time, epoch milliseconds."},
-                            "et": {"type": "number", "description": "End time, epoch milliseconds. Optional."},
+                            "st": {"type": "number", "description": "REQUIRED. Start time, epoch milliseconds from precrime resolve_dates."},
+                            "et": {"type": "number", "description": "REQUIRED. End time, epoch milliseconds from precrime resolve_dates."},
                             "lc": {"type": "string", "description": "REQUIRED. Full venue address including zip."},
                             "dt": {"type": "string", "description": "REQUIRED. Event description, third-person, no greetings, no first-person, no pricing."},
                             "rq": {"type": "string", "description": "Logistics: power, footprint, parking, COI. Not seller deliverables."},
@@ -234,7 +256,7 @@ def handle_tools_list(req_id):
                             "ph": {"type": "string", "description": "Buyer contact phone from CLIENT record."},
                             "sh": {"type": "string", "description": "Share string per SHARE_API.md, typically '*'."},
                         },
-                        "required": ["session", "tn", "ti", "zp", "st", "lc", "dt", "cn", "em"],
+                        "required": ["session", "tn", "ti", "zp", "st", "et", "lc", "dt", "cn", "em"],
                         "additionalProperties": True,
                     },
                 }

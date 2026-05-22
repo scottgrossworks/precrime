@@ -1,13 +1,11 @@
 {
   "_comment": "Pre-Crime default manifest — caricature artist example. Copy and customize for your own deployment.",
-
   "deployment": {
     "name": "MyProject",
     "version": "1.0",
     "rootDir": "C:\\Users\\YourName\\Projects\\MYPROJECT",
     "dbFile": "data/myproject.sqlite"
   },
-
   "seller": {
     "name": "Your Name",
     "company": "Your Company",
@@ -15,7 +13,6 @@
     "website": "https://yourdomain.com",
     "phone": ""
   },
-
   "product": {
     "name": "Live Caricature Entertainment",
     "description": "A professional caricature artist available for corporate events, weddings, bar/bat mitzvahs, private parties, and trade shows in the Los Angeles area. Fast, funny, flattering likenesses drawn on the spot — guests leave with a keepsake they actually want to keep.",
@@ -28,7 +25,6 @@
     "geography": "Los Angeles metro area — Orange County, Ventura County on request",
     "pricing": "$250/hr, 2-hour minimum. Deposit to hold date."
   },
-
   "audience": {
     "segments": [
       {
@@ -52,14 +48,29 @@
         "seasonalWindows": [
           {
             "name": "Holiday Party Season",
-            "months": [9, 10, 11],
-            "event_months": [11, 12],
+            "months": [
+              9,
+              10,
+              11
+            ],
+            "event_months": [
+              11,
+              12
+            ],
             "lead_weeks": 6
           },
           {
             "name": "Summer Picnic Season",
-            "months": [3, 4, 5],
-            "event_months": [6, 7, 8],
+            "months": [
+              3,
+              4,
+              5
+            ],
+            "event_months": [
+              6,
+              7,
+              8
+            ],
             "lead_weeks": 8
           }
         ]
@@ -82,14 +93,30 @@
         "seasonalWindows": [
           {
             "name": "Spring Wedding Season",
-            "months": [12, 1, 2],
-            "event_months": [4, 5, 6],
+            "months": [
+              12,
+              1,
+              2
+            ],
+            "event_months": [
+              4,
+              5,
+              6
+            ],
             "lead_weeks": 12
           },
           {
             "name": "Fall Wedding Season",
-            "months": [5, 6, 7],
-            "event_months": [9, 10, 11],
+            "months": [
+              5,
+              6,
+              7
+            ],
+            "event_months": [
+              9,
+              10,
+              11
+            ],
             "lead_weeks": 12
           }
         ]
@@ -113,15 +140,28 @@
         "seasonalWindows": [
           {
             "name": "Party Season",
-            "months": [1, 2, 3, 8, 9, 10],
-            "event_months": [3, 4, 5, 10, 11, 12],
+            "months": [
+              1,
+              2,
+              3,
+              8,
+              9,
+              10
+            ],
+            "event_months": [
+              3,
+              4,
+              5,
+              10,
+              11,
+              12
+            ],
             "lead_weeks": 8
           }
         ]
       }
     ]
   },
-
   "relevanceSignals": {
     "high": [
       "looking for caricature artist",
@@ -164,7 +204,6 @@
       "political cartoon"
     ]
   },
-
   "factletTopics": [
     "corporate event planning trends Los Angeles",
     "wedding entertainment trends",
@@ -174,7 +213,6 @@
     "event industry recovery post-pandemic",
     "party entertainment rental trends"
   ],
-
   "factletNotTopics": [
     "digital art tools and software",
     "fine art gallery news",
@@ -183,7 +221,6 @@
     "NFT or crypto art",
     "art school admissions"
   ],
-
   "warmthScoring": {
     "categories": [
       {
@@ -252,7 +289,6 @@
       "warmthScore < 9 → draftStatus = brewing always"
     ]
   },
-
   "evaluatorCriteria": [
     {
       "name": "Specificity",
@@ -285,7 +321,6 @@
       "failExample": "Finger on delete by sentence two"
     }
   ],
-
   "outreachRules": {
     "maxWords": 120,
     "tone": "warm, direct, confident — not salesy. Sounds like a working artist who's done this a thousand times.",
@@ -302,7 +337,6 @@
       "fun for the whole family"
     ]
   },
-
   "rssConfig": {
     "additionalKeywords": [
       "caricature artist",
@@ -313,28 +347,13 @@
       "trade show engagement",
       "Los Angeles events"
     ],
-    "feeds": [
-      {
-        "url": "https://www.bizbash.com/feed",
-        "name": "BizBash Event News",
-        "category": "event_industry",
-        "keywords": ["entertainment", "corporate event", "wedding", "party"]
-      },
-      {
-        "url": "https://www.specialevents.com/feed",
-        "name": "Special Events Magazine",
-        "category": "event_industry",
-        "keywords": ["entertainment", "live event", "caricature", "artist"]
-      }
-    ]
+    "_feeds": "RSS feeds live in templates/skills/rss-factlet-harvester/rss_sources.md and deployed skills/rss-factlet-harvester/rss_sources.md, not manifest.json."
   },
-
   "fbSources": [
     "https://www.facebook.com/groups/LAweddings/",
     "https://www.facebook.com/groups/LAeventplanners/",
     "https://www.facebook.com/groups/LAcorporateevents/"
   ],
-
   "bookingConfig": {
     "defaultTrade": "Caricature Artist",
     "defaultBookingAction": "leedz_api",
@@ -346,32 +365,54 @@
     "leadCaptureEnabled": true,
     "marketplaceEnabled": true
   },
-
   "redditConfig": {
     "subreddits": [
       {
         "name": "weddingplanning",
-        "keywords": ["caricature", "entertainment", "live artist", "party entertainment"],
+        "keywords": [
+          "caricature",
+          "entertainment",
+          "live artist",
+          "party entertainment"
+        ],
         "category": "leads"
       },
       {
         "name": "LosAngeles",
-        "keywords": ["caricature artist", "entertainment", "event", "party"],
+        "keywords": [
+          "caricature artist",
+          "entertainment",
+          "event",
+          "party"
+        ],
         "category": "leads"
       },
       {
         "name": "losangeles",
-        "keywords": ["caricature", "entertainment for event", "party artist"],
+        "keywords": [
+          "caricature",
+          "entertainment for event",
+          "party artist"
+        ],
         "category": "leads"
       },
       {
         "name": "eventplanning",
-        "keywords": ["caricature artist", "live entertainment", "corporate event entertainment"],
+        "keywords": [
+          "caricature artist",
+          "live entertainment",
+          "corporate event entertainment"
+        ],
         "category": "leads"
       },
       {
         "name": "barmizvah",
-        "keywords": ["entertainment", "caricature", "artist", "party"],
+        "keywords": [
+          "entertainment",
+          "caricature",
+          "artist",
+          "party"
+        ],
         "category": "leads"
       }
     ],
@@ -382,7 +423,6 @@
       "event entertainment Los Angeles"
     ]
   },
-
   "igConfig": {
     "accounts": [
       {

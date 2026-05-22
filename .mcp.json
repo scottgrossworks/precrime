@@ -1,14 +1,24 @@
 {
   "mcpServers": {
-    "precrime-mcp": {
+    "precrime": {
       "command": "node",
-      "args": ["server/mcp/mcp_server.js"],
-      "cwd": "C:\\Users\\Admin\\Desktop\\WKG\\PRECRIME"
+      "args": ["server/mcp/mcp_server.js"]
+    },
+    "precrime-rss": {
+      "command": "node",
+      "args": ["rss/rss-scorer-mcp/index.js"]
     },
     "gmail": {
       "command": "node",
-      "args": ["server/mcp/mcp_gmail.js"],
-      "cwd": "C:\\Users\\Admin\\Desktop\\WKG\\PRECRIME"
+      "args": ["server/mcp/mcp_gmail.js"]
+    },
+    "tavily": {
+      "command": "python",
+      "args": ["tools/tavily_lean_mcp.py"]
+    },
+    "leedz": {
+      "command": "python",
+      "args": ["tools/leedz_proxy_mcp.py"]
     }
   }
 }

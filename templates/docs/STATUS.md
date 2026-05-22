@@ -1,4 +1,4 @@
-# {{DEPLOYMENT_NAME}} — Session Bootstrap
+# {{DEPLOYMENT_NAME}} -- Session Bootstrap
 
 **Generated:** {{TODAY}}
 **Read this entire file before touching anything.**
@@ -7,38 +7,38 @@
 
 ## MANDATORY FIRST READS
 
-1. `DOCS/CLAUDE.md` — Binding rules.
-2. `DOCS/VALUE_PROP.md` — Product pitch and audience. Read before composing any draft.
-3. This file — finish it.
+1. `DOCS/CLAUDE.md` -- Binding rules.
+2. `DOCS/VALUE_PROP.md` -- Product pitch and audience. Read before composing any draft.
+3. This file -- finish it.
 
 ---
 
 ## PROJECT OVERVIEW
 
-**{{DEPLOYMENT_NAME}}** — contextual outreach engine.
+**{{DEPLOYMENT_NAME}}** -- contextual outreach engine.
 
-**Product identity, seller info, audience, and geography are defined in `DOCS/VALUE_PROP.md`. Read that file — do not infer product identity from folder names, manifest tokens, or any other source.**
+**Product identity, seller info, audience, and geography are defined in `DOCS/VALUE_PROP.md`. Read that file -- do not infer product identity from folder names, manifest tokens, or any other source.**
 
 ---
 
 ## RUNNING THE WORKFLOW
 
-**First time:** say **"initialize this deployment"** — the init wizard will confirm config, generate your Leedz session JWT, discover harvest sources, then launch harvesters automatically.
+**First time:** say **"initialize this deployment"** -- the init wizard will confirm config, generate your Leedz session JWT, discover harvest sources, then launch harvesters automatically.
 
 **Subsequent runs:** say **"run the enrichment workflow"** in any Claude session.
 
 | Playbook | Purpose |
 |----------|---------|
-| `skills/enrichment-agent.md` | Full enrichment loop (load → factlets → discovery → ingest → compose → evaluate) |
-| `skills/evaluator.md` | Draft evaluation: 5 pass/fail criteria |
-| `skills/factlet-harvester.md` | RSS → factlet pipeline |
-| `skills/fb-factlet-harvester/SKILL.md` | Facebook → factlet pipeline (requires Chrome desktop app) |
+| `skills/enrichment-agent.md` | Full enrichment loop (load -> factlets -> discovery -> ingest -> compose -> evaluate) |
+| `skills/draft-checker.md` | Draft evaluation and readiness checks |
+| `skills/factlet-harvester.md` | RSS -> factlet pipeline |
+| `skills/fb-factlet-harvester/SKILL.md` | Facebook -> factlet pipeline (requires Chrome desktop app) |
 
 ---
 
 ## DATABASE
 
-**Read `server/mcp/mcp_server_config.json` → `database.path` for the active DB path.** That is the single place the DB is configured.
+**Read `server/mcp/mcp_server_config.json` -> `database.path` for the active DB path.** That is the single place the DB is configured.
 
 DO NOT use any other .sqlite file.
 
@@ -56,11 +56,11 @@ model Client {
   website        String?
   clientNotes    String?
   segment        String?   // audience segment: defined per deployment
-  dossier        String?   // accumulated intelligence — timestamped prose
+  dossier        String?   // accumulated intelligence -- timestamped prose
   targetUrls     String?   // JSON: [{url, type, label}]
   draft          String?   // current best outreach draft
   draftStatus    String?   // "brewing" | "ready" | "sent"
-  warmthScore    Float?    // 0–10
+  warmthScore    Float?    // 0--10
   lastEnriched   DateTime?
   lastQueueCheck DateTime? // DB cursor + factlet watermark
   source         String?   // how this client entered the DB
@@ -132,13 +132,13 @@ model Config {
 
 ## MCP CONFIGURATION
 
-**`.mcp.json`** — defines MCP servers. Claude reads this from the working directory.
+**`.mcp.json`** -- defines MCP servers. Claude reads this from the working directory.
 
 | Tool prefix | Server | Entry point |
 |-------------|--------|-------------|
 | `mcp__precrime-mcp__*` | precrime-mcp | `server/mcp/mcp_server.js` |
 | `mcp__precrime-rss__*` | precrime-rss | `rss/rss-scorer-mcp/index.js` |
-| `mcp__gmail-sender__*` | gmail-sender | optional — requires separate MCP setup |
+| `mcp__gmail-sender__*` | gmail-sender | optional -- requires separate MCP setup |
 
 ---
 
@@ -150,7 +150,7 @@ model Config {
 | `DOCS/STATUS.md` | This file |
 | `DOCS/VALUE_PROP.md` | Full product pitch + differentiators |
 | `skills/enrichment-agent.md` | Enrichment loop playbook |
-| `skills/evaluator.md` | Draft evaluation logic |
+| `skills/draft-checker.md` | Draft evaluation logic |
 | `skills/relevance-judge.md` | Relevance filter |
 | `skills/factlet-harvester.md` | RSS factlet harvester |
 | `skills/fb-factlet-harvester/SKILL.md` | FB factlet harvester |
@@ -164,15 +164,15 @@ model Config {
 
 ---
 
-## DESIGN DECISIONS — SETTLED
+## DESIGN DECISIONS -- SETTLED
 
-1. **Factlets are GLOBAL** — no clientId. Client-specific intel → dossier only.
-2. **`lastQueueCheck` dual role** — DB cursor + factlet watermark.
-3. **`targetUrls` is JSON** — `[{url, type, label}]`
-4. **`dossier` is timestamped prose** — `[date] Source: finding.`
-5. **No HTTP server** — MCP calls Prisma directly.
-6. **No local LLM** — Claude does everything.
-7. **`segment` field** — audience segment label for multi-segment deployments.
+1. **Factlets are GLOBAL** -- no clientId. Client-specific intel -> dossier only.
+2. **`lastQueueCheck` dual role** -- DB cursor + factlet watermark.
+3. **`targetUrls` is JSON** -- `[{url, type, label}]`
+4. **`dossier` is timestamped prose** -- `[date] Source: finding.`
+5. **No HTTP server** -- MCP calls Prisma directly.
+6. **No local LLM** -- Claude does everything.
+7. **`segment` field** -- audience segment label for multi-segment deployments.
 
 ---
 
@@ -187,7 +187,7 @@ model Config {
 
 ### TODO (manual steps required before first run)
 - [ ] Fill in `DOCS/VALUE_PROP.md` with the real product pitch
-- [ ] Run init wizard: say "initialize this deployment" — it handles Config setup, JWT generation, and harvest source discovery
+- [ ] Run init wizard: say "initialize this deployment" -- it handles Config setup, JWT generation, and harvest source discovery
 - [ ] Load client records into the database (if outreach mode)
 
 ### Segments and seasonal windows

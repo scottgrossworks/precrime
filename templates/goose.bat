@@ -2,14 +2,25 @@
 setlocal
 cd /d "%~dp0"
 
-:: Database: optional argument overrides default
-:: Usage:  goose                       -> data\myproject.sqlite
-::         goose ca_schools_migrated   -> data\ca_schools_migrated.sqlite
-if "%~1"=="" (
-  set "DBNAME=myproject.sqlite"
-) else (
-  set "DBNAME=%~1"
+:: Mode: --headless flag triggers autonomous marketplace mode (no user interaction).
+:: Usage:  goose.bat                       -> interactive
+::         goose.bat --headless            -> headless marketplace
+::         goose.bat --headless mydb       -> headless with custom DB
+set "PRECRIME_MODE=interactive"
+set "DBNAME=myproject.sqlite"
+
+:parse_args
+if "%~1"=="" goto :args_done
+if /i "%~1"=="--headless" (
+  set "PRECRIME_MODE=headless"
+  shift
+  goto :parse_args
 )
+set "DBNAME=%~1"
+shift
+goto :parse_args
+:args_done
+
 if not "%DBNAME:~-7%"==".sqlite" set "DBNAME=%DBNAME%.sqlite"
 
 set "DBPATH=%~dp0data\%DBNAME%"
@@ -51,11 +62,25 @@ if "%OPENROUTER_API_KEY%"=="" (
   echo  OPENROUTER_API_KEY missing from .env. Add it and re-run.
   pause & exit /b 1
 )
+if "%OPENROUTER_API_KEY%"=="sk-or-v1-REPLACE_ME" (
+  echo.
+  echo  API keys not set. Edit this file with your real keys, then restart:
+  echo    %~dp0.env
+  echo.
+  pause & exit /b 1
+)
 if "%TAVILY_API_KEY%"=="" (
   echo  TAVILY_API_KEY missing from .env. Add it and re-run.
   pause & exit /b 1
 )
-if "%GOOSE_MODEL%"=="" set "GOOSE_MODEL=x-ai/grok-4.1-fast"
+if "%TAVILY_API_KEY%"=="tvly-REPLACE_ME" (
+  echo.
+  echo  API keys not set. Edit this file with your real keys, then restart:
+  echo    %~dp0.env
+  echo.
+  pause & exit /b 1
+)
+if "%GOOSE_MODEL%"=="" set "GOOSE_MODEL=google/gemini-3-flash-preview"
 
 :: --- Write goose user config from template ---
 :: Goose reads %APPDATA%\Block\goose\config\config.yaml, NOT this folder's .mcp.json.
@@ -77,6 +102,14 @@ if not exist "%GOOSE_CFG_DIR%" mkdir "%GOOSE_CFG_DIR%"
 powershell -NoProfile -ExecutionPolicy Bypass -Command "$tpl = Get-Content -Raw -LiteralPath $env:GOOSE_TPL; $out = $tpl.Replace('__PROJECT_ROOT__', $env:PROJECT_ROOT).Replace('__GOOSE_MODEL__', $env:GOOSE_MODEL); [System.IO.File]::WriteAllText($env:GOOSE_CFG, $out, [System.Text.UTF8Encoding]::new($false))"
 if errorlevel 1 (
   echo  Failed to write goose config: %GOOSE_CFG%
+  pause & exit /b 1
+)
+
+:: Patch GOOSE.md with actual project root (build.bat stamps __PROJECT_ROOT__ as placeholder)
+set "GOOSE_MD=%~dp0GOOSE.md"
+powershell -NoProfile -ExecutionPolicy Bypass -Command "$f = Get-Content -Raw -LiteralPath $env:GOOSE_MD; $out = $f.Replace('__PROJECT_ROOT__', $env:PROJECT_ROOT); [System.IO.File]::WriteAllText($env:GOOSE_MD, $out, [System.Text.UTF8Encoding]::new($false))"
+if errorlevel 1 (
+  echo  Failed to patch GOOSE.md
   pause & exit /b 1
 )
 
@@ -109,6 +142,9 @@ if errorlevel 1 (
   exit /b 1
 )
 
+:: Sync VALUE_PROP.md masthead into DB Config if available.
+node "%~dp0server\sync-config.js" 2>nul
+
 :: Launch goose session.
 :: GOOSE.md is the routing table. --system can't hold the whole file (multi-line
 :: text gets mangled by Windows arg passing), so the system instruction is short:
@@ -116,4 +152,11 @@ if errorlevel 1 (
 :: bootstraps itself via developer__shell type on turn 1.
 :: Use full path to goose.exe: cmd resolves CWD before PATH, so bare 'goose'
 :: would match THIS .bat file and infinite-loop.
-"%USERPROFILE%\.local\bin\goose.exe" run --system "Your FIRST action every session is: call developer__shell with command 'type %~dp0GOOSE.md' to read the full GOOSE.md routing rules, then follow every rule for the rest of the session. GOOSE.md is your routing table. Do not ask clarifying questions, do not search external docs, do not improvise. Be terse: no narration, no acknowledgments, no restating what you will do." -t "run precrime (database: %DBNAME%)" -s
+:: The -t flag sets the initial user message. "headless" in the message triggers
+:: headless mode per GOOSE.md routing table; otherwise "run" triggers interactive.
+if "%PRECRIME_MODE%"=="headless" (
+  set "GOOSE_TRIGGER=headless precrime (database: %DBNAME%)"
+) else (
+  set "GOOSE_TRIGGER=run precrime (database: %DBNAME%)"
+)
+"%USERPROFILE%\.local\bin\goose.exe" run --system "First call developer__shell: type %~dp0GOOSE.md. Then follow it tersely." -t "%GOOSE_TRIGGER%" -s

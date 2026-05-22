@@ -49,7 +49,7 @@ model Booking {
   hourlyRate       Float?
   flatRate         Float?
   totalAmount      Float?
-  status           String    @default("new")  // new | leed_ready | shared | booked | cancelled
+  status           String    @default("brewing")  // brewing | outreach_ready | leed_ready | shared | taken | expired. Set ONLY by computeBookingTargetScore. See DOCS/SCORING.json gates.
   source           String?
   sourceUrl        String?
   trade            String?
@@ -79,7 +79,7 @@ model ClientFactlet {
   id         String   @id @default(cuid())
   clientId   String
   factletId  String
-  relevance  Boolean  @default(true)  // binary: factlet relevant to VALUE_PROP. The scoring gate per DOCS/SCORING.md. Set by relevance-judge at ingestion.
+  relevance  Boolean  @default(true)  // binary: factlet relevant to VALUE_PROP. The scoring gate per DOCS/SCORING.json. Set by relevance-judge at ingestion.
   signalType String?  // DEPRECATED — legacy "pain" | "occasion" | "context". Retained for back-compat; not used by score_target.
   points     Int?     // DEPRECATED — legacy point value. Not used by score_target.
   appliedAt  DateTime @default(now())
@@ -87,6 +87,78 @@ model ClientFactlet {
   factlet    Factlet  @relation(fields: [factletId], references: [id])
 
   @@unique([clientId, factletId])
+}
+
+// ============================================================================
+// SESSION + SESSIONEVENT — workflow accountability layer
+// ============================================================================
+// A Session represents one bounded unit of agent work (e.g. "find 5 convention
+// exhibitors"). The agent calls pipeline.start_session to open one and gets
+// back a server-issued session_id it cannot forge. Subsequent save calls may
+// include session_id; the server logs each success/failure as a SessionEvent.
+// pipeline.report_session aggregates those events server-side and returns the
+// truth — the model cannot lie about counts because the server queries its
+// own append-only log. See DOCS/CLAUDE.md (truth-in-tools layer).
+// ============================================================================
+
+model Session {
+  id          String         @id                       // server-issued, e.g. "ses_<cuid>"
+  workflow    String                                    // "convention-leeds" | "enrichment" | "drafting" | ad-hoc
+  status      String         @default("active")        // "active" | "complete" | "abandoned"
+  targetCount Int?                                      // optional declared target (e.g. 5 clients)
+  startedAt   DateTime       @default(now())
+  finishedAt  DateTime?
+  metadata    String?                                   // JSON blob for workflow-specific params
+  events      SessionEvent[]
+}
+
+model SessionEvent {
+  id        String   @id @default(cuid())
+  sessionId String
+  ts        DateTime @default(now())
+  action    String                                      // "save_success" | "save_failed" | "report" | extensible
+  payload   String?                                     // JSON: {clientId, name, score} or {name, error, attemptedPatch} etc
+  session   Session  @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+
+  @@index([sessionId])
+  @@index([action])
+}
+
+// ============================================================================
+// SOURCE -- the queue of dereferenceable discovery sources
+// ============================================================================
+// Replaces the markdown-as-queue pattern. Every URL the system might scrape
+// (directories, RSS feeds, FB pages, IG accounts/hashtags, subreddits, X
+// accounts/hashtags, blogs) lives here. Agents call pipeline.next_source to
+// pop one with an atomic claim, scrape it, then pipeline.mark_source to
+// release the claim and persist the result. New URLs found during a scrape
+// are added via pipeline.add_sources. _sources.md files become seed-only.
+//
+// The recursion arms in FOUNDATION.md route through this table:
+//   - source recursion: a scraped page reveals a new URL -> add_sources
+//   - claim timeout (10min) replaces the prior 3-min save-or-terminate
+//     watchdog for the URL queue specifically. If an agent dies mid-scrape,
+//     the row becomes claimable again.
+// ============================================================================
+
+model Source {
+  id             String    @id @default(cuid())
+  url            String    @unique             // canonical normalized URL
+  channel        String                         // directory|rss|fb|ig|reddit|x|blog|website
+  subtype        String?                        // page|group|account|hashtag|keyword|feed|subreddit
+  label          String?
+  category       String?
+  scrapedAt      DateTime?
+  claimedAt      DateTime?                      // for atomic claim (work-stealing)
+  claimedBy      String?                        // session_id holding the claim
+  clientsFound   Int       @default(0)
+  failedReason   String?
+  discoveredAt   DateTime  @default(now())
+  discoveredFrom String?                        // url of source that linked here (recursion lineage)
+
+  @@index([channel])
+  @@index([scrapedAt])
+  @@index([claimedAt])
 }
 
 model Config {

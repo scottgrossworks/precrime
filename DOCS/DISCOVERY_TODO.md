@@ -43,7 +43,7 @@ PRECRIME/
 │   │   │   ├── SKILL.md              ← Facebook harvester
 │   │   │   └── fb_sources.md         ← one FB URL per line, # for comments
 │   │   ├── source-discovery.md       ← ** YOU ARE BUILDING THIS **
-│   │   └── evaluator.md              ← draft quality checker
+│   │   └── draft-checker.md          ← draft quality checker
 │   ├── docs/
 │   │   ├── VALUE_PROP.md             ← product identity (audience, geography, trade, pain points)
 │   │   └── CLAUDE.md                 ← binding rules
@@ -53,7 +53,7 @@ PRECRIME/
 │       └── rss-scorer-mcp/
 │           └── rss_config.json       ← RSS feeds + keywords + scoring
 ├── DOCS/
-│   └── wiki/concepts/scoring.md      ← scoring system reference
+│   └── SCORING.json                  ← canonical scoring policy
 └── data/
     └── myproject.sqlite              ← active database
 ```
@@ -84,21 +84,8 @@ https://www.facebook.com/WeddingPlannersOfLA
 }
 ```
 
-**`rss/rss-scorer-mcp/rss_config.json`:**
-```json
-{
-  "feeds": [
-    {
-      "name": "Event Industry News",
-      "url": "https://www.specialevents.com/rss",
-      "category": "events",
-      "keywords": ["convention", "trade show", "corporate event"]
-    }
-  ],
-  "global_keywords": ["event", "booking", "entertainment"],
-  "relevanceThreshold": 0.5
-}
-```
+**RSS source files:**
+RSS feeds live in `skills/rss-factlet-harvester/rss_sources.md`. Scoring keywords live in `rss/rss-scorer-mcp/rss_config.json`; do not put feed URLs in manifest JSON.
 
 ### MCP Tools Available
 

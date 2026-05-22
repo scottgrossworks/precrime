@@ -1,13 +1,11 @@
 {
   "_comment": "Pre-Crime sample manifest — caricature artist, Los Angeles. Copy this and fill in your own details.",
-
   "deployment": {
     "name": "DrawingShow",
     "version": "1.0",
     "rootDir": "C:\\Users\\YourName\\Projects\\DRAWINGSHOW",
     "dbFile": "data/drawingshow.sqlite"
   },
-
   "seller": {
     "name": "Your Name",
     "company": "That Drawing Show",
@@ -15,7 +13,6 @@
     "website": "https://yourdomain.com/drawingshow",
     "phone": ""
   },
-
   "product": {
     "name": "Party Caricatures & Coloring Party Entertainment",
     "description": "Live caricature and coloring party entertainment for LA-area events. Former Warner Bros./DC Comics artist. $175/hour caricatures (12-15 faces/hour), $200/hour coloring parties. Full setup provided — chair, lighting, supplies. Custom-branded event paper available.",
@@ -29,74 +26,228 @@
     "geography": "Los Angeles metro — San Fernando Valley, Inland Empire, Pasadena, Burbank, Glendale, Long Beach, Santa Monica, Torrance",
     "pricing": "$175/hour caricatures, $200/hour coloring parties. One-hour deposit to hold date. Full payment on completion."
   },
-
   "audience": {
     "segments": [
       {
         "id": "schools",
         "label": "K-12 Schools",
-        "targetRoles": ["ASB Advisor", "Student Activities Director", "Principal", "PTA President", "Activities Coordinator"],
-        "events": ["prom", "spring formal", "homecoming", "fall carnival", "Halloween fair", "spring fair", "graduation party", "field day"],
+        "targetRoles": [
+          "ASB Advisor",
+          "Student Activities Director",
+          "Principal",
+          "PTA President",
+          "Activities Coordinator"
+        ],
+        "events": [
+          "prom",
+          "spring formal",
+          "homecoming",
+          "fall carnival",
+          "Halloween fair",
+          "spring fair",
+          "graduation party",
+          "field day"
+        ],
         "seasonalWindows": [
-          { "name": "Prom Season", "months": [1,2,3,4], "event_months": [4,5,6], "lead_weeks": 8 },
-          { "name": "Halloween Carnival", "months": [8,9,10], "event_months": [10], "lead_weeks": 6 },
-          { "name": "Spring Fair", "months": [2,3,4], "event_months": [4,5], "lead_weeks": 6 }
+          {
+            "name": "Prom Season",
+            "months": [
+              1,
+              2,
+              3,
+              4
+            ],
+            "event_months": [
+              4,
+              5,
+              6
+            ],
+            "lead_weeks": 8
+          },
+          {
+            "name": "Halloween Carnival",
+            "months": [
+              8,
+              9,
+              10
+            ],
+            "event_months": [
+              10
+            ],
+            "lead_weeks": 6
+          },
+          {
+            "name": "Spring Fair",
+            "months": [
+              2,
+              3,
+              4
+            ],
+            "event_months": [
+              4,
+              5
+            ],
+            "lead_weeks": 6
+          }
         ]
       },
       {
         "id": "corporate",
         "label": "Corporate Events",
-        "targetRoles": ["HR Manager", "Office Manager", "Event Coordinator", "Marketing Manager", "Executive Assistant"],
-        "events": ["holiday party", "team building", "company milestone", "product launch party", "annual gala"],
+        "targetRoles": [
+          "HR Manager",
+          "Office Manager",
+          "Event Coordinator",
+          "Marketing Manager",
+          "Executive Assistant"
+        ],
+        "events": [
+          "holiday party",
+          "team building",
+          "company milestone",
+          "product launch party",
+          "annual gala"
+        ],
         "seasonalWindows": [
-          { "name": "Holiday Season", "months": [10,11], "event_months": [11,12], "lead_weeks": 8 }
+          {
+            "name": "Holiday Season",
+            "months": [
+              10,
+              11
+            ],
+            "event_months": [
+              11,
+              12
+            ],
+            "lead_weeks": 8
+          }
         ]
       },
       {
         "id": "community",
         "label": "Community Organizations",
-        "targetRoles": ["Event Chair", "Community Manager", "HOA President", "Recreation Director", "Volunteer Coordinator"],
-        "events": ["community fair", "block party", "charity gala", "4th of July", "summer picnic"],
+        "targetRoles": [
+          "Event Chair",
+          "Community Manager",
+          "HOA President",
+          "Recreation Director",
+          "Volunteer Coordinator"
+        ],
+        "events": [
+          "community fair",
+          "block party",
+          "charity gala",
+          "4th of July",
+          "summer picnic"
+        ],
         "seasonalWindows": [
-          { "name": "Summer Events", "months": [4,5,6], "event_months": [6,7,8], "lead_weeks": 6 }
+          {
+            "name": "Summer Events",
+            "months": [
+              4,
+              5,
+              6
+            ],
+            "event_months": [
+              6,
+              7,
+              8
+            ],
+            "lead_weeks": 6
+          }
         ]
       },
       {
         "id": "religious",
         "label": "Religious Organizations",
-        "targetRoles": ["Event Chair", "Youth Director", "Religious School Director", "Executive Director"],
-        "events": ["holiday party", "Purim carnival", "Chanukah party", "Easter egg hunt", "Cinco de Mayo festival"],
+        "targetRoles": [
+          "Event Chair",
+          "Youth Director",
+          "Religious School Director",
+          "Executive Director"
+        ],
+        "events": [
+          "holiday party",
+          "Purim carnival",
+          "Chanukah party",
+          "Easter egg hunt",
+          "Cinco de Mayo festival"
+        ],
         "seasonalWindows": [
-          { "name": "Fall Holidays", "months": [9,10,11], "event_months": [10,11,12], "lead_weeks": 4 }
+          {
+            "name": "Fall Holidays",
+            "months": [
+              9,
+              10,
+              11
+            ],
+            "event_months": [
+              10,
+              11,
+              12
+            ],
+            "lead_weeks": 4
+          }
         ]
       }
     ]
   },
-
   "relevanceSignals": {
     "high": [
-      "prom", "spring formal", "homecoming", "fall carnival", "Halloween party",
-      "holiday party", "office party", "company party", "end of year celebration",
-      "caricature", "live artist", "entertainment for guests", "looking for entertainment",
-      "booking entertainment", "save the date", "community fair", "school carnival"
+      "prom",
+      "spring formal",
+      "homecoming",
+      "fall carnival",
+      "Halloween party",
+      "holiday party",
+      "office party",
+      "company party",
+      "end of year celebration",
+      "caricature",
+      "live artist",
+      "entertainment for guests",
+      "looking for entertainment",
+      "booking entertainment",
+      "save the date",
+      "community fair",
+      "school carnival"
     ],
     "medium": [
-      "event planning", "party planning", "team building", "looking for vendors",
-      "activities for guests", "fun for all ages", "interactive entertainment",
-      "annual event", "block party", "community celebration"
+      "event planning",
+      "party planning",
+      "team building",
+      "looking for vendors",
+      "activities for guests",
+      "fun for all ages",
+      "interactive entertainment",
+      "annual event",
+      "block party",
+      "community celebration"
     ],
     "timing": [
-      "save the date", "mark your calendars", "coming up", "planning our",
-      "next month's", "annual", "this spring", "this fall", "this December",
-      "event registration open", "tickets available"
+      "save the date",
+      "mark your calendars",
+      "coming up",
+      "planning our",
+      "next month's",
+      "annual",
+      "this spring",
+      "this fall",
+      "this December",
+      "event registration open",
+      "tickets available"
     ],
     "not": [
-      "college admissions", "sports scores", "academic performance",
-      "curriculum", "test scores", "individual student achievements",
-      "political news unrelated to events", "weather unless affecting events"
+      "college admissions",
+      "sports scores",
+      "academic performance",
+      "curriculum",
+      "test scores",
+      "individual student achievements",
+      "political news unrelated to events",
+      "weather unless affecting events"
     ]
   },
-
   "factletTopics": [
     "Corporate event planning trends (return-to-office, in-person events)",
     "School event funding (budget cuts affecting ASB/activities)",
@@ -104,14 +255,12 @@
     "Experiential marketing and live event trends",
     "Post-pandemic in-person event demand statistics"
   ],
-
   "factletNotTopics": [
     "Individual school academic results",
     "Sports results",
     "General business news unrelated to events or entertainment",
     "Political content unless directly affecting event budgets"
   ],
-
   "warmthScoring": {
     "categories": [
       {
@@ -180,7 +329,6 @@
       "warmthScore < 9 → draftStatus = brewing always"
     ]
   },
-
   "evaluatorCriteria": [
     {
       "name": "Specificity",
@@ -213,7 +361,6 @@
       "failExample": "Finger on delete by sentence two."
     }
   ],
-
   "outreachRules": {
     "maxWords": 100,
     "tone": "casual, confident, concrete — sounds like a working professional, not a vendor",
@@ -229,37 +376,31 @@
       "I am a caricature artist [as opening sentence]"
     ]
   },
-
   "rssConfig": {
     "additionalKeywords": [
-      "caricature", "event entertainment", "party entertainment", "live artist",
-      "prom", "homecoming", "spring formal", "school carnival", "Halloween event",
-      "holiday party", "office party", "corporate event", "team building",
-      "community fair", "block party", "entertainment vendor", "ASB",
-      "student activities", "event coordinator", "event planner"
+      "caricature",
+      "event entertainment",
+      "party entertainment",
+      "live artist",
+      "prom",
+      "homecoming",
+      "spring formal",
+      "school carnival",
+      "Halloween event",
+      "holiday party",
+      "office party",
+      "corporate event",
+      "team building",
+      "community fair",
+      "block party",
+      "entertainment vendor",
+      "ASB",
+      "student activities",
+      "event coordinator",
+      "event planner"
     ],
-    "feeds": [
-      {
-        "url": "https://www.bizbash.com/feed",
-        "name": "BizBash Event Industry",
-        "category": "events",
-        "keywords": ["corporate event", "party entertainment", "event planning", "Los Angeles", "live artist", "experiential"]
-      },
-      {
-        "url": "https://www.reddit.com/r/LosAngeles/.rss",
-        "name": "Reddit r/LosAngeles",
-        "category": "community",
-        "keywords": ["event", "party", "entertainment", "carnival", "community event", "block party", "fun"]
-      },
-      {
-        "url": "https://www.lausd.org/site/RSS.aspx?DomainID=4&ModuleInstanceID=4466&PageID=1&PMIID=32975",
-        "name": "LAUSD Newsroom",
-        "category": "schools",
-        "keywords": ["event", "carnival", "prom", "school celebration", "student activities", "ASB"]
-      }
-    ]
+    "_feeds": "RSS feeds live in templates/skills/rss-factlet-harvester/rss_sources.md and deployed skills/rss-factlet-harvester/rss_sources.md, not manifest.json."
   },
-
   "fbSources": [
     "https://www.facebook.com/LAUSD/",
     "https://www.facebook.com/BizBash/",

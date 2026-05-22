@@ -4,6 +4,52 @@ Append-only. One entry per source doc processed.
 
 ---
 
+## [2026-05-06] session | Workflow refactor: Pass 1 (numbered procedure) + Pass 2 (DB-backed source queue)
+
+**Context:** DALLAS/precrime deployment running through goose was struggling to follow the workflow. Goose (and any non-frontier orchestrator) was drifting on the pseudocode-style `url-loop.md` and on Windows shell `echo ^|` escapes for `_sources.md` files. Diagnosis: control flow was implicit (prose plus pseudocode), and the queue medium was wrong (markdown files manipulated via cmd.exe).
+
+**Pass 1 — markdown surface (no server changes, no schema changes):**
+- `templates/skills/url-loop.md` -- rewritten from pseudocode to numbered tool-call procedure with explicit Step 7 termination contract. Forks the 22-line pseudocode into 7 numbered steps; each step is one tool call with literal arguments.
+- `templates/skills/marketplace_flow.md` -- inserted Step 9 RECURSE between PRESENT and the share-error stop. Existing share-error rule renumbered to Step 10. The recursion clause requires all six per-step deltas to be zero before terminating.
+- `templates/skills/outreach_flow.md` -- inserted Step 7 RECURSE with the same pattern.
+- `templates/docs/FOUNDATION.md` -- added "Numbered Orchestrator Procedure" section. Nine-step state machine, three named recursion arms (source / client / booking), four-condition termination, and a server-vs-agent ownership table that names exactly which guards are server-enforced and which are agent-judged.
+- `templates/skills/headless_flow.md` (NEW) -- non-interactive marketplace pipeline. Strips every approval gate. Override-map at the end shows interactive vs headless behavior per sub-skill. `init-wizard.md` Step 4 routes `mode=headless` here instead of marketplace_flow.md.
+
+**Pass 2 — queue moved to DB:**
+- `server/prisma/schema.prisma` -- added `Source` model. Fields: url (unique), channel, subtype, label, category, scrapedAt, claimedAt, claimedBy, clientsFound, failedReason, discoveredAt, discoveredFrom. Indexes on channel, scrapedAt, claimedAt.
+- `server/mcp/mcp_server.js` -- added `ensureSourceTable()` startup migration: idempotent `CREATE TABLE IF NOT EXISTS Source` plus indexes via `prisma.$executeRawUnsafe`. Runs on every MCP boot. This handles deployed DBs whose schema predates Pass 2 without requiring a rebuild.
+- `mcp_server.js` -- four new pipeline actions: `next_source` (atomic claim of oldest unscraped/stale row), `mark_source` (release claim, persist result), `add_sources` (bulk insert with dedup-on-URL and channel-specific URL normalization), `import_sources` (one-time migration: read every `_sources.md` seed file and bulk-load into Source table; idempotent so safe to re-run).
+- `mcp_server.js` -- tool description updated to enumerate all 13 actions. inputSchema enum extended. New properties added: channel, maxAgeDays, url, scrapedAt, clientsFound, failedReason, entries.
+- `scripts/migrate-db.js` -- Source entry added to PC_SCHEMA per the three-file sync rule from BLOOMLEEDZ disaster.
+- Skills migrated off shell-echo:
+  - `templates/skills/url-loop.md` -- Steps 2 and 5 use `next_source` / `mark_source`. Step 4 uses `add_sources` for any new sources discovered mid-scrape.
+  - `templates/skills/source-discovery.md` -- channel writes use `add_sources` per channel. Header explicitly says "Do NOT edit `_sources.md` files."
+  - `templates/skills/client-seeder.md` -- "Follow Links (Recursive Growth)" uses `add_sources` instead of file appends.
+  - Each harvester's "Source Growth" step (`rss-factlet-harvester/SKILL.md` Step 5, `fb-factlet-harvester/SKILL.md` Step 3, `reddit-factlet-harvester/SKILL.md` Step 4) -- updated to call `add_sources` with channel-appropriate entries.
+  - `templates/skills/init-wizard.md` -- inserted Step 1.5 calling `pipeline.import_sources` (idempotent on every startup).
+- `templates/GOOSE.md` -- dropped the 14-line "FORBIDDEN syntax" block for shell echo to source files; replaced with one line pointing at `add_sources`.
+
+**State management design decision (locked):** the DB is the state. Agents hold session_id and the in-flight URL only. Work-stealing queue pattern (Sidekiq / Celery / BullMQ family) -- no per-agent state object, no continuation tokens, no stateful agent-side files.
+
+**Source-agnostic confirmation:** Source table covers RSS / FB / IG / Reddit / X / blog / directory / generic website via channel taxonomy + URL normalization. LLM queries (Gemini, Grok) explicitly out of scope -- transient lookups inside source-discovery, not durable sources. If we later batch-defer LLM queries, that's a separate `Query` table.
+
+**Wiki pages created/updated:**
+- `concepts/source-queue.md` (NEW) -- full Pass 2 documentation: Source schema, four MCP actions, work-stealing semantics, recursion arms re-routed, what's NOT in the table.
+- `concepts/mcp.md` (REWRITTEN) -- replaced stale 19-tool listing with the actual 3-tool surface (pipeline / find / trades) and all 13 pipeline actions enumerated. Removed two resolved staleness warnings.
+- `concepts/architecture.md` -- updated tool count from 19 to 3, schema list to include Source, ASCII diagram to show all current tables, related links.
+- `concepts/ontology.md` -- added Source entity section. Removed resolved staleness warning. Updated header date and related links.
+- `index.md` -- updated last-updated, replaced mcp.md summary, added source-queue.md row.
+- `SCHEMA.md` -- directory tree updated for source-queue.md, mcp.md description corrected.
+- `status/current.md` -- Session 17 entry prepended, "19 tools" references corrected to current 3-tool surface.
+- (this file) -- this entry.
+
+**Outstanding:**
+- Regenerate `data/blank.sqlite` and `data/template.sqlite` via `npx prisma db push --force-reset` against absolute path. Not strictly required (CREATE TABLE IF NOT EXISTS handles deployed DBs) but per three-file sync rule from BLOOMLEEDZ disaster.
+- Decide rollout: rebuild zip via `build.bat` and redeploy DALLAS fresh, OR copy `server/` + `scripts/` + `templates/` into existing DALLAS\precrime and run setup.bat to regenerate Prisma client.
+- Watch first DALLAS run for `import_sources` per-channel counts and for QUEUE_EMPTY reports.
+
+---
+
 ## [2026-04-18] session | RSS scorer: lower default threshold, diagnose zero-article returns, kill dead feeds surface
 
 **Symptom:** PHOTOBOOTH precrime session reported `RSS: 0 articles returned - feeds may need new sources or the MCP server may need a restart` — generic and unactionable. Live probe of 4 PHOTOBOOTH feeds showed top-scoring articles coming in at 5–6 points against a threshold of 15. Zero passed.

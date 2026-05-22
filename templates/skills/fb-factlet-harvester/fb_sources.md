@@ -1,4 +1,4 @@
-# {{DEPLOYMENT_NAME}} — Facebook Sources for Factlet Harvesting
+# {{DEPLOYMENT_NAME}} -- Facebook Sources for Factlet Harvesting
 #
 # Add one Facebook page URL per line.
 # Lines starting with # are comments and will be ignored.

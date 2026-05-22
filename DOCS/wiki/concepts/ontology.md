@@ -2,13 +2,11 @@
 title: Pre-Crime Ontology v2.0
 tags: [ontology, entities, booking, client, factlet, leed, output-paths]
 source_docs: [DOCS/ONTOLOGY.md, DOCS/STATUS.md, DOCS/IG_NOTES.md]
-last_updated: 2026-04-14
+last_updated: 2026-05-06
 staleness: none
 ---
 
-Pre-Crime v2.0 expands from a pure client-enrichment engine (one entity, one output path) into a marketplace supply engine. The same scraping infrastructure that finds factlets also finds gig opportunities — these crystallize as Bookings, which can be posted to The Leedz marketplace.
-
-> WARNING — STALE? `ONTOLOGY.md` header says "Status: Design spec — not yet implemented" (dated 2026-04-01). But `STATUS.md` (sessions 1-8 complete) confirms all 15 MCP tools including all 4 Booking tools are done and the blank DB ships pre-built with the full schema. The ontology as described IS implemented. The "design spec" header is a leftover artifact.
+Pre-Crime v2.0 expands from a pure client-enrichment engine (one entity, one output path) into a marketplace supply engine. The same scraping infrastructure that finds factlets also finds gig opportunities — these crystallize as Bookings, which can be posted to The Leedz marketplace. As of Pass 2 (2026-05-06), discovery sources are also first-class entities living in the `Source` table.
 
 ---
 
@@ -93,6 +91,21 @@ Broadly applicable intelligence. No `clientId` — global only. Goes into a broa
 - Sentence 2: Why it matters for the target audience.
 - Sentence 3 (optional): Implication for buying urgency.
 - Deduplicate against existing factlets.
+
+### Source (Pass 2 — added 2026-05-06)
+
+The discovery queue. Every dereferenceable URL the system might scrape lives here -- directories, RSS feeds, Facebook pages, Instagram accounts/hashtags, subreddits, X accounts/hashtags, blogs, generic websites.
+
+**Key fields:**
+- `url` — canonical normalized URL (unique). Handle/tag inputs (`@h`, `#t`, `r/sub`) are normalized at insert.
+- `channel` — one of: `directory`, `rss`, `fb`, `ig`, `reddit`, `x`, `blog`, `website`.
+- `subtype` — page/group/account/hashtag/keyword/feed/subreddit (channel-dependent).
+- `scrapedAt` — when last scraped (or null if never).
+- `claimedAt` + `claimedBy` — atomic claim primitives. Claim expires after 10 minutes (work-stealing).
+- `clientsFound` — distinct contacts/companies extracted on last scrape.
+- `discoveredFrom` — recursion lineage: URL of the parent source that linked here.
+
+Replaces the markdown-as-queue pattern (`discovered_directories.md`, `*_sources.md`). Agents interact via `pipeline.next_source`, `pipeline.mark_source`, `pipeline.add_sources`. See [[source-queue]] for the full design.
 
 ### Config
 
@@ -243,5 +256,6 @@ Unseeded is first-class. An empty DB is not broken — it's the normal starting 
 ## Related
 - [[architecture]] — system architecture, MCP servers, data flow
 - [[scoring]] — dual-gate scoring, warmth rubric, sentAt tracking
-- [[mcp]] — all 19 MCP tools, configuration
+- [[mcp]] — 3-tool MCP surface, all action enumerations
+- [[source-queue]] — Pass 2: Source table, work-stealing queue
 - [[current]] — what's done, what's pending

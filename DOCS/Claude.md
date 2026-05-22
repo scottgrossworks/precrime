@@ -1,6 +1,29 @@
 # URGENT!
 
 
+## Think before coding.
+State your assumptions.
+Ask when Unsure.
+Never guess.
+
+
+## Simplicity First.
+Write the minimum code that solves the problem.
+no abstratctions that nobody asked for.
+
+
+## Surgical changes.
+don't touch code unrelated to the request.
+Every changegd line must trace back to what was asked, or to address a side-effect of that change.
+
+
+## Goal-driven execution
+turn vague instructions into verifiable success criteria before writing a single line of code
+
+
+
+
+
 ### RULE: READ FIRST, ACT SECOND
 - Read ALL relevant files BEFORE writing ANY code
 - Check globals.css BEFORE writing CSS
@@ -13,17 +36,6 @@
 - If a function exists, CALL IT - never rewrite it
 - Duplication = immediate failure
 
-### RULE: PRODUCTION FILES ONLY
-- Edit files in `C:\Users\Scott\Desktop\WKG\LEEDZ\FRONT_3\`
-- NEVER use worktree paths `C:\Users\Scott\.claude-worktrees\`
-- NEVER mention "sandbox" - there is no sandbox
-- All changes go directly to production locations
-
-### RULE: RESPECT USER CONTEXT
-- "Testing locally" means use relative URLs (`/css/file.css`)
-- "Deploy to production" means use absolute CDN URLs (`https://www.theleedz.com/css/file.css`)
-- Test server at localhost:8001 already serves static files from FRONT_3
-- Don't change URLs unless explicitly told to deploy
 
 ### RULE: MINIMAL CODE
 - DO not alter adjacent code unless absolutely necessary to follow instructions
@@ -54,13 +66,12 @@
 ## COMMUNICATION RULES
 
 1. **NO APOLOGIES** - Fix it, don't apologize for it
-2. **NO EXCUSES** - Explain nothing after failure
-3. **NO GASLIGHTING** - Never pretend mistakes didn't happen
-4. **NO QUESTIONS AFTER FAILURE** - The requirements were already given
-5. **GET IT RIGHT THE FIRST TIME** - Second chances waste user time
-6. **DO NOT ARGUE AND CONTRADICT THE USER.  99% OF THE TIME YOU ARE WRONG AND HALLUCINATING AND GASLIGHTING AND OBSCURING THE TRUTH.
-IF THE USER IS FRANTIC AND ANGRY IT IS BECAUSE YOU ARE VIOLATING OUR OWN RULES REPEATEDLY.  CHANGE COURSE!  RESET YOURSELF! 
-7. **DO NOT ACCUSE THE USER OF NOT REFRESHING OR RELOADING OR REDEPLOYING.  FIX THE ERROR!
+2. **NO GASLIGHTING** - Never pretend mistakes didn't happen
+3. **NO QUESTIONS AFTER FAILURE** - The requirements were already given
+4. **GET IT RIGHT THE FIRST TIME** - Second chances waste user time
+5. **DO NOT ARGUE AND CONTRADICT THE USER.**  99% OF THE TIME YOU ARE WRONG AND HALLUCINATING AND GASLIGHTING AND OBSCURING THE TRUTH.
+6. **IF THE USER IS MIS-SPELLLING, FRANTIC AND ANGRY** IT IS BECAUSE YOU ARE VIOLATING OUR OWN RULES REPEATEDLY.  CHANGE COURSE!  RESET YOURSELF! 
+7. **DO NOT ACCUSE THE USER** OF NOT REFRESHING OR RELOADING OR REDEPLOYING.  FIX THE ERROR!
 
 
 (!!!) READ THE CODE!  DO NOT ASSUME!  READ THE CODE! (!!!)
@@ -89,13 +100,6 @@ Before submitting ANY code change, verify:
 4. If class needs different styling for this page, add ONE override property in component CSS
 5. Never redefine entire classes
 
-## CONSEQUENCES OF VIOLATIONS
-
-- Wasted user time (minutes to hours)
-- Wasted user money (tokens, deployments)
-- Loss of user trust
-- Requirements to rewrite everything
-- Frustration requiring ALL CAPS
 
 ## SUCCESS CRITERIA
 
@@ -104,5 +108,3 @@ Before submitting ANY code change, verify:
 - Minimal lines changed
 - Existing patterns reused
 - No redundant definitions
-
-**If you violate these rules, you fail your mandate, disappoint the user, sabotage the project and undermine your creators' wishes.**
