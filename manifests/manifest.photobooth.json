@@ -1,0 +1,12 @@
+{
+  "_comment": "PHOTOBOOTH deployment — sync target for skill file updates from PRECRIME templates",
+
+  "deployment": {
+    "name": "MyProject",
+    "rootDir": "C:\\Users\\Admin\\Desktop\\WKG\\PHOTOBOOTH\\precrime"
+  },
+
+  "bookingConfig": {
+    "runMode": "marketplace"
+  }
+}
