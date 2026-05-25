@@ -15,8 +15,11 @@ Compose a cold outreach email for a specific client.
 
 ## Input
 
-- Client record (name, company, email, dossier, linked factlets)
-- VALUE_PROP config: PRODUCT, RATE, SIGNATURE, differentiators, outreach examples, forbidden phrases
+- Client record (name, company, email, dossier)
+- **Mandatory identity fields (Config-mirrored, NOT paraphrased from memory):**
+  - `signature` -- pulled via `precrime__pipeline({ action: "get_config", key: "signature" })`
+  - `companyName` / `companyEmail` / `defaultTrade` / `leedzEmail` -- pulled via `get_config` when needed for the close
+- VALUE_PROP.md (for pitch, differentiators, outreach style examples, forbidden phrases, RATE -- broad context only)
 
 ---
 
@@ -57,12 +60,17 @@ State what you provide and where, grounding it in the client's geography or venu
 **Example:**
 > I provide professional live entertainment for major activations at the Anaheim Convention Center. Rates start at [RATE] with no deposit required. Let's add live art to the Lifeway booth!
 
-Then the signature block:
-> [SIGNATURE from VALUE_PROP]
+Then the signature block. Fetch it first:
 
-**RATE is mandatory.** Comes from VALUE_PROP config. Anchor with "Rates start at [RATE]" plus any notes (deposits, payment methods). If VALUE_PROP has no rate, do not compose. Log `MISSING_RATE`.
+```
+sig = precrime__pipeline({ action: "get_config", key: "signature" })
+```
 
-**SIGNATURE is mandatory.** Comes from VALUE_PROP config. If missing, do not compose. Log `MISSING_SIGNATURE`.
+Append `sig.value` to the draft VERBATIM -- no rewording, no reformatting, no added greeting words, no synthesized name / title / phone / email lines. If `sig.present === false`, do NOT compose; log `MISSING_SIGNATURE` and stop. The signature must never be reconstructed from memory, VALUE_PROP paraphrase, or the Client record.
+
+**RATE is mandatory.** Comes from VALUE_PROP.md (broad context). Anchor with "Rates start at [RATE]" plus any notes (deposits, payment methods). If VALUE_PROP has no rate, do not compose. Log `MISSING_RATE`.
+
+**SIGNATURE is mandatory.** Comes from `pipeline.get_config({ key: "signature" })`. If missing, do not compose. Log `MISSING_SIGNATURE`.
 
 ---
 
@@ -78,15 +86,16 @@ Then the signature block:
 
 ## Procedure
 
-1. Read the client's dossier. Identify the strongest hook (most specific, most recent).
-2. Read linked factlets. If any add urgency or milestone context, weave into paragraph 1.
-3. Read VALUE_PROP config outreach examples. Match their style, tone, and structure.
+1. Fetch the signature first: `sig = precrime__pipeline({ action: "get_config", key: "signature" })`. If `sig.present === false`, stop and log `MISSING_SIGNATURE`.
+2. Read the client's dossier. Identify the strongest hook (most specific, most recent).
+3. Read VALUE_PROP.md outreach examples for style/tone reference. Do NOT paraphrase the signature or seller identity from it -- those come from `get_config`.
 4. Compose the three paragraphs. Read the draft aloud in your head. Does it flow?
-5. Self-check: banned patterns? Rate included? Signature? Close is client-specific?
-6. Save:
+5. Append `sig.value` verbatim as the closing signature block.
+6. Self-check: banned patterns? Rate included? Signature appended verbatim? Close is client-specific?
+7. Save with `judge: false` (workers do not invoke Judge inline):
    ```
-   precrime__pipeline({ action: "save", id: clientId, patch: {
-     draft: "[the email text]",
+   precrime__pipeline({ action: "save", id: clientId, judge: false, patch: {
+     draft: "[the email text with verbatim signature appended]",
      draftStatus: "ready"
    }})
    ```

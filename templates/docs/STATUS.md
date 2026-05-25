@@ -1,15 +1,17 @@
-# {{DEPLOYMENT_NAME}} -- Session Bootstrap
+# {{DEPLOYMENT_NAME}} -- Deployment Bootstrap
 
 **Generated:** {{TODAY}}
-**Read this entire file before touching anything.**
+
+This file is the deployment snapshot. Read `DOCS/CLAUDE.md` for binding rules and the active skill set; read `DOCS/FOUNDATION.md` for the architecture invariants.
 
 ---
 
 ## MANDATORY FIRST READS
 
-1. `DOCS/CLAUDE.md` -- Binding rules.
-2. `DOCS/VALUE_PROP.md` -- Product pitch and audience. Read before composing any draft.
-3. This file -- finish it.
+1. `DOCS/CLAUDE.md` -- binding rules, architecture summary, current skill index.
+2. `DOCS/VALUE_PROP.md` -- product pitch and audience. Read before composing any draft.
+3. `DOCS/FOUNDATION.md` -- system invariants.
+4. This file -- finish it.
 
 ---
 
@@ -17,186 +19,73 @@
 
 **{{DEPLOYMENT_NAME}}** -- contextual outreach engine.
 
-**Product identity, seller info, audience, and geography are defined in `DOCS/VALUE_PROP.md`. Read that file -- do not infer product identity from folder names, manifest tokens, or any other source.**
+Product identity, seller info, audience, and geography are defined in `DOCS/VALUE_PROP.md`. Read that file -- do not infer product identity from folder names, manifest tokens, or any other source.
 
 ---
 
 ## RUNNING THE WORKFLOW
 
-**First time:** say **"initialize this deployment"** -- the init wizard will confirm config, generate your Leedz session JWT, discover harvest sources, then launch harvesters automatically.
+The launcher (`precrime.bat`, `goose.bat`, or `hermes.bat`) sets up the DB, the API keys (from `precrime_config.json`), and routes the agent through `skills/init-wizard.md`. The wizard offers exactly two interactive choices, plus a headless mode triggered by the launcher flag:
 
-**Subsequent runs:** say **"run the enrichment workflow"** in any Claude session.
+- **`SHOW_HOT_LEEDZ`** -- present already-judged `leed_ready` / `outreach_ready` Bookings and route per-item share / email / skip via `skills/show-hot-leedz.md` -> `skills/share-skill.md`.
+- **`RUN_WORKFLOW`** -- run a full discovery + scrape + enrich + judge cycle via the Planner. Worker skills (`url-loop.md`, `enrichment-agent.md`, `apply-factlet.md`) process one Task each. Judge runs server-side via `JUDGE_AFFECTED`.
+- **Headless** (`goose.bat --headless`) -- `skills/headless_flow.md` orchestrates `plan_tasks(mode:"headless")` -> drain -> replan -> exit. Zero questions, auto-posts `leed_ready` Bookings via `share_booking(mode:"post")`. Final report appended to `logs/ROUNDUP.md`.
 
-| Playbook | Purpose |
-|----------|---------|
-| `skills/enrichment-agent.md` | Full enrichment loop (load -> factlets -> discovery -> ingest -> compose -> evaluate) |
-| `skills/draft-checker.md` | Draft evaluation and readiness checks |
-| `skills/factlet-harvester.md` | RSS -> factlet pipeline |
-| `skills/fb-factlet-harvester/SKILL.md` | Facebook -> factlet pipeline (requires Chrome desktop app) |
+The Planner (`precrime__pipeline({ action:"plan_tasks" })`) is the single source of truth for what runs next. Workers never decide global strategy.
+
+---
+
+## CONFIG SURFACES
+
+Two user-editable surfaces. They do not overlap.
+
+| File | Purpose |
+|------|---------|
+| `DOCS/VALUE_PROP.md` | Product / sales truth: seller, trade, geography, pitch, buyers, pricing, relevance signals, outreach examples. |
+| `precrime_config.json` | Runtime / API config: `apiKeys`, `llm`, `databaseFile`, `defaultMode`, `timezone`, `tasks.limits`, `recycler` thresholds. |
+
+The SQLite `Config` table is an internal runtime mirror written from `DOCS/VALUE_PROP.md` by `server/sync-config.js` at launch. It is not a user surface. No `.env` file is part of the build.
 
 ---
 
 ## DATABASE
 
-**Read `server/mcp/mcp_server_config.json` -> `database.path` for the active DB path.** That is the single place the DB is configured.
+Owned exclusively by the precrime MCP server. The schema is `server/prisma/schema.prisma` -- read it there, not here.
 
-DO NOT use any other .sqlite file.
-
----
-
-## SCHEMA
-
-```prisma
-model Client {
-  id             String    @id @default(cuid())
-  name           String
-  email          String?   @unique
-  phone          String?
-  company        String?
-  website        String?
-  clientNotes    String?
-  segment        String?   // audience segment: defined per deployment
-  dossier        String?   // accumulated intelligence -- timestamped prose
-  targetUrls     String?   // JSON: [{url, type, label}]
-  draft          String?   // current best outreach draft
-  draftStatus    String?   // "brewing" | "ready" | "sent"
-  warmthScore    Float?    // 0--10
-  lastEnriched   DateTime?
-  lastQueueCheck DateTime? // DB cursor + factlet watermark
-  source         String?   // how this client entered the DB
-  createdAt      DateTime  @default(now())
-  updatedAt      DateTime  @updatedAt
-  bookings       Booking[]
-}
-
-model Booking {
-  id               String    @id @default(cuid())
-  clientId         String
-  title            String?
-  description      String?
-  notes            String?
-  location         String?
-  startDate        DateTime?
-  endDate          DateTime?
-  startTime        String?
-  endTime          String?
-  duration         Float?
-  hourlyRate       Float?
-  flatRate         Float?
-  totalAmount      Float?
-  status           String    @default("new")   // new | leed_ready | shared | booked | cancelled
-  source           String?
-  sourceUrl        String?
-  trade            String?
-  zip              String?
-  shared           Boolean   @default(false)
-  sharedTo         String?   // "leedz_api" | "email_share" | "email_user"
-  sharedAt         BigInt?
-  leedPrice        Int?
-  leedId           String?   // returned by createLeed MCP tool
-  createdAt        DateTime  @default(now())
-  updatedAt        DateTime  @updatedAt
-  client           Client    @relation(fields: [clientId], references: [id])
-}
-
-model Factlet {
-  id        String   @id @default(cuid())
-  content   String
-  source    String
-  createdAt DateTime @default(now())
-}
-
-model Config {
-  id                  String   @id @default(cuid())
-  companyName         String?
-  companyEmail        String?
-  businessDescription String?
-  activeEntities      String?  // JSON: ["client"] or ["client","booking"]
-  defaultTrade        String?  // e.g., "Caricature Artist"
-  defaultBookingAction String? // "leedz_api" | "email_share" | "email_user"
-  marketplaceEnabled  Boolean  @default(false)
-  leadCaptureEnabled  Boolean  @default(false)
-  leedzEmail          String?
-  leedzSession        String?  // session JWT for createLeed MCP calls
-  llmApiKey           String?
-  llmProvider         String?
-  llmBaseUrl          String?
-  llmAnthropicVersion String?
-  llmMaxTokens        Int?     @default(1024)
-  createdAt           DateTime @default(now())
-  updatedAt           DateTime @updatedAt
-}
-```
+Save: `precrime__pipeline({ action:"save", judge:false, ... })`. Read: `precrime__find`. Never read `.sqlite` files directly.
 
 ---
 
-## MCP CONFIGURATION
+## MCP TOOLS
 
-**`.mcp.json`** -- defines MCP servers. Claude reads this from the working directory.
+`.mcp.json` (and the Goose user config regenerated by `goose.bat` from `goose_config.template.yaml`) registers these stdio servers:
 
-| Tool prefix | Server | Entry point |
-|-------------|--------|-------------|
-| `mcp__precrime-mcp__*` | precrime-mcp | `server/mcp/mcp_server.js` |
-| `mcp__precrime-rss__*` | precrime-rss | `rss/rss-scorer-mcp/index.js` |
-| `mcp__gmail-sender__*` | gmail-sender | optional -- requires separate MCP setup |
-
----
-
-## FILE MAP
-
-| File | Purpose |
-|------|---------|
-| `DOCS/CLAUDE.md` | Binding rules |
-| `DOCS/STATUS.md` | This file |
-| `DOCS/VALUE_PROP.md` | Full product pitch + differentiators |
-| `skills/enrichment-agent.md` | Enrichment loop playbook |
-| `skills/draft-checker.md` | Draft evaluation logic |
-| `skills/relevance-judge.md` | Relevance filter |
-| `skills/factlet-harvester.md` | RSS factlet harvester |
-| `skills/fb-factlet-harvester/SKILL.md` | FB factlet harvester |
-| `skills/fb-factlet-harvester/fb_sources.md` | Curated FB page list |
-| `skills/init-wizard.md` | First-run setup wizard |
-| `server/mcp/mcp_server.js` | MCP server |
-| `server/mcp/mcp_server_config.json` | DB path config |
-| `rss/rss-scorer-mcp/index.js` | RSS scorer MCP |
-| `rss/rss-scorer-mcp/rss_config.json` | Feed URLs + keywords |
-| `logs/ROUNDUP.md` | Per-run enrichment log |
+| Server | Entry point | Purpose |
+|--------|-------------|---------|
+| `precrime` | `server/mcp/mcp_server.js` | Pipeline + find + trades + share_booking + judge_affected + plan_tasks/claim_task/complete_task + resolve_dates + recycler. |
+| `precrime-rss` | `rss/rss-scorer-mcp/index.js` | RSS factlet harvester (`get_top_articles`). |
+| `gmail` | `server/mcp/mcp_gmail.js` | `gmail_send`. Token from Chrome extension on port 3001. |
+| `tavily` | `tools/tavily_lean_mcp.py` | `tavily_search` / `tavily_extract` with response bloat trimmed. |
+| `leedz` | `tools/leedz_proxy_mcp.py` | Local Leedz proxy. Direct `leedz__createLeed` from skill prose is forbidden; the sanctioned share path is `share_booking(mode:"post")`. |
 
 ---
 
-## DESIGN DECISIONS -- SETTLED
+## TODO (manual steps required before first run)
 
-1. **Factlets are GLOBAL** -- no clientId. Client-specific intel -> dossier only.
-2. **`lastQueueCheck` dual role** -- DB cursor + factlet watermark.
-3. **`targetUrls` is JSON** -- `[{url, type, label}]`
-4. **`dossier` is timestamped prose** -- `[date] Source: finding.`
-5. **No HTTP server** -- MCP calls Prisma directly.
-6. **No local LLM** -- Claude does everything.
-7. **`segment` field** -- audience segment label for multi-segment deployments.
+- [ ] Fill in `DOCS/VALUE_PROP.md` with the real product pitch (seller, trade, geography, pitch, buyers, pricing, outreach style).
+- [ ] Fill `apiKeys` block in `precrime_config.json` (at minimum: `tavily`, plus one LLM key matching `llm.provider`).
+- [ ] First run -- launch via `precrime.bat` (Claude) or `goose.bat` (Goose). The wizard handles Config setup, JWT generation, and source seeding.
 
 ---
 
-## CURRENT STATE
+## LOGS
 
-### Done (scaffold)
-- Deployment generated by Pre-Crime deploy.js
-- Empty DB initialized with full schema
-- All 5 skill playbooks generated from templates
-- RSS config generated ({{TODAY}})
-- MCP server config pointing at correct DB
-
-### TODO (manual steps required before first run)
-- [ ] Fill in `DOCS/VALUE_PROP.md` with the real product pitch
-- [ ] Run init wizard: say "initialize this deployment" -- it handles Config setup, JWT generation, and harvest source discovery
-- [ ] Load client records into the database (if outreach mode)
-
-### Segments and seasonal windows
-
-See `DOCS/VALUE_PROP.md`.
+- `logs/ROUNDUP.md` -- per-run summary appended by `headless_flow.md` (and other orchestrators).
+- `logs/tavily_lean.log` -- per-call telemetry from the Tavily wrapper.
 
 ---
 
 ## KNOWN LIMITATIONS
 
-- **`claude -p` does not attach MCP servers.** The headless flag runs without `.mcp.json`. Use the interactive Claude Code session.
-- **Chrome integration:** Use `claude --chrome` to start with Chrome connected. The Chrome MCP extension must be installed in your browser.
+- `claude -p` does not attach MCP servers. Use the interactive Claude Code session.
+- Chrome integration: launch with `claude --chrome` (already wired into `precrime.bat`). The Chrome MCP extension must be installed in your browser for any FB / IG scraping path.

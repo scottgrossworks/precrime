@@ -1,333 +1,221 @@
 ---
 name: url-loop
-description: The recursive scrape loop. Claim source from server queue, scrape, save findings, mark scraped, repeat. Backbone called by every flow.
+description: One-Task SCRAPE_SOURCE worker. Claim one SCRAPE_SOURCE Task, scrape its Source URL, save discoveries with judge:false, complete the Task, stop. Does not decide global workflow, does not iterate sources.
 triggers:
-  - find leedz
-  - convention pipeline
-  - scrape exhibitors
-  - url loop
-  - run pipeline
+  - scrape one source
+  - run scrape source task
+  - SCRAPE_SOURCE worker
 ---
 
-# URL Loop
+# url-loop -- One-Task SCRAPE_SOURCE Worker
 
-The recursive URL processor. Every flow (marketplace, outreach, hybrid, headless) invokes this to process Tavily-friendly sources: `directory`, `blog`, and `website`.
+This skill is a worker. It executes exactly one `SCRAPE_SOURCE` Task and stops.
 
-The Source queue lives in the DB, not in markdown. Your job is to scrape one URL, extract clients/factlets/new source URLs, persist every valid finding immediately, mark the URL, then recurse to the next claim until Step 7.
+The Planner (`pipeline.plan_tasks`) decides what work exists. The Judge (`pipeline.judge_affected`) decides scoring. This skill does neither. It writes facts and completes its Task.
 
-Run the steps top to bottom. Branch only where stated. Do not improvise. Do not read or write `_sources.md` files -- the server owns the queue.
-
----
-
-## Step 1 -- Open session
-
-```
-precrime__pipeline({ action: "start_session", workflow: "url-loop", target_count: 10 })
-```
-
-Hold the returned `session_id` (call it `sid`). Pass `sid` on every `save` and `next_source` below so the server attributes the work and the claim to this session.
+Do not iterate to another Source. Do not call `next_source`. Do not run `report_session`. Do not loop. Do not improvise. The legacy multi-step queue/budget version is preserved at `C:\Users\Admin\Desktop\WKG\PRECRIME\templates\skills\url-loop.legacy.md` for reference only.
 
 ---
 
-## Step 2 -- Claim next source (Tavily-friendly channels only)
+## Step 1 -- Claim one Task
 
-This skill scrapes generic web pages via Tavily. Other channels have dedicated harvesters and MUST NOT be claimed here:
-
-| Channel | Owned by | Why not url-loop |
-|---|---|---|
-| `directory` | url-loop | Vendor/exhibitor lists. Tavily-friendly. |
-| `blog` | url-loop | Generic blog page. Tavily-friendly. |
-| `website` | url-loop | Generic site page. Tavily-friendly. |
-| `rss` | url-loop fallback | Feed URLs can still reveal article links and facts via Tavily. |
-| `reddit` | url-loop fallback | Subreddits can still reveal posts via Tavily if the dedicated harvester is not run first. |
-| `fb` | `skills/fb-factlet-harvester/` | Browser-only (heavy JS). Tavily yields nothing useful. |
-| `ig` | `skills/ig-factlet-harvester/` | Browser-only. Same. |
-| `x`  | `skills/x-factlet-harvester/`  | Browser/Grok-only. Same. |
-
-Iterate the five url-loop channels in priority order. The first to return `CLAIMED` is yours; on `QUEUE_EMPTY`, try the next.
-
-**The parameter name is `channel`. Not `scope`, not `target`, not `category`.** Misspelling silently disables the filter and pops the wrong rows. The exact JSON keys are: `action`, `session_id`, `channel`. Nothing else for this call.
-
-### Step 2a: try directory
-
-```json
-{ "action": "next_source", "session_id": "<sid>", "channel": "directory" }
-```
-
-If `status: "CLAIMED"` -> Step 3 (with the returned `url`).
-If `status: "QUEUE_EMPTY"` -> Step 2b.
-
-### Step 2b: try blog
-
-```json
-{ "action": "next_source", "session_id": "<sid>", "channel": "blog" }
-```
-
-If `status: "CLAIMED"` -> Step 3.
-If `status: "QUEUE_EMPTY"` -> Step 2c.
-
-### Step 2c: try website
-
-```json
-{ "action": "next_source", "session_id": "<sid>", "channel": "website" }
-```
-
-If `status: "CLAIMED"` -> Step 3.
-If `status: "QUEUE_EMPTY"` -> Step 2d.
-
-### Step 2d: try rss
-
-```json
-{ "action": "next_source", "session_id": "<sid>", "channel": "rss" }
-```
-
-If `status: "CLAIMED"` -> Step 3.
-If `status: "QUEUE_EMPTY"` -> Step 2e.
-
-### Step 2e: try reddit
-
-```json
-{ "action": "next_source", "session_id": "<sid>", "channel": "reddit" }
-```
-
-If `status: "CLAIMED"` -> Step 3.
-If `status: "QUEUE_EMPTY"` -> Step 2f.
-
-### Step 2f: retry preserved sources once
-
-If all channels above returned `QUEUE_EMPTY`, retry the same five channels once with `"maxAgeDays": 0`. Preserved deployment DBs may have non-null `scrapedAt` values from a previous bad run; this forces a fresh scrape pass.
-
-If any retry returns `CLAIMED` -> Step 3.
-If every retry returns `QUEUE_EMPTY` -> Step 6.
-
-You may also pass `"maxAgeDays": N` to control re-scrape staleness (default 30).
-
-**Server safety net (Pass 2):** if you forget `channel` entirely, the server now defaults to excluding fb/ig/x. Always pass `channel` explicitly per Step 2a-2f. If you find yourself omitting `channel` or using `scope`/`target`, stop -- that is the old pattern.
-
-Hold the returned `url` and `id` for Steps 3-5.
-
----
-
-## Step 3 -- Scrape
+Call:
 
 ```
-tavily__tavily_extract({ url: "<url from Step 2>" })
+precrime__pipeline({
+  action: "claim_task",
+  role:   "url-loop",
+  types:  ["SCRAPE_SOURCE"]
+})
 ```
 
-The wrapper defaults to `mode: "full"` -- you receive the cleaned full page content (typically 5-25K chars), not a 5-sentence summary. Response shape:
+Response shape:
 
 ```json
 {
-  "url": "...",
-  "ok": true,
-  "mode": "full",
-  "content": "<full page text with vendor names, headers, lists>",
-  "emails": ["..."],
-  "phones": ["..."],
-  "stats": { ... }
+  "status": "CLAIMED",
+  "task": {
+    "id": "task_...",
+    "type": "SCRAPE_SOURCE",
+    "status": "claimed",
+    "targetType": "Source",
+    "targetId": "src_...",
+    "input": { "url": "https://...", "channel": "directory|blog|website|rss|reddit" }
+  }
 }
 ```
 
-Read the `content` and `candidates` fields carefully in Step 4. Vendor lists, exhibitor rosters, contact directories all sit in `content` with their structure preserved. `candidates` gives procedural hints only.
+Branching:
 
-- Extract succeeds (`ok: true`) -> Step 4.
-- Extract fails (`ok: false`, timeout, 4xx, 5xx, empty body) -> log to `logs/ROUNDUP.md`, then go to Step 5 with `failedReason` set, then back to Step 2.
+- `status === "NO_TASK"` -> STOP. Do not claim, do not call any other action, do not look for work elsewhere. Exit the skill.
+- `status === "CLAIMED"` -> hold `taskId = task.id`, `sourceId = task.targetId`, `url = task.input.url`, `channel = task.input.channel`. Proceed to Step 2.
+- Any other status (`CONTENTION`, error) -> STOP. Do not retry in a tight loop. Exit the skill.
 
 ---
 
-## Step 4 -- Extract clients, factlets, and new sources
+## Step 2 -- Scrape the one Source (channel-aware)
 
-Read the `content` and `candidates` fields returned by Step 3. The procedural `candidates` object is only evidence: emails, phones, URLs, and heading/card-like lines. It is not the final answer. Use the LLM judgment against VALUE_PROP to classify findings.
+The scrape tool depends on `channel`. Pick exactly one branch.
 
-Emit this strict internal JSON shape before saving:
+### Step 2.a -- channel === "rss"  (RSS or Atom feed)
 
-```json
-{
-  "clients": [
-    {
-      "company": "string required unless name is present",
-      "name": "string optional",
-      "email": "string optional",
-      "phone": "string optional",
-      "website": "string optional",
-      "source": "<current url>",
-      "segment": "string optional",
-      "whyRelevant": "short reason tied to VALUE_PROP"
-    }
-  ],
-  "factlets": [
-    {
-      "content": "short factual signal",
-      "source": "<current url>",
-      "signalType": "occasion|context|pain"
-    }
-  ],
-  "sources": [
-    {
-      "url": "new URL or handle",
-      "channel": "directory|rss|fb|ig|reddit|x|blog|website",
-      "subtype": "optional",
-      "label": "optional",
-      "category": "optional"
-    }
-  ]
-}
+Do NOT call `tavily__tavily_extract`. Call the RSS MCP directly with the claimed feed URL:
+
+```
+precrime_rss__get_top_articles({ feedUrl: url, limit: 10 })
 ```
 
-Rules for the JSON:
-- `clients[]` may be sparse. A company-only record is allowed when it is relevant to VALUE_PROP. You cannot enrich what you never start.
-- `clients[]` must not contain placeholders like `<name>`, `Unknown`, blank strings, page navigation, or generic section labels.
-- `factlets[]` are broad useful signals: upcoming event, hiring/buying occasion, market trend, budget clue, venue/calendar signal, or demand signal.
-- `sources[]` are relevant URLs worth following later. Do not include every link on the page; include URLs likely to reveal clients or factlets.
+The RSS MCP fetches only that one feed (server-side override for the configured-feed list), scores items against the deployment keyword list, and returns at most `limit` articles above the relevance threshold, sorted by score.
 
-On a vendor directory page, clients typically appear as:
+The response is either `[{ url, title, pubDate, feedName, snippet, score, hasFullContent, content? }, ...]` OR `{ articles: [], diag: { cause, ... } }` when zero items passed threshold.
 
-- Cards or tiles with a vendor name as the header
-- Bullet/numbered lists of business names
-- Table rows where the first column is a name
-- Linked text where the link text is the vendor name (e.g., a hyperlink to their site)
-- Title-cased phrases of 2-5 words that recur multiple times near contact info, addresses, or "Visit website" links
+- If the response carries `diag` / zero articles: skip article extraction and route to the **soft-fail path** in Step 5 (mark_source with `clientsFound: 0`, complete the Task with `status: "done"`, `needsJudge: false`, and put `diag.cause` in the summary).
+- Otherwise: for each returned article, derive Factlets / Client dossier evidence / potential Bookings using the same VALUE_PROP discipline as Step 2.b. The article's `title + snippet + content?` is the evidence body; the article's `url` is the per-factlet `sourceUrl`.
 
-**Concrete examples of what counts as a client save:**
-- `"Bella Eventi Catering"` -> save (real business)
-- `"Dallas Wedding Planners LLC"` -> save (real business)
-- `"Texas Tents & Events"` -> save (real business)
-- Even a single vendor name with no other detail -> save (`patch: { company: "Name", source: "<url>", draftStatus: "brewing" }`). The enrichment phase fills in email/website/contacts later.
+Do NOT also call `tavily__tavily_extract` on the feed URL itself -- the RSS MCP already pulled and scored each article. Do NOT call `tavily__tavily_extract` on individual article URLs in this Task either; that is a different SCRAPE_SOURCE Task and will be enqueued by `add_sources` + the next planner pass if the article URL warrants its own scrape.
 
-**What to skip:**
-- Navigation chrome: "Home", "About", "Contact", "Sign In", "Search", "Vendors", "Categories", "Login"
-- Section headers: "Featured", "Top Rated", "All Categories", "Filter By"
-- City/state names alone: "Dallas", "Texas"
-- Generic single words
+### Step 2.b -- channel in {"directory", "blog", "website", "reddit", or anything else}  (default web scrape)
 
-**Be generous, not cautious.** A directory page typically has 10-50+ vendor names. If your extraction yields 0 or 1, you are over-filtering -- re-read the page text and pick anything that looks like a business name.
+Call exactly once:
 
-### Save clients
+```
+tavily__tavily_extract({ url: url })
+```
 
-For EACH JSON client, issue one save immediately:
+If extract fails (`ok: false`, timeout, 4xx, 5xx, empty body), skip to Step 5 (failure path).
+
+Otherwise, read `content` and `candidates`. Extract clients, factlets, and new source URLs that are relevant to the deployment VALUE_PROP. Use the same extraction discipline as before:
+
+- A vendor/business name is a savable client even without contact details.
+- Skip navigation chrome (`Home`, `About`, `Sign In`, ...), section headers, single city/state names, and generic single words.
+- Factlets are broad reusable signals: event dates, hiring/buying occasions, market trend, budget clue, venue signal, demand signal. See `C:\Users\Admin\Desktop\WKG\PRECRIME\templates\skills\shared\factlet-rules.md`.
+- New sources are URLs likely to reveal more clients or factlets later.
+- RSS / Atom feed URLs are first-class sources too. Look for: (a) `<link rel="alternate" type="application/rss+xml" ... href="...">` tags if the raw markup survived extraction, (b) URLs ending in `/feed`, `/feed/`, `/rss`, `/rss.xml`, `/atom.xml`, `/feed.xml`, `/index.xml`, or carrying a `?feed=` query string, (c) anchor text "RSS" / "Subscribe" / "Atom feed" pointing at a URL. Save each in the Step 3 `add_sources` call as `{ url: "<feedUrl>", channel: "rss", subtype: "feed", discoveredFrom: "<the scraped source url>" }`. This is the cheap incidental-discovery path that grows the rss queue without a dedicated brainstorm Task. The discovered feed will surface as its own `SCRAPE_SOURCE` Task on the next planner pass and Step 2.a will handle it.
+
+**Do NOT write to `skills/rss-factlet-harvester/rss_sources.md` at runtime.** That file is a SEED only -- imported once at startup via `pipeline.import_sources`. The Source table in SQLite is the runtime queue; `add_sources` is the only sanctioned write path.
+
+---
+
+## Step 3 -- Save discoveries with judge:false
+
+For EACH client extracted, call:
 
 ```
 precrime__pipeline({
   action: "save",
-  session_id: sid,
+  judge:  false,
   patch: {
-    name: "<name if present>",
-    company: "<company if present>",
-    email: "<email if present>",
-    phone: "<phone if present>",
-    website: "<website if present>",
-    source: "<url>",
-    segment: "<segment if known>",
+    name:        "<if present>",
+    company:     "<if present>",
+    email:       "<if present>",
+    phone:       "<if present>",
+    website:     "<if present>",
+    source:      "<the scraped url>",
+    segment:     "<if known>",
     draftStatus: "brewing",
-    clientNotes: "<whyRelevant>"
+    clientNotes: "<short why-relevant tied to VALUE_PROP>"
   }
 })
 ```
 
-One save per client, immediately, no batching. Server dedups by company.
+Each `save` response contains `affectedClientIds` and `affectedBookingIds`. Collect them across all saves.
 
-### Save factlets
-
-For EACH JSON factlet that is relevant to VALUE_PROP, follow `skills/shared/factlet-rules.md`. Attach to a client when obvious. If no client is obvious, log it to `logs/UNLINKED_INTEL.md` exactly as that shared rule says. Do not invent a client just to hold a generic factlet.
-
-### Add new sources
-
-If `sources[]` has entries, issue ONE `add_sources` call:
+For new sources discovered during the scrape, call once. `discoveredFrom` is the URL of the source you JUST scraped (i.e. `url` from Step 1, not the newly-discovered URL):
 
 ```
 precrime__pipeline({
   action: "add_sources",
   entries: [
-    { url: "<url1>", channel: "directory", discoveredFrom: "<current url>" },
-    { url: "<url2>", channel: "rss", label: "Some Blog", discoveredFrom: "<current url>" }
+    { url: "<discovered url>", channel: "directory|blog|website|reddit", discoveredFrom: "<the scraped source url>" },
+    { url: "<discovered feed url>", channel: "rss", subtype: "feed", discoveredFrom: "<the scraped source url>" }
   ]
 })
 ```
 
-The server dedups on URL. Do NOT echo to `_sources.md` files -- the queue is in the DB.
+Collect returned source ids if present.
 
-### IF you found ZERO clients and ZERO factlets and ZERO sources
+For factlets relevant to a client, attach via the standard `save` patch with a `factlets` entry on that client. Save each factlet under one client save call; do not invent a placeholder client just to hold a factlet.
 
-This is normal for some pages: login wall, JS-only render, irrelevant page, scraper failure, or a category page with no useful rows.
-
-- DO NOT call `pipeline.save` with an empty patch. The server now soft-skips empty saves but it logs each one as a no-op event -- noisy and unhelpful.
-- Set `emptyReason` to one of: `no_candidates`, `irrelevant`, `login_wall`, `js_only`, `extract_failed`, `ambiguous`.
-- Skip directly to Step 5 and pass `clientsFound: 0` plus `failedReason: "empty:<emptyReason>"`. Move to next URL.
-
-Before declaring zero, double-check by re-reading the Step 3 result. Did you miss obvious vendor cards? Common mistake: agent over-filters because the names lack the word "Inc" or "LLC" -- but most small event vendors don't use suffixes. Server:
-- rejects empty patches (-32602),
-- dedups by company,
-- auto-scores and auto-promotes any booking that hits `leed_ready`.
-
-If a row carries name + email + phone + role together, follow `__PROJECT_ROOT__/skills/client-seeder.md` for THAT page (it adds classify-contact, booking-detect, factlet capture) -- then return here.
-
-Track:
-- `saved_this_iteration` = count of client save attempts
-- `factlets_this_iteration` = count of factlets saved/logged
-- `sources_added_this_iteration` = `added` count returned by `add_sources`
+CRITICAL: every `pipeline.save` call from this worker MUST pass `judge: false`. Scoring is owned by the Judge via the JUDGE_AFFECTED Task that the Planner will create from this Task's output. Do not call `pipeline.judge_affected` here. Do not call `pipeline.rescore` here. Do not set `Booking.status` directly.
 
 ---
 
-## Step 5 -- Mark source scraped, check budget
+## Step 4 -- Mark the Source row scraped
 
 ```
 precrime__pipeline({
   action: "mark_source",
-  url: "<url from Step 2>",
-  clientsFound: <saved_this_iteration count>,
-  failedReason: <set ONLY if Step 3 failed or Step 4 found nothing useful; omit on useful success>
+  url:    url,
+  clientsFound: <count of save calls you issued>
 })
 ```
 
-This releases the claim and stamps `scrapedAt`. If you don't call this within 10 minutes of Step 2, the row becomes claimable again by another agent.
-
-Budget check:
-- `total_client_saves_this_session >= target_count` -> Step 7.
-- Otherwise -> Step 2.
+This releases the Source claim and stamps `scrapedAt`. It is separate from completing the Task.
 
 ---
 
-## Step 6 -- Queue empty, grow it
+## Step 5 -- Complete the Task
 
-Read and follow `__PROJECT_ROOT__/skills/source-discovery.md`. It searches Tavily / SESSION_AI for new directories and feeds them into the Source table via `add_sources` calls.
-
-When source-discovery returns:
-- It reports `total_added > 0` -> Step 2.
-- It reports `total_added == 0` (channels exhausted) -> Step 7.
-
-ONE pass of source-discovery per url-loop invocation. Do not re-enter source-discovery in a tight loop.
-
----
-
-## Step 7 -- Close session
+If Step 2's extract succeeded and Step 3 ran:
 
 ```
-precrime__pipeline({ action: "report_session", session_id: sid })
+precrime__pipeline({
+  action: "complete_task",
+  taskId: taskId,
+  status: "done",
+  output: {
+    clientIds:   [<collected affected client ids>],
+    bookingIds:  [<collected affected booking ids>],
+    factletIds:  [<saved factlet ids if any>],
+    sourceIds:   [<newly added source ids if any>],
+    summary:     "Scraped <url>: <N> clients, <M> factlets, <K> new sources.",
+    needsJudge:  true
+  }
+})
 ```
 
-Echo the returned JSON verbatim. The server's report is the truth -- do not paraphrase, do not write your own count, do not summarize. Then exit this skill.
+`needsJudge: true` is set whenever ANY client/booking/factlet id was produced. If nothing was produced, set `needsJudge: false` and the summary should say "no findings".
+
+If extract failed, or the page yielded nothing useful and you want to record the failure cleanly:
+
+```
+precrime__pipeline({
+  action: "complete_task",
+  taskId: taskId,
+  status: "failed",
+  error:  "<short reason: extract_failed | login_wall | js_only | irrelevant | empty>",
+  output: {
+    clientIds:  [],
+    bookingIds: [],
+    summary:    "Scrape failed for <url>: <reason>.",
+    needsJudge: false
+  }
+})
+```
+
+**RSS soft-fail path (from Step 2.a):** when `get_top_articles` returned zero articles with a `diag.cause`, the source isn't broken -- it just produced nothing above threshold this round. Mark it scraped and complete the Task as **done** (not failed) so the Planner doesn't immediately re-queue it:
+
+```
+precrime__pipeline({ action: "mark_source", url: url, clientsFound: 0 })
+precrime__pipeline({
+  action: "complete_task",
+  taskId: taskId,
+  status: "done",
+  output: {
+    clientIds:  [],
+    bookingIds: [],
+    factletIds: [],
+    sourceIds:  [],
+    summary:    "RSS feed yielded 0 articles above threshold: <diag.cause>",
+    needsJudge: false
+  }
+})
+```
+
+Never leave a claimed Task uncompleted. If you cannot do the work for any reason, call `complete_task` with `status: "failed"` and a short `error`. The server will not let stale claims live forever (recycler reclaims them), but a worker should always close its own Task explicitly.
 
 ---
 
-## Termination contract
+## Step 6 -- Stop
 
-Exit url-loop ONLY at Step 7. Until then, you are in the loop.
-
-You do NOT exit when:
-- A scrape returns nothing.
-- A save returns "duplicate company" (it counted as an attempt).
-- The current URL had zero extractable companies.
-- You feel uncertain. (Loop back to Step 2.)
-
-You DO exit at Step 7 when:
-- `target_count` was hit (success).
-- `next_source` returned `QUEUE_EMPTY` AND source-discovery added zero entries (genuine exhaustion).
-- An unrecoverable tool error -- log it, attempt Step 7 anyway so the server closes the session cleanly.
-
-Server-side guards already in your favor (do not replicate in markdown):
-- 3-min save-or-terminate watchdog on read actions.
-- 60s cooldown on re-opening the same `workflow` string.
-- 10-min claim timeout on `next_source` (work-stealing -- dead agents release their claims automatically).
-- Empty-patch rejection.
-- Dedup by company on save, dedup by URL on add_sources.
-- Auto-score and auto-promote on every save.
+After `complete_task` returns, exit the skill. Do not claim another Task. Do not iterate to another Source. Do not call `report_session`. Do not call `plan_tasks`. The Planner decides what is next; the worker is done.

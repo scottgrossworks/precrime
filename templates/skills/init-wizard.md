@@ -36,6 +36,34 @@ Returns `{ byChannel: { directory:{added,duplicates,...}, rss:{...}, ... }, tota
 
 After Step 1.5, the agent uses `next_source` / `mark_source` / `add_sources` for the queue. Seed files are not consulted again during the run.
 
+## Step 1.6: Mandatory Config gate (BLOCKING)
+
+The runtime tools and drafting skills demand a minimum mirror of `DOCS/VALUE_PROP.md` inside SQLite `Config` (server/sync-config.js writes it at launch). Missing mandatory fields mean drafts will refuse to compose and `share_booking` may stall.
+
+Mandatory fields:
+
+- `companyName`
+- `companyEmail`
+- `businessDescription`
+- `defaultTrade` (re-validated in Step 1.7)
+- `leedzEmail` (defaults to `companyEmail` if missing)
+- `signature` (literal outreach signature block)
+- `defaultBookingAction`
+
+Probe Config:
+
+```
+status = precrime__pipeline({ action: "status" })   // already have this
+cfg    = status.config
+```
+
+For each mandatory field where `cfg[field]` is empty/null:
+
+- **Interactive mode:** ask one direct question per missing field (no menu, no chitchat). For `signature`, ask `Paste the literal signature block for outreach emails (multi-line ok, ends on a blank line):`. For others, ask `<field> is empty in Config. Enter value:`. After collecting a value, write it: `precrime__pipeline({ action: "configure", patch: { <field>: <value> } })`. Re-probe `status` until every mandatory field is populated.
+- **Headless mode:** do NOT prompt. STOP with: `CONFIG_INCOMPLETE: missing <comma-separated field names>. Edit DOCS/VALUE_PROP.md or call pipeline.configure to set these, then re-run.` Exit.
+
+After Step 1.6 succeeds, Config has every mandatory mirror field. Drafting skills that need identity / signature MUST call `pipeline.get_config({ key })` rather than re-reading VALUE_PROP.md for those fields.
+
 ## Step 1.7: Trade gate (BLOCKING)
 
 Trade is the marketplace category and the seed for demand-signal detection. The loop does not start until config has a `defaultTrade` that matches a canonical Leedz trade.
@@ -71,22 +99,25 @@ From status:
 - Set mode = headless.
 - Skip to Step 4. No questions.
 
-**If interactive:**
-- Ask:
+**If interactive:** ask exactly this two-choice menu and nothing else:
 ```
-Mode?
-  (1) Marketplace -- find leads, build leed JSON, post to Leedz API
-  (2) Outreach -- find leads, compose email drafts to gmail
-  (3) Hybrid -- explore leads interactively, decide per-lead
+What now?
+  (1) SHOW_HOT_LEEDZ -- show already-judged leed_ready / outreach_ready bookings so you can share / email / skip per item.
+  (2) RUN_WORKFLOW   -- full discovery + scrape + enrich + judge loop.
 ```
-- Wait for answer.
+- Wait for answer. Do not present marketplace / outreach / hybrid sub-modes. Do not present any other menu.
+- Answer "1" / "SHOW_HOT_LEEDZ" -> choice = `SHOW_HOT_LEEDZ`.
+- Answer "2" / "RUN_WORKFLOW"   -> choice = `RUN_WORKFLOW`.
 
 ## Step 4: Route
 
-- Mode = headless     -> follow `skills/headless_flow.md`
-- Mode = marketplace  -> follow `skills/marketplace_flow.md`
-- Mode = outreach     -> follow `skills/outreach_flow.md`
-- Mode = hybrid       -> follow `skills/hybrid_flow.md`
+- Mode = headless                   -> follow `__PROJECT_ROOT__/skills/headless_flow.md`.
+- Mode = interactive, choice = `SHOW_HOT_LEEDZ`:
+  1. `precrime__pipeline({ action: "plan_tasks", mode: "hot_only" })`
+  2. Follow `__PROJECT_ROOT__/skills/show-hot-leedz.md`. Stop after one Task.
+- Mode = interactive, choice = `RUN_WORKFLOW`:
+  1. `precrime__pipeline({ action: "plan_tasks", mode: "workflow" })`
+  2. Hand off to the worker skills (url-loop / enrichment-agent / apply-factlet) until queues are exhausted, then run `show-hot-leedz.md` against whatever the loop promoted.
 
 ## Rules
 

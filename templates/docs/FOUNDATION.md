@@ -51,31 +51,34 @@ PRECRIME(sources, clients):
 
 Every skill file is an implementation of one of these functions.
 
-## Function-to-Tool Mapping
+## Function-to-Tool Mapping (Planner / Worker / Judge / Presenter)
 
 | Function | Tool Call |
 |----------|----------|
-| Read config / stats | `precrime__pipeline({ action: "status" })` |
-| Save / update client | `precrime__pipeline({ action: "save", id?, patch })` |
-| Get next client | `precrime__pipeline({ action: "next", criteria })` |
-| Search clients | `precrime__find({ action: "clients", filters, summary: true })` |
-| Search bookings | `precrime__find({ action: "bookings", filters })` |
-| Search factlets | `precrime__find({ action: "factlets", filters })` |
-| Get trade list | `precrime__trades()` |
-| Fetch RSS articles | `precrime-rss__get_top_articles({ limit })` |
-| Web search (headless) | `tavily__tavily_search({ query })` |
-| Delete record | `precrime__pipeline({ action: "delete", target, id })` |
-| Re-score bookings | `precrime__pipeline({ action: "rescore", scope })` |
-| Start workflow session | `precrime__pipeline({ action: "start_session", workflow })` |
-| Close session + report | `precrime__pipeline({ action: "report_session", session_id })` |
-| Audit session (no close) | `precrime__pipeline({ action: "audit_session" })` |
-| Scrape URL (headless) | `tavily__tavily_extract({ url })` |
-| Send email | `gmail__gmail_send({ to, subject, body })` |
-| Post marketplace leed | `leedz__createLeed({ ...payload })` |
+| Read config / stats             | `precrime__pipeline({ action: "status" })` |
+| Set config field                | `precrime__pipeline({ action: "configure", patch })` |
+| Planner: enqueue Task batch     | `precrime__pipeline({ action: "plan_tasks", mode: "workflow" \| "headless" \| "hot_only" })` |
+| Worker: claim one Task          | `precrime__pipeline({ action: "claim_task", role, types? })` |
+| Worker: complete one Task       | `precrime__pipeline({ action: "complete_task", taskId, status, output, error? })` |
+| Save / update record (worker)   | `precrime__pipeline({ action: "save", id?, judge: false, patch })` |
+| Judge: rescore affected records | `precrime__pipeline({ action: "judge_affected", clientIds?, bookingIds? })` |
+| Presenter: build / post leed    | `precrime__pipeline({ action: "share_booking", bookingId, mode: "draft" \| "post", timezone })` |
+| Structured date validator       | `precrime__pipeline({ action: "resolve_dates", start, end, timezone, ... })` |
+| Recycler: stale Factlets / old Tasks | `precrime__pipeline({ action: "recycler", dryRun? })` |
+| List Tasks (audit / debug)      | `precrime__pipeline({ action: "tasks", status?, type?, sessionId? })` |
+| Source seed + queue growth      | `precrime__pipeline({ action: "import_sources" })` / `add_sources` |
+| Search clients                  | `precrime__find({ action: "clients", filters, summary: true })` |
+| Search bookings                 | `precrime__find({ action: "bookings", filters })` |
+| Search factlets                 | `precrime__find({ action: "factlets", filters })` |
+| Get trade list                  | `precrime__trades()` |
+| Fetch RSS articles              | `precrime_rss__get_top_articles({ limit })` |
+| Web search / extract            | `tavily__tavily_search({ query })` / `tavily__tavily_extract({ url })` |
+| Send email                      | `gmail__gmail_send({ to, subject, body })` |
+| Post marketplace leed (LEGACY)  | `leedz__createLeed` -- forbidden for normal sharing; `share_booking(mode:"post")` is the only sanctioned path. |
 
-Scoring runs automatically on every `pipeline.save`. No separate score call needed.
-See `DOCS/SCORING.json` for the full algorithm and gates.
-See `DOCS/SUMMARY.md` for session accountability (start_session / report_session / audit_session).
+Workers always pass `judge: false` on `pipeline.save`. The Planner converts a completed Task's `output.clientIds` / `output.bookingIds` into a `JUDGE_AFFECTED` Task; the Judge then runs canonical scoring (`computeBookingTargetScore` over `DOCS/SCORING.json`) and writes the resulting `Booking.status`. There is no separate "rescore" call in this architecture.
+
+See `DOCS/SCORING.json` for the algorithm and gates.
 
 ## Invariants
 
@@ -88,52 +91,61 @@ See `DOCS/SUMMARY.md` for session accountability (start_session / report_session
 7. **No invented facts.** Thin data produces thin output. Never fabricate intel, scores, or contacts.
 8. **Client = person.** Every client record must have a real human name. No placeholder names.
 
-## Numbered Orchestrator Procedure
+## Orchestrator Procedure (Planner-driven)
 
-The pseudocode above is the conceptual model. Below is the literal procedure any orchestrator (goose, hermes, claude code, or any tool-calling LLM with a large enough context window) follows. Each step is one tool call. Branch only where stated. The agent's job is judgment at branches; the control flow is fixed.
+The conceptual `PRECRIME(sources, clients)` pseudocode above is implemented as a server-side **Planner** that enqueues `Task` rows and a thin client-side **orchestrator** that drains them. The LLM is no longer responsible for global control flow.
 
-1. **Open session.** `precrime__pipeline({ action: "start_session", workflow: "<name>", target_count: N })`. Hold the returned `session_id`.
-2. **Pop work.**
-   - URL queue: `precrime__pipeline({ action: "next_source", session_id, channel?: "<filter>" })`. Returns `CLAIMED` (with the source row) or `QUEUE_EMPTY`.
-   - Client queue: `precrime__pipeline({ action: "next", criteria: { lastEnrichedBefore: "<30d ago ISO>" } })`.
-3. **Branch on empty.** Got `QUEUE_EMPTY` (or null) -> Step 7 (grow). Else -> Step 4.
-4. **Scrape / process.** `tavily__tavily_extract` for URLs, or scrape the client's `targetUrls`. Extract findings.
-5. **Save every finding, one tool call each.** `precrime__pipeline({ action: "save", session_id, patch })`. The server dedups, scores, and auto-promotes any booking that hits `leed_ready`. Repeat for every distinct company / contact / factlet on the page. Any new source URLs found mid-scrape -> `precrime__pipeline({ action: "add_sources", entries: [...] })`.
-6. **Mark item processed.** URL queue: `precrime__pipeline({ action: "mark_source", url, clientsFound, failedReason? })` -- releases the 10-min claim, stamps `scrapedAt`. Client queue: set `lastEnriched` via `pipeline.save`. If `saved_this_session >= target_count` -> Step 8.
-7. **Grow queue.** Run `skills/source-discovery.md` ONCE. It calls `pipeline.add_sources` per channel. New entries added -> Step 2. Nothing added -> Step 8.
-8. **Close session.** `precrime__pipeline({ action: "report_session", session_id })`. Echo the result verbatim.
-9. **Recurse upward.** If an outer flow (marketplace / outreach / hybrid / headless) called this loop, return control. The flow runs its own PRESENT step and decides whether to re-enter Step 1 based on its own delta-zero check.
+The orchestrator is `skills/headless_flow.md` in headless mode, or `skills/init-wizard.md` -> `RUN_WORKFLOW` / `SHOW_HOT_LEEDZ` route in interactive mode. Both follow the same dispatch shape:
 
-### Recursion arms
+1. **Plan.** `precrime__pipeline({ action: "plan_tasks", mode })`. Server enqueues `Task` rows up to per-type limits from `precrime_config.json` (`tasks.limits`). Hot `SHARE_BOOKING` Tasks come first in `mode:"headless"`; `SHOW_HOT_LEEDZ` comes first in `mode:"hot_only"`.
+2. **Drain.** Loop: `precrime__pipeline({ action: "claim_task", role })` -> dispatch by `task.type` -> `precrime__pipeline({ action: "complete_task", taskId, status, output })`.
+3. **Replan.** When `claim_task` returns `NO_TASK`, call `plan_tasks` again. The Planner converts completed worker Tasks into `JUDGE_AFFECTED` Tasks via `extractAffectedIds(output)`, schedules `APPLY_FACTLET` Tasks for live unassimilated Factlets, and re-enqueues stale `ENRICH_CLIENT` candidates.
+4. **Exit.** When `plan_tasks` creates `0` Tasks in every type AND `claim_task` returns `NO_TASK`, the queue is permanently empty for this run.
 
-The procedure recurses on three planes. Each arm is what makes a re-run discover more than the last:
+### Dispatch table
 
-- **Source recursion.** Every Step 5 scrape can pick up new source URLs from page text -> `pipeline.add_sources` writes them to the Source table -> a future Step 2 `next_source` pops them. (Implemented in `client-seeder.md` "Follow Links" and every harvester's "Source Growth" step. The `_sources.md` files are SEED-ONLY; read once at first deploy by `pipeline.import_sources`, never written to at runtime.)
-- **Client recursion.** Every Step 5 save can spawn a thin client -> later picked up by Step 4 enrichment when its `lastEnrichedBefore` cursor catches up.
-- **Booking recursion.** Every save auto-rescores attached bookings; a new factlet linked to an existing client can promote a previously-brewing booking to `leed_ready` on the next iteration.
+| `task.type`        | Handler |
+|--------------------|---------|
+| `SCRAPE_SOURCE`    | `skills/url-loop.md` (worker self-claims in interactive; orchestrator pre-claims in headless and hands off at Step 2). |
+| `ENRICH_CLIENT`    | `skills/enrichment-agent.md` (same handoff convention). |
+| `APPLY_FACTLET`    | `skills/apply-factlet.md`. |
+| `SHOW_HOT_LEEDZ`   | `skills/show-hot-leedz.md` (interactive only; cancelled in headless). |
+| `SHARE_BOOKING`    | Orchestrator calls `share_booking(mode:"post")` and completes the Task. Never `leedz__createLeed`. |
+| `JUDGE_AFFECTED`   | Orchestrator calls `judge_affected(clientIds, bookingIds)` from `task.input` and completes. |
+| `DISCOVER_SOURCES` | Orchestrator runs one bounded `tavily_search` keyed by `defaultTrade` + geography, feeds results to `add_sources`, completes. |
+
+### Recursion arms (Task-based)
+
+The system still recurses on three planes; the implementation is now expressed in Task transitions rather than agent loops:
+
+- **Source recursion.** A `SCRAPE_SOURCE` worker may save new source URLs via `add_sources`. The next `plan_tasks` pass enqueues fresh `SCRAPE_SOURCE` Tasks for them.
+- **Client recursion.** A `SCRAPE_SOURCE` or `ENRICH_CLIENT` worker may create thin Clients via `pipeline.save({ judge:false })`. The next `plan_tasks` pass picks them up as `ENRICH_CLIENT` candidates.
+- **Booking recursion.** Every completed worker Task with affected `clientIds` / `bookingIds` becomes a `JUDGE_AFFECTED` Task on the next planner pass. Judge re-evaluates `Booking.status` via `computeBookingTargetScore` against `DOCS/SCORING.json` -- a newly-assimilated Factlet on the client dossier can promote a previously-brewing Booking to `leed_ready`.
 
 ### Termination
 
-The whole system terminates ONLY when:
-1. The URL queue is empty (every entry has a fresh `scraped:` stamp), AND
-2. The client-needing-enrichment queue is empty (`pipeline.next` returns null), AND
-3. The leed_ready queue is empty (or every entry was just posted/rejected), AND
-4. ONE pass of `source-discovery.md` added zero new entries.
+The orchestrator terminates ONLY when, in the same iteration:
+1. `claim_task` returns `NO_TASK` for every type, AND
+2. The subsequent `plan_tasks` call enqueues `0` new ready Tasks in every type.
 
-Until all four conditions hold, the agent stays in the loop. Empty page extracts, dedup hits, and low scores are NOT termination signals -- they are normal loop output.
+Until both conditions hold, the orchestrator stays in Step 2 -> Step 3. Empty page extracts, dedup hits, and low scores are NOT termination signals -- they are normal worker output.
+
+The Recycler (`pipeline.recycler`) runs at startup to delete stale Factlets, purge old finished Tasks, and re-queue timed-out claimed Tasks per `precrime_config.json` (`recycler.factletStaleDays`, `taskRetentionDays`, `claimTimeoutMinutes`).
 
 ### What is server-enforced vs agent-judged
 
 | Concern | Owner | How |
 |---|---|---|
-| Empty patch rejection | Server | `pipeline.save` returns -32602 |
-| Dedup by company | Server | `pipeline.save` merges by company name |
-| Scoring + leed_ready promotion | Server | `score_target` runs on every save |
-| Session truth (counts, failures) | Server | `report_session` event log |
-| 3-min save-or-terminate watchdog | Server | applied to read actions |
-| 60s cooldown on workflow re-open | Server | `start_session` |
-| Loop continuation between steps | Agent | follow the numbered procedure |
-| Relevance / classification / extraction | Agent | judgment per `shared/*` rules |
-| Termination decision | Agent | the four conditions above |
+| Per-type Task limits          | Server (Planner) | `plan_tasks` reads `precrime_config.json` `tasks.limits`. |
+| Atomic Task claim             | Server | `claim_task` flips `ready` -> `claimed` in one transaction. |
+| Reclaim stuck claims          | Server | `plan_tasks` and `recycler` requeue Tasks past `claimTimeoutMinutes`. |
+| Empty patch rejection         | Server | `pipeline.save` returns -32602. |
+| Dedup by company              | Server | `pipeline.save` merges by company name. |
+| Scoring + status promotion    | Server (Judge) | `judge_affected` -> `computeBookingTargetScore` -> `Booking.status`. |
+| `share_booking` date math     | Server | `resolve_dates` from structured Booking fields + IANA timezone. Rejects LLM-supplied `st`/`et`. |
+| Worker control flow           | Agent  | follow the one-Task skill file top-to-bottom. |
+| Relevance / classification    | Agent  | judgment per `skills/shared/*` rules. |
+| Dispatch on Task type         | Agent  | one switch on `task.type` in the orchestrator. |
+| Termination decision          | Agent  | the two conditions above. |
 
-The agent's intelligence is spent on judgment (is this contact a competitor? is this factlet a buying signal? is this dossier rich enough for a draft?). The control flow is a state machine -- not improvisation.
+The agent's intelligence is spent on judgment within a single Task (is this contact a competitor? is this factlet a buying signal? is this dossier rich enough?). The control flow is a state machine -- not improvisation.

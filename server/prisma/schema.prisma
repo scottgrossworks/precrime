@@ -31,7 +31,6 @@ model Client {
   createdAt      DateTime  @default(now())
   updatedAt      DateTime  @updatedAt
   bookings       Booking[]
-  factlets       ClientFactlet[]
 }
 
 model Booking {
@@ -68,25 +67,10 @@ model Booking {
 }
 
 model Factlet {
-  id        String          @id @default(cuid())
+  id        String   @id @default(cuid())
   content   String
   source    String
-  createdAt DateTime        @default(now())
-  clients   ClientFactlet[]
-}
-
-model ClientFactlet {
-  id         String   @id @default(cuid())
-  clientId   String
-  factletId  String
-  relevance  Boolean  @default(true)  // binary: factlet relevant to VALUE_PROP. The scoring gate per DOCS/SCORING.json. Set by relevance-judge at ingestion.
-  signalType String?  // DEPRECATED — legacy "pain" | "occasion" | "context". Retained for back-compat; not used by score_target.
-  points     Int?     // DEPRECATED — legacy point value. Not used by score_target.
-  appliedAt  DateTime @default(now())
-  client     Client   @relation(fields: [clientId], references: [id])
-  factlet    Factlet  @relation(fields: [factletId], references: [id])
-
-  @@unique([clientId, factletId])
+  createdAt DateTime @default(now())
 }
 
 // ============================================================================
@@ -161,24 +145,59 @@ model Source {
   @@index([claimedAt])
 }
 
+// ============================================================================
+// TASK -- the unit of work for the new Planner/Worker/Judge architecture
+// ============================================================================
+// See DOCS/WHAT_I_LEARNED.md. A Task is one bounded job created by the
+// Planner (MCP). Workers claim Tasks atomically, do the work, then call
+// complete_task. Finished Tasks are kept as a SQLite audit trail until the
+// recycler purges them.
+//
+// Lifecycle: ready -> claimed -> done|failed|cancelled
+// Stale claimed Tasks (claimedAt older than claim timeout) are reclaimable.
+// ============================================================================
+
+model Task {
+  id          String    @id @default(cuid())
+  type        String                                 // DISCOVER_SOURCES | SCRAPE_SOURCE | ENRICH_CLIENT | APPLY_FACTLET | JUDGE_AFFECTED | SHOW_HOT_LEEDZ | SHARE_BOOKING
+  status      String    @default("ready")            // ready | claimed | done | failed | cancelled
+  sessionId   String?                                // optional Session/run container
+  targetType  String?                                // Source | Client | Booking | Factlet | none
+  targetId    String?                                // id of the target object
+  input       String?                                // JSON
+  output      String?                                // JSON, includes affected ids when relevant
+  error       String?
+  claimedAt   DateTime?
+  claimedBy   String?
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+  finishedAt  DateTime?
+
+  @@index([status])
+  @@index([type])
+  @@index([sessionId])
+  @@index([targetType, targetId])
+}
+
 model Config {
-  id                   String   @id @default(cuid())
-  companyName          String?
-  companyEmail         String?
-  businessDescription  String?
-  activeEntities       String?  // JSON: ["client"] or ["client","booking"]
-  defaultTrade         String?  // e.g., "Caricature Artist"
-  defaultBookingAction String?  // "leedz_api" | "email_share" | "email_user"
-  marketplaceEnabled   Boolean  @default(false)
-  leadCaptureEnabled   Boolean  @default(false)
-  leedzEmail           String?
-  leedzSession         String?  // session JWT for createLeed MCP calls
-  llmApiKey            String?
-  llmProvider          String?
-  llmBaseUrl           String?
-  llmAnthropicVersion  String?
-  llmMaxTokens         Int?     @default(1024)
-  factletStaleDays     Int?     @default(180) // days before a factlet is stale
-  createdAt            DateTime @default(now())
-  updatedAt            DateTime @updatedAt
+  id                       String    @id @default(cuid())
+  companyName              String?
+  companyEmail             String?
+  businessDescription      String?
+  activeEntities           String?  // JSON: ["client"] or ["client","booking"]
+  defaultTrade             String?  // e.g., "Caricature Artist"
+  defaultBookingAction     String?  // "leedz_api" | "email_share" | "email_user"
+  marketplaceEnabled       Boolean  @default(false)
+  leadCaptureEnabled       Boolean  @default(false)
+  leedzEmail               String?
+  leedzSession             String?  // session JWT for createLeed MCP calls
+  signature                String?  // outreach email signature block, mirrored from VALUE_PROP.md
+  llmApiKey                String?
+  llmProvider              String?
+  llmBaseUrl               String?
+  llmAnthropicVersion      String?
+  llmMaxTokens             Int?     @default(1024)
+  factletStaleDays         Int?     @default(180) // days before a factlet is stale
+  createdAt                DateTime @default(now())
+  updatedAt                DateTime @updatedAt
 }

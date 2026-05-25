@@ -178,10 +178,18 @@ async function fetchFeed(feedConfig) {
 }
 
 
-async function getTopArticles(limit = 6) {
+// When feedUrlOverride is a non-empty string, fetch ONLY that one feed and
+// score it with the global keyword list (per-feed keywords deprecated). Lets
+// the SCRAPE_SOURCE worker process one runtime-discovered feed at a time --
+// the Source table in SQLite is the runtime queue; rss_sources.md remains
+// seed-only and is imported at startup via pipeline.import_sources.
+async function getTopArticles(limit = 6, feedUrlOverride = null) {
   const startTime = Date.now();
   const allArticles = [];
-  const totalFeeds = CONFIG.feeds.length;
+  const feedsToProcess = (feedUrlOverride && typeof feedUrlOverride === 'string')
+    ? [{ url: feedUrlOverride, name: feedUrlOverride, category: 'override', keywords: [] }]
+    : CONFIG.feeds;
+  const totalFeeds = feedsToProcess.length;
 
   // Diagnostics — populated so the caller can tell WHY 0 articles came back
   // (threshold too high vs. feeds all fetch-failing vs. no feeds configured).
@@ -195,10 +203,11 @@ async function getTopArticles(limit = 6) {
     maxScoreFeed: null
   };
 
-  console.error(`\nProcessing ${totalFeeds} feeds, target: ${limit} articles (threshold=${CONFIG.processing.relevanceThreshold})`);
+  const modeLabel = feedUrlOverride ? `override feedUrl=${feedUrlOverride}` : 'configured feeds';
+  console.error(`\nProcessing ${totalFeeds} feeds (${modeLabel}), target: ${limit} articles (threshold=${CONFIG.processing.relevanceThreshold})`);
 
-  for (let i = 0; i < CONFIG.feeds.length; i++) {
-    const feedConfig = CONFIG.feeds[i];
+  for (let i = 0; i < feedsToProcess.length; i++) {
+    const feedConfig = feedsToProcess[i];
     try {
       console.error(`[${i+1}/${totalFeeds}] ${feedConfig.name}...`);
       const feed = await fetchFeed(feedConfig);
@@ -285,8 +294,15 @@ const server = new Server(
 server.setRequestHandler(ListToolsRequestSchema, async () => ({
   tools: [{
     name: 'get_top_articles',
-    description: 'Get top scored RSS articles. Optional arg: limit (number, default 6). Any extra args are ignored.',
-    inputSchema: { type: 'object', additionalProperties: true }
+    description: 'Get top scored RSS articles. Optional args: limit (number, default 6); feedUrl (string -- when present, fetch and score only that ONE feed instead of the configured list, used by the SCRAPE_SOURCE worker for runtime-discovered RSS Sources). Any extra args are ignored.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        limit:   { type: 'number',  description: 'Max articles to return (default 6).' },
+        feedUrl: { type: 'string',  description: 'When set, fetch only this single feed. Lets the SCRAPE_SOURCE worker scrape one Source.channel="rss" row from the SQLite Source queue.' }
+      },
+      additionalProperties: true
+    }
   }]
 }));
 
@@ -296,7 +312,8 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
     const args = request.params.arguments || {};
     const rawLimit = args.limit;
     const limit = Number.isFinite(Number(rawLimit)) && Number(rawLimit) > 0 ? Number(rawLimit) : 6;
-    const articles = await getTopArticles(limit);
+    const feedUrlOverride = (typeof args.feedUrl === 'string' && args.feedUrl.trim()) ? args.feedUrl.trim() : null;
+    const articles = await getTopArticles(limit, feedUrlOverride);
     // If no articles came back, include the diag hint in the response so the
     // agent can report a specific cause rather than guessing "feeds may need
     // new sources or the MCP server may need a restart".

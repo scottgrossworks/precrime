@@ -80,6 +80,19 @@ try {
     process.exit(1);
 }
 
+// Runtime/API config (Subproject 10). Optional file; loader returns defaults
+// if absent so the server still boots during the transition.
+const { loadPrecrimeConfig, applyApiKeysToProcessEnv } = require(path.resolve(__dirname, '..', 'config', 'precrime_config.js'));
+const PRECRIME_CONFIG = loadPrecrimeConfig();
+if (PRECRIME_CONFIG.fallbacks && PRECRIME_CONFIG.fallbacks.length) {
+    for (const note of PRECRIME_CONFIG.fallbacks) {
+        console.error(`[MCP] precrime_config fallback: ${note}`);
+    }
+}
+// Internal plumbing only: some node libs (openai, anthropic, tavily) read
+// process.env.X at import time. Hydrate from config. Not user-facing.
+applyApiKeysToProcessEnv(PRECRIME_CONFIG);
+
 const dbPath = process.env.DATABASE_URL.replace(/^file:/, '');
 const prisma = new PrismaClient();
 console.error(`[MCP] Database: ${dbPath}`);
@@ -251,7 +264,9 @@ function handleToolsList(id) {
                         '',
                         'action="rescore": Re-evaluate every non-terminal booking against DOCS/SCORING.json and update status field (leed_ready or new) accordingly. Use after editing DOCS/SCORING.json gates or constants. Pass scope="all" (default), scope="leed_ready" to sanity-check the current queue, or scope=<clientId> to limit to one client. Returns counts: rescored, promoted, demoted, unchanged.',
                         '',
-                        'action="resolve_dates": Convert raw event date text into Leedz epoch milliseconds using server code, not the LLM. Required text. Optional sourceUrl validates proof page. Optional defaultDurationHours fills end time only when explicitly provided. Returns { ok, st, et, startIso, endIso } or errors.',
+                        'action="resolve_dates": STRUCTURED-ONLY. Server-side date validation + tz-aware epoch math. Required: start { year, month, day, hour, minute, ampm? }, end { year, month, day, hour, minute, ampm? }, timezone (IANA, e.g. "America/Los_Angeles"). Optional: zip (echoed only -- zip-to-tz derivation NOT supported), rawText (informational evidence only -- timezone smuggled inside rawText is REJECTED), sourceProof. The LLM is forbidden from computing epoch ms; it must only extract the structured fields. Returns { ok, st, et, startIso, endIso, timezone, zip, warnings } on success, or { ok:false, errors:[fieldName:reason] } on failure.',
+                        '',
+                        'action="share_booking": ONLY normal path to marketplace posting. Required: bookingId, mode ("draft" | "post"). FORBIDDEN inputs: st, et (LLM-supplied epochs are rejected by name). Loads the Booking + Client, rescores via judgeAffected, requires status leed_ready, then calls resolve_dates internally with the Booking\'s structured date provenance. In "draft" mode returns the addLeed payload + humanReadable verification block. In "post" mode posts to Leedz and records leedId/sharedAt.',
                         '',
                         'action="start_session": Open a workflow session and receive a server-issued session_id. Pass workflow (string, e.g. "convention-leeds") and optional target_count (e.g. 5) and metadata (object). The session_id MUST be passed to subsequent save calls in this workflow so the server can log each save. Use this BEFORE any save calls when you intend to summarize results — the report_session call will return the truth.',
                         '',
@@ -272,20 +287,77 @@ function handleToolsList(id) {
                         properties: {
                             action: {
                                 type: 'string',
-                                enum: ['status', 'configure', 'next', 'save', 'delete', 'rescore', 'resolve_dates', 'start_session', 'report_session', 'audit_session', 'next_source', 'mark_source', 'add_sources', 'import_sources', 'work_status'],
+                                enum: ['status', 'configure', 'get_config', 'next', 'save', 'delete', 'rescore', 'resolve_dates', 'share_booking', 'start_session', 'report_session', 'audit_session', 'next_source', 'mark_source', 'add_sources', 'import_sources', 'work_status', 'judge_affected', 'plan_tasks', 'claim_task', 'complete_task', 'tasks', 'recycler'],
                                 description: 'Which pipeline operation to run.'
                             },
                             text: {
                                 type: 'string',
-                                description: 'For action=resolve_dates: raw event date/time text copied from the source page.'
+                                description: 'For action=resolve_dates: DEPRECATED. The structured-only path is authoritative; text is ignored except as evidence echo.'
                             },
                             sourceUrl: {
                                 type: 'string',
-                                description: 'For action=resolve_dates: live source URL that should contain the event date/year.'
+                                description: 'For action=resolve_dates: optional source URL kept only for provenance. No longer used for date math.'
                             },
                             defaultDurationHours: {
                                 type: 'number',
-                                description: 'For action=resolve_dates: explicit fallback duration when the text has a start time but no end time.'
+                                description: 'DEPRECATED. Structured resolve_dates requires explicit end fields.'
+                            },
+                            rawText: {
+                                type: 'string',
+                                description: 'For action=resolve_dates: informational raw evidence text. NEVER used to derive timezone or epoch -- structured fields are required.'
+                            },
+                            start: {
+                                type: 'object',
+                                description: 'For action=resolve_dates: { year, month (1-12), day, hour, minute, ampm? }. Required.',
+                                properties: {
+                                    year:   { type: 'integer' },
+                                    month:  { type: 'integer' },
+                                    day:    { type: 'integer' },
+                                    hour:   { type: 'integer' },
+                                    minute: { type: 'integer' },
+                                    ampm:   { type: 'string', enum: ['AM', 'PM', 'am', 'pm'] }
+                                }
+                            },
+                            end: {
+                                type: 'object',
+                                description: 'For action=resolve_dates: { year, month, day, hour, minute, ampm? }. Required. Overnight events must supply the next-day date.',
+                                properties: {
+                                    year:   { type: 'integer' },
+                                    month:  { type: 'integer' },
+                                    day:    { type: 'integer' },
+                                    hour:   { type: 'integer' },
+                                    minute: { type: 'integer' },
+                                    ampm:   { type: 'string', enum: ['AM', 'PM', 'am', 'pm'] }
+                                }
+                            },
+                            timezone: {
+                                type: 'string',
+                                description: 'For action=resolve_dates: IANA timezone, e.g. "America/Los_Angeles". Required. Timezone smuggled inside rawText is rejected.'
+                            },
+                            zip: {
+                                type: 'string',
+                                description: 'For action=resolve_dates: 5-digit zip. Echoed only -- no zip-to-tz derivation.'
+                            },
+                            sourceProof: {
+                                type: 'string',
+                                description: 'For action=resolve_dates / share_booking: provenance string (email id, URL, snippet).'
+                            },
+                            bookingId: {
+                                type: 'string',
+                                description: 'For action=share_booking: Booking.id to share.'
+                            },
+                            mode: {
+                                type: 'string',
+                                enum: ['draft', 'post'],
+                                description: 'For action=share_booking: "draft" returns the payload + humanReadable; "post" posts to Leedz.'
+                            },
+                            st: {
+                                type: 'number',
+                                description: 'FORBIDDEN on share_booking. The LLM is not allowed to supply marketplace epoch ms. Pass structured date pieces and let MCP resolve them.'
+                            },
+                            et: {
+                                type: 'number',
+                                description: 'FORBIDDEN on share_booking. The LLM is not allowed to supply marketplace epoch ms. Pass structured date pieces and let MCP resolve them.'
                             },
                             channel: {
                                 type: 'string',
@@ -632,35 +704,69 @@ async function getFactletStaleDays() {
     return (cfg && cfg.factletStaleDays) || 180;
 }
 
-function computeFactletStats(clientFactlets, staleDays) {
+// Find live (non-stale) Factlet rows directly relevant to this Client via cheap
+// content/source string overlap. There is no join table; Factlet is standalone.
+// Relevance signals (any one is sufficient):
+//   - Client name appears in factlet content or source
+//   - Client company appears in factlet content or source
+//   - Client website host appears in factlet content or source
+// Filtering is case-insensitive and trims tokens shorter than 4 chars to avoid
+// matching generic words.
+async function findLiveFactletsForClient(client, staleDays) {
+    if (!client) return [];
+    const cutoff = new Date(Date.now() - staleDays * 24 * 60 * 60 * 1000);
+    const tokens = [];
+    function addTok(s) {
+        if (!s) return;
+        const t = String(s).trim();
+        if (t.length < 4) return;
+        tokens.push(t.toLowerCase());
+    }
+    addTok(client.name);
+    addTok(client.company);
+    if (client.website) {
+        try {
+            const u = new URL(client.website.startsWith('http') ? client.website : 'https://' + client.website);
+            addTok(u.hostname.replace(/^www\./, ''));
+        } catch (_) { /* ignore unparseable */ }
+    }
+    if (tokens.length === 0) return [];
+
+    // Pull only fresh Factlets to bound the scan.
+    const fresh = await prisma.factlet.findMany({
+        where: { createdAt: { gte: cutoff } },
+        orderBy: { createdAt: 'desc' },
+        take: 500
+    });
+    return fresh.filter(f => {
+        const hay = ((f.content || '') + ' ' + (f.source || '')).toLowerCase();
+        return tokens.some(tok => hay.includes(tok));
+    });
+}
+
+function computeFactletStats(factletRows, staleDays) {
     const now = Date.now();
     let score = 0;
     let freshCount = 0;
-    for (const cf of clientFactlets) {
-        const createdAt = cf.factlet && cf.factlet.createdAt;
-        if (!createdAt) continue;
-        const ageDays = (now - new Date(createdAt).getTime()) / (1000 * 60 * 60 * 24);
+    for (const f of factletRows) {
+        if (!f || !f.createdAt) continue;
+        const ageDays = (now - new Date(f.createdAt).getTime()) / (1000 * 60 * 60 * 24);
         const weight = Math.max(0, 1 - ageDays / staleDays);
         if (weight > 0) freshCount++;
         score += weight;
     }
-    return { score, count: clientFactlets.length, freshCount };
+    return { score, count: factletRows.length, freshCount };
 }
 
 async function computeClientScore(clientId, intelOverride) {
-    const client = await prisma.client.findUnique({
-        where: { id: clientId },
-        include: {
-            factlets: {
-                        where: { relevance: true },  // gate per DOCS/SCORING.json: only relevant factlets feed factletScore
-                include: { factlet: { select: { id: true, createdAt: true } } }
-            }
-        }
-    });
+    const client = await prisma.client.findUnique({ where: { id: clientId } });
     if (!client) return null;
 
     const staleDays = await getFactletStaleDays();
-    const fs = computeFactletStats(client.factlets || [], staleDays);
+    // Live Factlet relevance via cheap content/source overlap on the Client's
+    // stable identifiers (name / company / website host). No join table.
+    const liveFactlets = await findLiveFactletsForClient(client, staleDays);
+    const fs = computeFactletStats(liveFactlets, staleDays);
 
     const hasName         = !!(client.name && client.name.trim());
     const email           = (client.email || '').trim();
@@ -819,16 +925,7 @@ async function detectDemandSignal(booking, freshRelevantFactletCount, cfg) {
 async function computeBookingTargetScore(bookingId) {
     const booking = await prisma.booking.findUnique({
         where: { id: bookingId },
-        include: {
-            client: {
-                include: {
-                    factlets: {
-                        where: { relevance: true },  // gate per DOCS/SCORING.json
-                        include: { factlet: { select: { id: true, createdAt: true } } }
-                    }
-                }
-            }
-        }
+        include: { client: true }
     });
     if (!booking) return null;
 
@@ -853,7 +950,10 @@ async function computeBookingTargetScore(bookingId) {
     const staleDays = await getFactletStaleDays();
 
     const data = computeBookingScore(booking, client);
-    const fs = computeFactletStats(client.factlets || [], staleDays);
+    // Live Factlet relevance via content/source overlap on the Client's stable
+    // identifiers. There is no join table; Factlet rows stand alone.
+    const liveFactlets = client ? await findLiveFactletsForClient(client, staleDays) : [];
+    const fs = computeFactletStats(liveFactlets, staleDays);
     const factletMultiplier = Math.min(1.0, fs.score / FACTLET_THRESHOLD);
 
     // Score = booking completeness only. Factlets feed demand-signal detection
@@ -1036,11 +1136,19 @@ async function handlePipeline(id, params) {
     switch (action) {
         case 'status':         return await pipelineStatus(id);
         case 'configure':      return await pipelineConfigure(id, args.patch || {});
+        case 'get_config':     return await pipelineGetConfig(id, args);
         case 'next':           return await pipelineNext(id, args.entity || 'client', args.criteria || {}, args.dossierLimit, args.factletLimit);
-        case 'save':           return await pipelineSave(id, args.id, args.patch || {}, args.session_id || null);
+        case 'save':           return await pipelineSave(id, args.id, args.patch || {}, args.session_id || null, args.judge !== false);
+        case 'judge_affected': return await pipelineJudgeAffected(id, args);
+        case 'plan_tasks':     return await pipelinePlanTasks(id, args);
+        case 'claim_task':     return await pipelineClaimTask(id, args);
+        case 'complete_task':  return await pipelineCompleteTask(id, args);
+        case 'tasks':          return await pipelineTasks(id, args);
+        case 'recycler':       return await pipelineRecycler(id, args);
         case 'delete':         return await pipelineDelete(id, args.target, args.id);
         case 'rescore':        return await pipelineRescore(id, args.scope || 'all');
         case 'resolve_dates':  return createSuccessResponse(id, JSON.stringify(await resolveEventDates(args), null, 2));
+        case 'share_booking':  return await pipelineShareBooking(id, args);
         case 'start_session':  return await pipelineStartSession(id, args.workflow, args.target_count, args.metadata);
         case 'report_session': return await pipelineReportSession(id, args.session_id, /*close=*/true);
         case 'audit_session':  return await pipelineReportSession(id, args.session_id, /*close=*/false);
@@ -1050,7 +1158,7 @@ async function handlePipeline(id, params) {
         case 'import_sources': return await pipelineImportSources(id);
         case 'work_status':    return await pipelineWorkStatus(id);
         default:
-            return createErrorResponse(id, -32602, `Unknown pipeline action: "${action}". Must be: status, configure, next, save, delete, rescore, resolve_dates, start_session, report_session, audit_session, next_source, mark_source, add_sources, import_sources, work_status.`);
+            return createErrorResponse(id, -32602, `Unknown pipeline action: "${action}". Must be: status, configure, get_config, next, save, delete, rescore, resolve_dates, share_booking, start_session, report_session, audit_session, next_source, mark_source, add_sources, import_sources, work_status, judge_affected, plan_tasks, claim_task, complete_task, tasks, recycler.`);
     }
 }
 
@@ -1295,7 +1403,11 @@ async function verifyResolvedDateSource(sourceUrl, resolved) {
     return { ok: true, status: fetched.status, finalUrl: fetched.finalUrl };
 }
 
-async function resolveEventDates(args = {}) {
+// Legacy text-only date resolver. Internal-only. Still used by
+// normalizeBookingDatesForSave to keep older legacy save callers working.
+// The MCP `resolve_dates` action no longer exposes this path -- see
+// resolveEventDatesStructured below for the structured, tz-aware replacement.
+async function resolveEventDatesLegacy(args = {}) {
     const text = cleanDateText(args.text || args.dateText || args.rawDate || '');
     if (!text) return { ok: false, errors: ['missing_text'] };
 
@@ -1347,6 +1459,252 @@ async function resolveEventDates(args = {}) {
     if (!proof.ok) return { ok: false, errors: [proof.reason], evidence: resolved.evidence };
     resolved.sourceProof = proof;
     return resolved;
+}
+
+// ============================================================================
+// STRUCTURED DATE RESOLUTION (Phase 5)
+// ============================================================================
+// LLMs hand-computing st/et caused production bugs. The contract for the
+// MCP `resolve_dates` action is now structured-only: the caller passes
+// year/month/day/hour/minute/ampm for both start and end, plus an explicit
+// IANA timezone (or, in the future, a zip-to-tz map). The server computes
+// the offset for that wall-clock instant in that zone via Intl.DateTimeFormat
+// and returns canonical epoch ms.
+// No text parsing. No timezone smuggled in rawText. No epoch math by the LLM.
+// ============================================================================
+
+// IANA tz validation via Intl. Returns true iff Node accepts the zone.
+function isValidIanaTimezone(tz) {
+    if (typeof tz !== 'string' || !tz.trim()) return false;
+    try {
+        new Intl.DateTimeFormat('en-US', { timeZone: tz });
+        return true;
+    } catch (_) {
+        return false;
+    }
+}
+
+// Deterministic US ZIP -> IANA timezone resolver.
+// Used by share_booking to derive the marketplace event timezone from
+// Booking.zip at leed creation time. There is no user-configurable timezone.
+//
+// Coverage is by 3-digit ZIP prefix range. Boundaries are approximate at zone
+// edges (parts of FL panhandle, TN/KY/IN/MI splits, west TX, OR/ID border)
+// because zone lines do not follow ZIP3 ranges cleanly. The dominant zone for
+// each range wins. Returns an IANA name on a confident hit, null otherwise --
+// share_booking then refuses to post with error:"unresolved_location_timezone".
+function zipToTimezone(zip) {
+    if (zip == null) return null;
+    const z = String(zip).trim().slice(0, 5);
+    if (!/^\d{5}$/.test(z)) return null;
+    const n = parseInt(z.slice(0, 3), 10);
+
+    // Pacific
+    if (n >= 900 && n <= 961) return 'America/Los_Angeles';     // CA
+    if (n >= 970 && n <= 979) return 'America/Los_Angeles';     // OR
+    if (n >= 980 && n <= 994) return 'America/Los_Angeles';     // WA
+    if (n >= 889 && n <= 898) return 'America/Los_Angeles';     // NV (Pacific)
+    // Alaska + Hawaii
+    if (n >= 967 && n <= 968) return 'Pacific/Honolulu';        // HI (no DST)
+    if (n >= 995 && n <= 999) return 'America/Anchorage';       // AK
+
+    // Mountain
+    if (n >= 800 && n <= 831) return 'America/Denver';          // CO / WY
+    if (n >= 832 && n <= 838) return 'America/Denver';          // ID (most)
+    if (n >= 840 && n <= 847) return 'America/Denver';          // UT
+    if (n >= 850 && n <= 865) return 'America/Phoenix';         // AZ (no DST)
+    if (n >= 870 && n <= 884) return 'America/Denver';          // NM
+    if (n >= 590 && n <= 599) return 'America/Denver';          // MT
+
+    // Central
+    if (n >= 500 && n <= 528) return 'America/Chicago';         // IA
+    if (n >= 530 && n <= 549) return 'America/Chicago';         // WI
+    if (n >= 550 && n <= 567) return 'America/Chicago';         // MN
+    if (n >= 570 && n <= 577) return 'America/Chicago';         // SD
+    if (n >= 580 && n <= 588) return 'America/Chicago';         // ND
+    if (n >= 600 && n <= 629) return 'America/Chicago';         // IL
+    if (n >= 630 && n <= 658) return 'America/Chicago';         // MO
+    if (n >= 660 && n <= 679) return 'America/Chicago';         // KS
+    if (n >= 680 && n <= 693) return 'America/Chicago';         // NE
+    if (n >= 700 && n <= 714) return 'America/Chicago';         // LA
+    if (n >= 716 && n <= 729) return 'America/Chicago';         // AR
+    if (n >= 730 && n <= 749) return 'America/Chicago';         // OK
+    if (n >= 750 && n <= 799) return 'America/Chicago';         // TX (most; western edge actually Mountain)
+    if (n >= 350 && n <= 369) return 'America/Chicago';         // AL
+    if (n >= 386 && n <= 397) return 'America/Chicago';         // MS
+    if (n >= 370 && n <= 385) return 'America/Chicago';         // TN (most are Central)
+
+    // Eastern
+    if (n >= 1   && n <= 199) return 'America/New_York';        // Northeast (MA/NH/RI/CT/VT/ME/NY/NJ/PA/PR)
+    if (n >= 200 && n <= 268) return 'America/New_York';        // DC/MD/VA/WV
+    if (n >= 270 && n <= 289) return 'America/New_York';        // NC
+    if (n >= 290 && n <= 299) return 'America/New_York';        // SC
+    if (n >= 300 && n <= 319) return 'America/New_York';        // GA
+    if (n >= 320 && n <= 349) return 'America/New_York';        // FL (most; western Panhandle is Central — minority)
+    if (n >= 400 && n <= 427) return 'America/New_York';        // KY (most)
+    if (n >= 430 && n <= 459) return 'America/New_York';        // OH
+    if (n >= 460 && n <= 479) return 'America/Indiana/Indianapolis'; // IN (most observe Eastern)
+    if (n >= 480 && n <= 499) return 'America/Detroit';         // MI
+
+    return null;
+}
+
+// Compute the timezone offset (in minutes east of UTC) that applies to the
+// given UTC instant in the given IANA zone. Used iteratively to convert a
+// wall-clock-in-zone to a UTC epoch (handles DST). Algorithm:
+//   1. Treat (year,month,day,hour,minute) as if it were UTC -> guess epoch.
+//   2. Format that epoch in the target zone and read the offset.
+//   3. Subtract offset to get the true UTC epoch for the wall clock.
+function tzOffsetMinutes(utcEpochMs, timeZone) {
+    // Use the en-US 'longOffset' formatter to read the offset string (e.g.
+    // "GMT-07:00") that applies in the zone at that instant.
+    const fmt = new Intl.DateTimeFormat('en-US', {
+        timeZone,
+        timeZoneName: 'longOffset',
+        hour: 'numeric'
+    });
+    const parts = fmt.formatToParts(new Date(utcEpochMs));
+    const tzPart = parts.find(p => p.type === 'timeZoneName');
+    if (!tzPart) return 0;
+    const m = /GMT([+-])(\d{1,2})(?::(\d{2}))?/.exec(tzPart.value);
+    if (!m) return 0;
+    const sign = m[1] === '-' ? -1 : 1;
+    const h = parseInt(m[2], 10);
+    const mn = parseInt(m[3] || '0', 10);
+    return sign * (h * 60 + mn);
+}
+
+// Convert a wall-clock-in-zone to a UTC epoch ms. DST-safe via two passes:
+// the first pass guesses with the UTC offset of the naive timestamp; the
+// second pass corrects using the offset that actually applies at the guessed
+// instant. One re-correction is enough for any IANA zone.
+function wallClockInZoneToEpoch(year, month, day, hour, minute, timeZone) {
+    const naive = Date.UTC(year, month - 1, day, hour, minute, 0);
+    const off1 = tzOffsetMinutes(naive, timeZone);
+    const guess = naive - off1 * 60 * 1000;
+    const off2 = tzOffsetMinutes(guess, timeZone);
+    return naive - off2 * 60 * 1000;
+}
+
+// Render an ISO-8601 string with the supplied zone's offset, e.g.
+// "2026-06-10T21:30:00-07:00". The wall-clock fields are echoed verbatim.
+function formatIsoWithZone(year, month, day, hour, minute, timeZone, epochMs) {
+    const off = tzOffsetMinutes(epochMs, timeZone);
+    const sign = off >= 0 ? '+' : '-';
+    const absOff = Math.abs(off);
+    const oh = Math.floor(absOff / 60);
+    const om = absOff % 60;
+    const pad = (n, w) => String(n).padStart(w, '0');
+    return `${pad(year, 4)}-${pad(month, 2)}-${pad(day, 2)}T${pad(hour, 2)}:${pad(minute, 2)}:00${sign}${pad(oh, 2)}:${pad(om, 2)}`;
+}
+
+// Validate one structured date piece. Returns { ok, hour24, errors[] } where
+// hour24 is the canonical 0-23 hour computed from hour + optional ampm.
+function validateDatePart(label, part) {
+    const errors = [];
+    if (!part || typeof part !== 'object') {
+        errors.push(`${label}:missing`);
+        return { ok: false, errors };
+    }
+    const { year, month, day, hour, minute, ampm } = part;
+    if (!Number.isInteger(year) || year < 1970 || year > 9999) errors.push(`${label}.year:invalid`);
+    if (!Number.isInteger(month) || month < 1 || month > 12) errors.push(`${label}.month:invalid`);
+    if (!Number.isInteger(day) || day < 1 || day > 31) errors.push(`${label}.day:invalid`);
+    if (!Number.isInteger(minute) || minute < 0 || minute > 59) errors.push(`${label}.minute:invalid`);
+
+    let hour24 = null;
+    if (ampm === undefined || ampm === null || ampm === '') {
+        // 24-hour mode: hour must be 0..23
+        if (!Number.isInteger(hour) || hour < 0 || hour > 23) errors.push(`${label}.hour:invalid`);
+        else hour24 = hour;
+    } else {
+        const ap = String(ampm).trim().toUpperCase();
+        if (ap !== 'AM' && ap !== 'PM') {
+            errors.push(`${label}.ampm:invalid`);
+        } else if (!Number.isInteger(hour) || hour < 1 || hour > 12) {
+            errors.push(`${label}.hour:invalid_for_ampm`);
+        } else {
+            hour24 = (hour % 12) + (ap === 'PM' ? 12 : 0);
+        }
+    }
+
+    // Calendar validity: day-in-month using Date round-trip.
+    if (errors.length === 0) {
+        const d = new Date(Date.UTC(year, month - 1, day));
+        if (d.getUTCFullYear() !== year || d.getUTCMonth() !== month - 1 || d.getUTCDate() !== day) {
+            errors.push(`${label}.day:not_in_month`);
+        }
+    }
+
+    return { ok: errors.length === 0, errors, hour24 };
+}
+
+// New structured resolver. Used by MCP action `resolve_dates` and by
+// share_booking when assembling the marketplace payload.
+async function resolveEventDates(args = {}) {
+    const warnings = [];
+    const errors = [];
+
+    // 1. Reject anything that smuggles timezone in rawText only.
+    let timezone = typeof args.timezone === 'string' ? args.timezone.trim() : '';
+    const zip = typeof args.zip === 'string' ? args.zip.trim() : '';
+    if (!timezone) {
+        // Zip-to-tz lookup is not supported in this phase. The spec explicitly
+        // forbids inventing a zip-to-tz DB.
+        if (zip) {
+            errors.push('timezone:missing_zip_only_derivation_unsupported');
+        } else {
+            errors.push('timezone:missing');
+        }
+    } else if (!isValidIanaTimezone(timezone)) {
+        errors.push('timezone:not_iana');
+    }
+
+    // 2. Validate structured start/end. rawText is informational only.
+    const startV = validateDatePart('start', args.start);
+    const endV   = validateDatePart('end',   args.end);
+    errors.push(...startV.errors, ...endV.errors);
+
+    if (errors.length > 0) {
+        return { ok: false, errors };
+    }
+
+    // 3. Compute epoch ms using IANA-zone wall-clock conversion.
+    const startEpoch = wallClockInZoneToEpoch(
+        args.start.year, args.start.month, args.start.day,
+        startV.hour24, args.start.minute, timezone
+    );
+    const endEpoch = wallClockInZoneToEpoch(
+        args.end.year, args.end.month, args.end.day,
+        endV.hour24, args.end.minute, timezone
+    );
+
+    // 4. Overnight rule: end<=start with a different day field is accepted
+    // as overnight; same-day end<=start is rejected.
+    if (endEpoch <= startEpoch) {
+        const sameDay = args.start.year === args.end.year &&
+                        args.start.month === args.end.month &&
+                        args.start.day === args.end.day;
+        if (sameDay) {
+            return { ok: false, errors: ['end:not_after_start_same_day'] };
+        }
+        warnings.push('overnight_end_before_start');
+        // The structured `day` already encodes the next-day intent; if epochs
+        // still invert, the caller's day is wrong.
+        return { ok: false, errors: ['end:not_after_start_different_day'] };
+    }
+
+    return {
+        ok: true,
+        st: startEpoch,
+        et: endEpoch,
+        startIso: formatIsoWithZone(args.start.year, args.start.month, args.start.day, startV.hour24, args.start.minute, timezone, startEpoch),
+        endIso:   formatIsoWithZone(args.end.year,   args.end.month,   args.end.day,   endV.hour24,   args.end.minute,   timezone, endEpoch),
+        timezone,
+        zip: zip || null,
+        warnings,
+        sourceProof: args.sourceProof || null
+    };
 }
 
 function proofTermsFromText(value) {
@@ -1535,7 +1893,7 @@ async function pipelineNextSource(id, channel, maxAgeDays, sessionId) {
             return createSuccessResponse(id, JSON.stringify({
                 status: 'QUEUE_EMPTY',
                 channel: channel || 'any',
-                hint: 'Run skills/source-discovery.md to grow the queue, then call next_source again.'
+                hint: 'Call pipeline.plan_tasks({mode:"workflow"}) to enqueue a DISCOVER_SOURCES Task, or seed via pipeline.add_sources, then retry.'
             }));
         }
 
@@ -1752,12 +2110,14 @@ async function pipelineImportSources(id) {
  * Delete a record by id and target type.
  *
  * target='booking'  -> deletes one Booking row.
- * target='factlet'  -> deletes one Factlet row and its ClientFactlet links.
- * target='client'   -> deletes the Client row and cascades all attached
- *                     Bookings and ClientFactlet links. Factlets themselves
- *                     are not deleted (broadcast-scoped, may link to others).
+ * target='factlet'  -> deletes one Factlet row. Factlets are standalone in the
+ *                     new architecture (no join table); content/source overlap
+ *                     drives client relevance at scoring time.
+ * target='client'   -> deletes the Client row and its attached Bookings.
+ *                     Factlets are broadcast-scoped and never auto-deleted with
+ *                     a Client; the recycler handles factlet staleness.
  *
- * Returns { deleted: true, target, id, cascadedBookings, cascadedFactlets }.
+ * Returns { deleted: true, target, id, cascadedBookings }.
  * Returns -32602 if target is missing/unknown or the record doesn't exist.
  */
 async function pipelineDelete(id, target, recordId) {
@@ -1786,12 +2146,10 @@ async function pipelineDelete(id, target, recordId) {
             if (!existing) {
                 return createErrorResponse(id, -32602, `delete: no factlet with id "${recordId}".`);
             }
-            // Remove join rows first (in case schema doesn't cascade).
-            const linkResult = await prisma.clientFactlet.deleteMany({ where: { factletId: recordId } });
             await prisma.factlet.delete({ where: { id: recordId } });
             return createSuccessResponse(id, JSON.stringify({
                 deleted: true, target: 'factlet', id: recordId,
-                cascadedBookings: 0, cascadedFactlets: linkResult.count
+                cascadedBookings: 0
             }));
         }
 
@@ -1801,12 +2159,10 @@ async function pipelineDelete(id, target, recordId) {
                 return createErrorResponse(id, -32602, `delete: no client with id "${recordId}".`);
             }
             const bookingResult = await prisma.booking.deleteMany({ where: { clientId: recordId } });
-            const linkResult    = await prisma.clientFactlet.deleteMany({ where: { clientId: recordId } });
             await prisma.client.delete({ where: { id: recordId } });
             return createSuccessResponse(id, JSON.stringify({
                 deleted: true, target: 'client', id: recordId,
-                cascadedBookings: bookingResult.count,
-                cascadedFactlets: linkResult.count
+                cascadedBookings: bookingResult.count
             }));
         }
 
@@ -1875,14 +2231,13 @@ async function pipelineStatus(id) {
     const cfg = await prisma.config.findFirst({ orderBy: { createdAt: 'desc' } });
 
     // Stats (same queries as v1 handleGetStats)
-    const [totalClients, totalFactlets, totalLinkedFactlets, brewing, ready, sent,
+    const [totalClients, totalFactlets, brewing, ready, sent,
            contactGatePass, contactGateFail,
            dossierHigh, dossierMid, dossierLow, dossierNone,
            totalBookings, bookingsBrewing, bookingsOutreachReady, leedReady, taken, shared, bookingsNewLegacy,
            scoreHigh, scoreMid, scoreLow, scoreNone] = await Promise.all([
         prisma.client.count(),
         prisma.factlet.count(),
-        prisma.clientFactlet.count(),
         prisma.client.count({ where: { draftStatus: 'brewing' } }),
         prisma.client.count({ where: { draftStatus: 'ready' } }),
         prisma.client.count({ where: { draftStatus: 'sent' } }),
@@ -1937,7 +2292,7 @@ async function pipelineStatus(id) {
     return createSuccessResponse(id, JSON.stringify({
         config: cfg,
         stats: {
-            totalClients, totalFactlets, totalLinkedFactlets,
+            totalClients, totalFactlets,
             drafts: { brewing, ready, sent },
             contactGate: { pass: contactGatePass, fail: contactGateFail },
             dossierScores: { high: dossierHigh, mid: dossierMid, low: dossierLow, unscored: dossierNone },
@@ -2027,6 +2382,45 @@ async function pipelineConfigure(id, patch) {
     return createSuccessResponse(id, JSON.stringify(cfg, null, 2));
 }
 
+// get_config returns ONE Config field by key. Allowlist-only -- never returns
+// runtime API secrets (llmApiKey, leedzSession). Skills (especially outreach
+// drafting) call this for the mandatory mirror of VALUE_PROP identity rather
+// than paraphrasing from the markdown.
+const GET_CONFIG_ALLOWED_KEYS = Object.freeze([
+    'signature',
+    'companyName',
+    'companyEmail',
+    'businessDescription',
+    'defaultTrade',
+    'leedzEmail',
+    'defaultBookingAction'
+]);
+async function pipelineGetConfig(id, args) {
+    const key = args && typeof args.key === 'string' ? args.key.trim() : '';
+    if (!key) {
+        return createErrorResponse(id, -32602,
+            `get_config requires a "key" string. Allowed keys: ${GET_CONFIG_ALLOWED_KEYS.join(', ')}.`);
+    }
+    if (!GET_CONFIG_ALLOWED_KEYS.includes(key)) {
+        return createErrorResponse(id, -32602,
+            `get_config: unknown or forbidden key "${key}". get_config never returns runtime API secrets. ` +
+            `Allowed keys: ${GET_CONFIG_ALLOWED_KEYS.join(', ')}.`);
+    }
+    const cfg = await prisma.config.findFirst({ orderBy: { createdAt: 'desc' } });
+    if (!cfg) {
+        return createSuccessResponse(id, JSON.stringify({
+            key, value: null, present: false, source: 'no_config_row'
+        }, null, 2));
+    }
+    const value = cfg[key];
+    return createSuccessResponse(id, JSON.stringify({
+        key,
+        value: (value === undefined ? null : value),
+        present: !(value === null || value === undefined || value === ''),
+        source: 'sqlite_config'
+    }, null, 2));
+}
+
 async function pipelineNext(id, entity, criteria, dossierLimit, factletLimit) {
     if (entity === 'booking') {
         return await pipelineNextBooking(id, criteria, dossierLimit, factletLimit);
@@ -2070,13 +2464,9 @@ async function pipelineNextClient(id, criteria, dossierLimit, factletLimit) {
             data: { lastQueueCheck: new Date() }
         });
 
-        // Hydrate: factlets + bookings
-        const factlets = await tx.clientFactlet.findMany({
-            where: { clientId: client.id },
-            include: { factlet: { select: { id: true, content: true, source: true, createdAt: true } } },
-            orderBy: { appliedAt: 'desc' }
-        });
-
+        // Hydrate: relevant live factlets (overlap-based, no join table) + bookings.
+        const staleDays = await getFactletStaleDays();
+        const factlets = await findLiveFactletsForClient(stamped, staleDays);
         const bookings = await tx.booking.findMany({
             where: { clientId: client.id },
             orderBy: { createdAt: 'desc' }
@@ -2106,11 +2496,9 @@ async function pipelineNextBooking(id, criteria, dossierLimit, factletLimit) {
             where: { id: booking.clientId }
         });
 
-        const factlets = client ? await tx.clientFactlet.findMany({
-            where: { clientId: client.id },
-            include: { factlet: { select: { id: true, content: true, source: true, createdAt: true } } },
-            orderBy: { appliedAt: 'desc' }
-        }) : [];
+        // Live Factlets relevant to this Client via overlap (no join table).
+        const staleDays = await getFactletStaleDays();
+        const factlets = client ? await findLiveFactletsForClient(client, staleDays) : [];
 
         return { ...booking, client: { ...client, factlets } };
     });
@@ -2136,7 +2524,7 @@ async function normalizeBookingDatesForSave(sessionId, patch) {
                 failures.push({ kind: 'booking_date', title: b.title || null, reason: 'missing_sourceUrl_for_date_resolution' });
                 continue;
             }
-            const resolved = await resolveEventDates({
+            const resolved = await resolveEventDatesLegacy({
                 text: [rawDateText, b.startTime, b.endTime].filter(Boolean).join(' '),
                 sourceUrl,
                 defaultDurationHours: b.defaultDurationHours ?? b.duration
@@ -2179,7 +2567,10 @@ async function normalizeBookingDatesForSave(sessionId, patch) {
     return failures;
 }
 
-async function pipelineSave(id, clientId, patch, sessionId) {
+async function pipelineSave(id, clientId, patch, sessionId, judge) {
+    // judge defaults to true for legacy callers. New Task-based workers MUST
+    // pass judge:false and let the Planner schedule a JUDGE_AFFECTED Task.
+    if (judge === undefined) judge = true;
     let existing = null;
     let isCreate = false;
 
@@ -2459,23 +2850,16 @@ async function pipelineSave(id, clientId, patch, sessionId) {
             await tx.client.update({ where: { id: clientId }, data: clientData });
         }
 
-        // Create and link factlets
+        // Create factlets only. Factlet is standalone in this architecture;
+        // there is no join table. Client.dossier (timestamped prose) is the
+        // durable per-client record; APPLY_FACTLET workers and JUDGE_AFFECTED
+        // scoring read live Factlet rows directly via content/source overlap.
         if (Array.isArray(patch.factlets)) {
             for (const f of patch.factlets) {
                 const factletSource = f.sourceUrl || f.url || f.source;
                 if (!f.content || !factletSource) continue;
-
-                const factlet = await tx.factlet.create({
+                await tx.factlet.create({
                     data: { content: f.content, source: factletSource }
-                });
-
-                const signalType = f.signalType || 'context';
-                const points = SIGNAL_POINTS[signalType] || 1;
-
-                await tx.clientFactlet.upsert({
-                    where: { clientId_factletId: { clientId, factletId: factlet.id } },
-                    create: { clientId, factletId: factlet.id, signalType, points },
-                    update: { signalType, points }
                 });
             }
         }
@@ -2515,39 +2899,1046 @@ async function pipelineSave(id, clientId, patch, sessionId) {
         }
     });
 
-    // Re-score every booking just saved and write status back.
-    // computeBookingTargetScore is the single source of truth for leed_ready.
+    // Collect affected booking ids for either Judge invocation or Task output.
     const touchedBookings = await prisma.booking.findMany({
         where: { clientId },
-        select: { id: true, status: true }
+        select: { id: true }
     });
-    for (const b of touchedBookings) {
-        // Skip terminal states
-        if (b.status === 'shared' || b.status === 'taken' || b.status === 'expired') continue;
-        const score = await computeBookingTargetScore(b.id);
-        if (score && score.status && score.status !== b.status) {
-            await prisma.booking.update({ where: { id: b.id }, data: { status: score.status } });
-        }
+    const affectedBookingIds = touchedBookings.map(b => b.id);
+    const affectedClientIds  = [clientId];
+
+    let scoreResult = null;
+    let judged      = null;
+
+    if (judge) {
+        // Legacy compatibility path: pipeline.save(judge:true) routes through
+        // the same judgeAffected helper that the new JUDGE_AFFECTED Task uses.
+        // No copied scoring block lives here.
+        const intelOverride = (patch.intelScore !== undefined) ? parseInt(patch.intelScore, 10) : null;
+        judged = await judgeAffected({
+            clientIds:   affectedClientIds,
+            bookingIds:  affectedBookingIds,
+            reason:      'pipeline.save(legacy)',
+            writeStatus: true,
+            intelOverride
+        });
+        scoreResult = judged.clientScore || null;
     }
 
-    // Score after transaction completes (scoring reads back from DB)
-    const intelOverride = (patch.intelScore !== undefined) ? parseInt(patch.intelScore, 10) : null;
-    const scoreResult = await computeClientScore(clientId, intelOverride);
-
-    // Log success against the session, if one was provided. The payload is
-    // what report_session will surface verbatim — keep it terse and truthful.
     await logSessionEvent(sessionId, 'save_success', {
         clientId,
         name: existing?.name || patch.name || null,
         isCreate,
-        score: typeof scoreResult === 'number' ? scoreResult : (scoreResult?.total ?? null)
+        score: typeof scoreResult === 'number' ? scoreResult : (scoreResult?.total ?? null),
+        judged: !!judge
     });
 
     return createSuccessResponse(id, JSON.stringify({
         saved: true,
         clientId,
         score: scoreResult,
+        judged: !!judge,
+        affectedClientIds,
+        affectedBookingIds,
         session_id: sessionId || null
+    }, null, 2));
+}
+
+// ============================================================================
+// JUDGE -- the single scoring implementation
+// ============================================================================
+// One scoring helper, called from two places:
+//   - legacy: pipeline.save(judge:true)
+//   - new   : JUDGE_AFFECTED Task / pipeline.judge_affected
+// computeBookingTargetScore() remains the marketplace/outreach authority.
+// ============================================================================
+
+async function judgeAffected({ clientIds, bookingIds, reason, writeStatus, intelOverride }) {
+    if (writeStatus === undefined) writeStatus = true;
+
+    const bookingIdSet = new Set(Array.isArray(bookingIds) ? bookingIds.filter(Boolean) : []);
+    if (Array.isArray(clientIds) && clientIds.length > 0) {
+        const rows = await prisma.booking.findMany({
+            where: { clientId: { in: clientIds.filter(Boolean) } },
+            select: { id: true }
+        });
+        for (const r of rows) bookingIdSet.add(r.id);
+    }
+
+    const bookings = await prisma.booking.findMany({
+        where: { id: { in: Array.from(bookingIdSet) } },
+        select: { id: true, status: true, clientId: true }
+    });
+
+    const changed = [];
+    const errors  = [];
+    for (const b of bookings) {
+        if (b.status === 'shared' || b.status === 'taken' || b.status === 'expired') continue;
+        try {
+            const score = await computeBookingTargetScore(b.id);
+            if (!score || !score.status) continue;
+            if (score.status !== b.status) {
+                if (writeStatus) {
+                    await prisma.booking.update({ where: { id: b.id }, data: { status: score.status } });
+                }
+                changed.push({ bookingId: b.id, from: b.status, to: score.status });
+            }
+        } catch (e) {
+            errors.push({ bookingId: b.id, error: e.message });
+        }
+    }
+
+    // Re-score clients last so dossier/client score reflects post-judge state.
+    const clientScores = [];
+    let lastScore = null;
+    const uniqueClientIds = Array.from(new Set((clientIds || []).filter(Boolean)));
+    for (const cid of uniqueClientIds) {
+        try {
+            const s = await computeClientScore(cid, intelOverride == null ? null : intelOverride);
+            clientScores.push({ clientId: cid, score: s });
+            lastScore = s;
+        } catch (e) {
+            errors.push({ clientId: cid, error: e.message });
+        }
+    }
+
+    return {
+        reason: reason || null,
+        affectedBookingIds: Array.from(bookingIdSet),
+        affectedClientIds:  uniqueClientIds,
+        changed,
+        clientScores,
+        clientScore: lastScore,
+        errors,
+        wroteStatus: !!writeStatus
+    };
+}
+
+async function pipelineJudgeAffected(id, args) {
+    const clientIds  = Array.isArray(args.clientIds)  ? args.clientIds  : [];
+    const bookingIds = Array.isArray(args.bookingIds) ? args.bookingIds : [];
+    if (clientIds.length === 0 && bookingIds.length === 0) {
+        return createErrorResponse(id, -32602, 'judge_affected requires clientIds[] or bookingIds[].');
+    }
+    const result = await judgeAffected({
+        clientIds,
+        bookingIds,
+        reason:      args.reason || 'judge_affected',
+        writeStatus: args.writeStatus !== false
+    });
+    await logSessionEvent(args.session_id || null, 'judge_affected', {
+        changed: result.changed.length,
+        clientIds: result.affectedClientIds,
+        bookingIds: result.affectedBookingIds
+    });
+    return createSuccessResponse(id, JSON.stringify(result, null, 2));
+}
+
+// ============================================================================
+// SHARE BOOKING -- the only sanctioned marketplace posting path (Phase 5)
+// ============================================================================
+// share_booking is the ONLY normal way to push a Booking to the Leedz
+// marketplace. The LLM is not allowed to supply st/et. The MCP loads the
+// Booking, rescores via Judge, demands status==leed_ready, then resolves
+// dates from the Booking's structured provenance via the structured
+// resolveEventDates() above. mode:"draft" returns the payload; mode:"post"
+// posts to Leedz and persists leedId/sharedAt/status.
+// ============================================================================
+
+const LEEDZ_REMOTE_URL = 'https://jjz8op6uy4.execute-api.us-west-2.amazonaws.com/Leedz_Stage_1/mcp';
+
+// Extract structured date pieces from a Booking row. Returns:
+//   { ok:true, start, end, timezone, zip } when all required provenance is
+//   present, or { ok:false, missing:[fieldName,...] } otherwise.
+// The Booking schema (see schema.prisma) currently carries startDate/endDate
+// (ISO datetimes), startTime/endTime, and zip. Timezone is not yet a column,
+// so it must come from a Config-level default or eventually a Booking column.
+// Until a dedicated column exists, callers may pass `timezone` directly on
+// the share_booking action OR set Config.leedzDefaultTimezone (future). For
+// this phase, we accept Booking.startDate + Booking.endDate as ISO strings
+// (already epoch-clean) and treat their wall-clock fields as the structured
+// pieces. A timezone must still be supplied explicitly via the action arg
+// `timezone` -- we do NOT guess from a stored ISO offset.
+function bookingToStructuredDates(booking, fallbackTimezone) {
+    const missing = [];
+    if (!booking.startDate) missing.push('booking.startDate');
+    if (!booking.endDate)   missing.push('booking.endDate');
+    if (!fallbackTimezone)  missing.push('timezone');
+    if (missing.length > 0) return { ok: false, missing };
+
+    const s = new Date(booking.startDate);
+    const e = new Date(booking.endDate);
+    if (isNaN(s.getTime()) || isNaN(e.getTime())) {
+        return { ok: false, missing: ['booking.startDate_or_endDate:not_a_date'] };
+    }
+
+    // Booking rows store the wall-clock-as-UTC convention written by the
+    // legacy save path (leedzWallClockEpoch = Date.UTC). Read those UTC
+    // components back as if they were wall-clock in the supplied timezone.
+    const part = (d) => ({
+        year:   d.getUTCFullYear(),
+        month:  d.getUTCMonth() + 1,
+        day:    d.getUTCDate(),
+        hour:   d.getUTCHours(),
+        minute: d.getUTCMinutes()
+    });
+    return {
+        ok: true,
+        start: part(s),
+        end:   part(e),
+        timezone: fallbackTimezone,
+        zip: booking.zip || null
+    };
+}
+
+async function pipelineShareBooking(id, args) {
+    // 1. Forbid LLM-supplied epochs by name.
+    if (args.st !== undefined) {
+        return createErrorResponse(id, -32602,
+            'share_booking: forbidden input "st". The LLM is not allowed to supply marketplace epoch ms. ' +
+            'Provide structured start/end fields and let MCP compute st/et.');
+    }
+    if (args.et !== undefined) {
+        return createErrorResponse(id, -32602,
+            'share_booking: forbidden input "et". The LLM is not allowed to supply marketplace epoch ms. ' +
+            'Provide structured start/end fields and let MCP compute st/et.');
+    }
+
+    const bookingId = args.bookingId;
+    const mode      = args.mode;
+    if (!bookingId) return createErrorResponse(id, -32602, 'share_booking: bookingId required.');
+    if (mode !== 'draft' && mode !== 'post') {
+        return createErrorResponse(id, -32602, 'share_booking: mode must be "draft" or "post".');
+    }
+
+    // 2. Load booking + client.
+    const booking = await prisma.booking.findUnique({ where: { id: bookingId } });
+    if (!booking) {
+        return createErrorResponse(id, -32602, `share_booking: bookingId not found: ${bookingId}`);
+    }
+    const client = await prisma.client.findUnique({ where: { id: booking.clientId } });
+    if (!client) {
+        return createErrorResponse(id, -32603, `share_booking: client not found for booking ${bookingId}`);
+    }
+
+    // 3. Rescore via the canonical Judge before publishing.
+    const judged = await judgeAffected({
+        clientIds:   [client.id],
+        bookingIds:  [booking.id],
+        reason:      'share_booking',
+        writeStatus: true
+    });
+    const fresh = await prisma.booking.findUnique({ where: { id: bookingId } });
+
+    if (fresh.status !== 'leed_ready') {
+        return createSuccessResponse(id, JSON.stringify({
+            mode,
+            posted: false,
+            error: 'booking_not_leed_ready',
+            currentStatus: fresh.status,
+            judgedStatus: fresh.status,
+            judgedChanged: judged.changed
+        }, null, 2));
+    }
+
+    // 4. Derive timezone from Booking.zip. No user-supplied timezone path.
+    //    Booking.zip is mandatory for marketplace sharing; if missing or unmappable
+    //    we refuse to post with a clear non-posting response.
+    const cfg = await prisma.config.findFirst();
+    if (!fresh.zip || !String(fresh.zip).trim()) {
+        return createSuccessResponse(id, JSON.stringify({
+            mode,
+            posted: false,
+            error: 'missing_location_timezone',
+            missing: ['booking.zip'],
+            hint: 'Booking must carry a 5-digit US zip before sharing. Enrich the Booking with location data and retry.'
+        }, null, 2));
+    }
+    const tz = zipToTimezone(fresh.zip);
+    if (!tz) {
+        return createSuccessResponse(id, JSON.stringify({
+            mode,
+            posted: false,
+            error: 'unresolved_location_timezone',
+            zip: String(fresh.zip),
+            hint: 'zipToTimezone() did not recognize this zip. Check the zip is a valid 5-digit US code. Non-US zips are not yet supported.'
+        }, null, 2));
+    }
+    const provenance = bookingToStructuredDates(fresh, tz);
+    if (!provenance.ok) {
+        return createSuccessResponse(id, JSON.stringify({
+            mode,
+            posted: false,
+            error: 'missing_date_provenance',
+            missing: provenance.missing,
+            hint: 'Booking must carry startDate and endDate before sharing. Timezone is derived from Booking.zip.'
+        }, null, 2));
+    }
+
+    const resolved = await resolveEventDates({
+        start:    provenance.start,
+        end:      provenance.end,
+        timezone: provenance.timezone,
+        zip:      provenance.zip
+    });
+    if (!resolved.ok) {
+        return createSuccessResponse(id, JSON.stringify({
+            mode,
+            posted: false,
+            error: 'resolve_dates_failed',
+            resolveErrors: resolved.errors
+        }, null, 2));
+    }
+
+    // 5. Build marketplace payload server-side. Mirrors the leed-drafter
+    // contract: tn, ti, lc, dt, rq, st, et, zp, cn, em, ph, pr, sh.
+    const payload = {
+        tn: fresh.trade || '',
+        ti: fresh.title || '',
+        lc: fresh.location || '',
+        dt: fresh.description || fresh.notes || '',
+        rq: fresh.notes || '',
+        st: resolved.st,
+        et: resolved.et,
+        zp: fresh.zip || '',
+        cn: client.name || '',
+        em: client.email || '',
+        ph: client.phone || '',
+        pr: 0,
+        sh: '*'
+    };
+
+    const humanReadable = {
+        startDisplay: resolved.startIso,
+        endDisplay:   resolved.endIso,
+        timezone:     resolved.timezone
+    };
+
+    if (mode === 'draft') {
+        return createSuccessResponse(id, JSON.stringify({
+            mode: 'draft',
+            bookingId:    fresh.id,
+            clientId:     client.id,
+            judgedStatus: fresh.status,
+            payload,
+            humanReadable
+        }, null, 2));
+    }
+
+    // mode === 'post': actually call the Leedz marketplace endpoint.
+    if (!cfg?.leedzSession) {
+        return createSuccessResponse(id, JSON.stringify({
+            mode: 'post',
+            posted: false,
+            error: 'leedz_not_configured',
+            hint: 'Config.leedzSession is empty. Run configure to set it before sharing.'
+        }, null, 2));
+    }
+
+    let leedzId = null;
+    let postError = null;
+    try {
+        const envelope = {
+            jsonrpc: '2.0',
+            id: 1,
+            method: 'tools/call',
+            params: {
+                name: 'createLeed',
+                arguments: { ...payload, cr: 'theleedz.com@gmail.com', email: 'false', session: cfg.leedzSession }
+            }
+        };
+        const res = await fetch(LEEDZ_REMOTE_URL, {
+            method: 'POST',
+            headers: { 'content-type': 'application/json' },
+            body: JSON.stringify(envelope)
+        });
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        const body = await res.json();
+        const txt = body?.result?.content?.[0]?.text;
+        try { leedzId = JSON.parse(txt)?.leedId || JSON.parse(txt)?.id || null; } catch (_) { leedzId = null; }
+    } catch (e) {
+        postError = String(e.message || e);
+    }
+
+    if (postError) {
+        return createSuccessResponse(id, JSON.stringify({
+            mode: 'post',
+            posted: false,
+            error: postError,
+            payload,
+            humanReadable
+        }, null, 2));
+    }
+
+    await prisma.booking.update({
+        where: { id: fresh.id },
+        data: {
+            shared:   true,
+            sharedTo: 'leedz_api',
+            sharedAt: BigInt(Date.now()),
+            leedId:   leedzId,
+            status:   'shared'
+        }
+    });
+
+    return createSuccessResponse(id, JSON.stringify({
+        mode: 'post',
+        posted: true,
+        leedzId,
+        bookingId: fresh.id,
+        clientId:  client.id,
+        payload,
+        humanReadable
+    }, null, 2));
+}
+
+// ============================================================================
+// TASK PLANNER -- procedural state machine for the new architecture
+// ============================================================================
+
+// Per-Task-type planner limits. Hardcoded defaults preserved as fallback;
+// precrime_config.json taskLimits overrides on a per-key basis (Subproject 10).
+const _TASK_TYPE_LIMITS_DEFAULT = {
+    DISCOVER_SOURCES: 1,
+    SCRAPE_SOURCE:    5,
+    APPLY_FACTLET:    5,
+    ENRICH_CLIENT:    10,
+    JUDGE_AFFECTED:   5,
+    SHOW_HOT_LEEDZ:   1,
+    SHARE_BOOKING:    3
+};
+const _CFG_TASK_LIMITS = (PRECRIME_CONFIG && PRECRIME_CONFIG.tasks && PRECRIME_CONFIG.tasks.limits) || {};
+const TASK_TYPE_LIMITS = Object.assign({}, _TASK_TYPE_LIMITS_DEFAULT, _CFG_TASK_LIMITS);
+
+// Session budgets: maximum TOTAL Tasks of each type that one Session may
+// create across the whole run (any status counts -- not just open). Distinct
+// from TASK_TYPE_LIMITS, which is a concurrency cap on ready+claimed Tasks.
+// Budget-exhausted inputs (Sources, Clients, Factlets, Bookings) stay in
+// SQLite for the next Session; nothing is deleted.
+const _TASK_SESSION_BUDGETS_DEFAULT = {
+    DISCOVER_SOURCES: 1,
+    SCRAPE_SOURCE:    25,
+    APPLY_FACTLET:    50,
+    ENRICH_CLIENT:    50,
+    JUDGE_AFFECTED:   50,
+    SHOW_HOT_LEEDZ:   1,
+    SHARE_BOOKING:    10
+};
+const _CFG_SESSION_BUDGETS = (PRECRIME_CONFIG && PRECRIME_CONFIG.tasks && PRECRIME_CONFIG.tasks.sessionBudgets) || {};
+const TASK_SESSION_BUDGETS = Object.assign({}, _TASK_SESSION_BUDGETS_DEFAULT, _CFG_SESSION_BUDGETS);
+
+const TASK_TYPES = new Set(Object.keys(_TASK_TYPE_LIMITS_DEFAULT));
+const _CFG_CLAIM_TIMEOUT = PRECRIME_CONFIG && PRECRIME_CONFIG.recycler && PRECRIME_CONFIG.recycler.claimTimeoutMinutes;
+const CLAIM_TIMEOUT_MINUTES = Number.isFinite(_CFG_CLAIM_TIMEOUT) ? _CFG_CLAIM_TIMEOUT : 10;
+
+function taskRowToPacket(row) {
+    if (!row) return null;
+    return {
+        id:         row.id,
+        type:       row.type,
+        status:     row.status,
+        sessionId:  row.sessionId,
+        targetType: row.targetType,
+        targetId:   row.targetId,
+        input:      row.input ? safeJsonParse(row.input) : null,
+        output:     row.output ? safeJsonParse(row.output) : null,
+        error:      row.error,
+        claimedAt:  row.claimedAt,
+        claimedBy:  row.claimedBy,
+        createdAt:  row.createdAt,
+        updatedAt:  row.updatedAt,
+        finishedAt: row.finishedAt
+    };
+}
+
+function safeJsonParse(s) {
+    try { return JSON.parse(s); } catch { return null; }
+}
+
+// Normalize affected-id keys from a Task output blob. Canonical keys are
+// `clientIds` and `bookingIds` (matches Phase 3 worker skills and design doc).
+// Legacy keys `affectedClientIds` and `affectedBookingIds` are still accepted
+// so older completed Tasks keep triggering JUDGE_AFFECTED. Returns deduped
+// arrays; non-array / missing values are treated as empty.
+function extractAffectedIds(out) {
+    const pick = (...arrs) => {
+        const seen = new Set();
+        const result = [];
+        for (const a of arrs) {
+            if (!Array.isArray(a)) continue;
+            for (const v of a) {
+                if (v == null) continue;
+                if (seen.has(v)) continue;
+                seen.add(v);
+                result.push(v);
+            }
+        }
+        return result;
+    };
+    if (!out || typeof out !== 'object') return { clientIds: [], bookingIds: [] };
+    return {
+        clientIds:  pick(out.clientIds,  out.affectedClientIds),
+        bookingIds: pick(out.bookingIds, out.affectedBookingIds)
+    };
+}
+
+async function reclaimStaleTasks() {
+    // claimed Tasks older than the timeout become ready again.
+    const cutoff = new Date(Date.now() - CLAIM_TIMEOUT_MINUTES * 60 * 1000);
+    const stale = await prisma.task.findMany({
+        where: { status: 'claimed', claimedAt: { lt: cutoff } },
+        select: { id: true }
+    });
+    if (stale.length === 0) return 0;
+    await prisma.task.updateMany({
+        where: { id: { in: stale.map(t => t.id) } },
+        data: { status: 'ready', claimedAt: null, claimedBy: null }
+    });
+    return stale.length;
+}
+
+// Ensure a Planner Session exists for this run. If session_id was passed and is
+// still active, reuse it. Otherwise reuse the most recent active Session whose
+// workflow matches this planner mode, or open a new one. The Planner is now the
+// authoritative source of session lifecycle for Task-based runs; the older
+// start_session / report_session path remains for legacy callers.
+async function ensurePlannerSession(mode, providedSessionId) {
+    if (providedSessionId) {
+        const s = await prisma.session.findUnique({ where: { id: providedSessionId } });
+        if (!s) {
+            const err = new Error(`plan_tasks: session_id "${providedSessionId}" not found`);
+            err.code = -32602;
+            throw err;
+        }
+        if (s.status !== 'active') {
+            const err = new Error(`plan_tasks: session "${providedSessionId}" is ${s.status}, not active`);
+            err.code = -32602;
+            throw err;
+        }
+        return s;
+    }
+    const active = await prisma.session.findFirst({
+        where: { status: 'active', workflow: mode },
+        orderBy: { startedAt: 'desc' }
+    });
+    if (active) return active;
+    const sid = 'ses_' + Math.random().toString(36).slice(2, 10) + Date.now().toString(36);
+    return await prisma.session.create({
+        data: { id: sid, workflow: mode, status: 'active', startedAt: new Date() }
+    });
+}
+
+async function pipelinePlanTasks(id, args) {
+    const mode = args.mode || 'workflow';     // 'workflow' | 'hot_only' | 'headless'
+
+    // Planner owns Session lifecycle. Reuse or open as needed.
+    let session;
+    try {
+        session = await ensurePlannerSession(mode, args.session_id || null);
+    } catch (e) {
+        return createErrorResponse(id, e.code || -32603, e.message || String(e));
+    }
+    const sessionId = session.id;
+
+    // Recycle stale claims before planning so limits reflect true ready state.
+    const reclaimed = await reclaimStaleTasks();
+
+    const counts = {};
+    const created = [];
+
+    // Total Tasks of each type already created in THIS Session (any status).
+    // Drives the session-budget gate. Refreshed once at planning start; the
+    // budget-aware createTask increments it in-memory as we go.
+    const sessionCreatedSoFar = {};
+    const _grouped = await prisma.task.groupBy({
+        by: ['type'],
+        where: { sessionId },
+        _count: { _all: true }
+    });
+    for (const g of _grouped) sessionCreatedSoFar[g.type] = g._count._all;
+
+    async function countReady(type) {
+        return prisma.task.count({ where: { type, status: { in: ['ready', 'claimed'] } } });
+    }
+
+    // How many more Tasks of `type` may be created RIGHT NOW, gated by BOTH
+    // tasks.limits (concurrency cap on open Tasks) AND tasks.sessionBudgets
+    // (total-creation cap for this Session). Returns the effective max plus
+    // diagnostics for inclusion in the response.
+    async function createBudget(type) {
+        const lim = TASK_TYPE_LIMITS[type] ?? 0;
+        const bud = TASK_SESSION_BUDGETS[type] ?? 0;
+        const openHave = await countReady(type);
+        const sessHave = sessionCreatedSoFar[type] || 0;
+        const limRem = Math.max(0, lim - openHave);
+        const budRem = Math.max(0, bud - sessHave);
+        return { eff: Math.min(limRem, budRem), limRem, budRem, openHave, sessHave, limit: lim, budget: bud };
+    }
+
+    // Budget-aware Task creator. Refuses (returns null) when either the open
+    // limit or the session budget for `type` is reached. The per-section loops
+    // also call createBudget(type) to size their candidate windows, so this
+    // double-check is a safety net.
+    async function createTask(type, fields) {
+        const ck = await createBudget(type);
+        if (ck.eff <= 0) return null;
+        const row = await prisma.task.create({
+            data: {
+                type,
+                status:     'ready',
+                sessionId:  sessionId,
+                targetType: fields.targetType || 'none',
+                targetId:   fields.targetId   || null,
+                input:      fields.input ? JSON.stringify(fields.input) : null
+            }
+        });
+        created.push({ id: row.id, type, targetType: row.targetType, targetId: row.targetId });
+        counts[type] = (counts[type] || 0) + 1;
+        sessionCreatedSoFar[type] = (sessionCreatedSoFar[type] || 0) + 1;
+        return row;
+    }
+
+    if (mode === 'hot_only' || args.objective === 'SHOW_HOT_LEEDZ') {
+        const ck = await createBudget('SHOW_HOT_LEEDZ');
+        const hotExists = await prisma.booking.count({
+            where: { status: { in: ['leed_ready', 'outreach_ready'] } }
+        });
+        let explanation;
+        if (hotExists === 0) {
+            explanation = 'Hot-only mode: no leed_ready / outreach_ready bookings -- nothing to present.';
+        } else if (ck.eff <= 0 && ck.budRem === 0) {
+            explanation = 'Hot-only mode: SHOW_HOT_LEEDZ session budget exhausted.';
+        } else if (ck.eff <= 0) {
+            explanation = 'Hot-only mode: SHOW_HOT_LEEDZ task already pending (limit).';
+        } else {
+            await createTask('SHOW_HOT_LEEDZ', { targetType: 'none' });
+            explanation = `Hot-only mode: scheduled SHOW_HOT_LEEDZ for ${hotExists} hot booking(s).`;
+        }
+        const sum = computeBudgetSummary(sessionCreatedSoFar);
+        const closed = await maybeCloseSession();
+        return createSuccessResponse(id, JSON.stringify({
+            mode, session_id: sessionId, reclaimed, counts, created,
+            hotBookingCount: hotExists,
+            limits: TASK_TYPE_LIMITS,
+            sessionBudgets: TASK_SESSION_BUDGETS,
+            budgetUsage:    sum.budgetUsage,
+            budgetExhausted: sum.budgetExhausted,
+            sessionClosed:  closed.sessionClosed,
+            closeReason:    closed.closeReason,
+            explanation
+        }, null, 2));
+    }
+
+    // Headless: schedule SHARE_BOOKING for unshared leed_ready first.
+    if (mode === 'headless') {
+        const ck = await createBudget('SHARE_BOOKING');
+        if (ck.eff > 0) {
+            const candidates = await prisma.booking.findMany({
+                where: { status: 'leed_ready', shared: false },
+                select: { id: true },
+                take: ck.eff
+            });
+            for (const b of candidates) {
+                await createTask('SHARE_BOOKING', { targetType: 'Booking', targetId: b.id });
+            }
+        }
+    }
+
+    // Workflow planning (also runs for headless after share scheduling):
+    // 1. DISCOVER_SOURCES (Session-bounded -- session budget defaults to 1)
+    if (mode === 'workflow' || mode === 'headless') {
+        const ckDisc = await createBudget('DISCOVER_SOURCES');
+        if (ckDisc.eff > 0) {
+            await createTask('DISCOVER_SOURCES', { targetType: 'none' });
+        }
+
+        // 2. SCRAPE_SOURCE for claimable Sources
+        const ckScrape = await createBudget('SCRAPE_SOURCE');
+        if (ckScrape.eff > 0) {
+            // Avoid double-planning the same Source: skip ones already targeted by ready/claimed Tasks.
+            const planned = await prisma.task.findMany({
+                where: { type: 'SCRAPE_SOURCE', status: { in: ['ready', 'claimed'] }, targetType: 'Source' },
+                select: { targetId: true }
+            });
+            const skipIds = new Set(planned.map(p => p.targetId).filter(Boolean));
+            const sources = await prisma.source.findMany({
+                where: { scrapedAt: null, claimedAt: null },
+                orderBy: { discoveredAt: 'asc' },
+                take: ckScrape.eff + skipIds.size
+            });
+            let made = 0;
+            for (const s of sources) {
+                if (made >= ckScrape.eff) break;
+                if (skipIds.has(s.id)) continue;
+                const row = await createTask('SCRAPE_SOURCE', {
+                    targetType: 'Source',
+                    targetId:   s.id,
+                    input: { url: s.url, channel: s.channel }
+                });
+                if (!row) break;   // budget hit mid-loop
+                made++;
+            }
+        }
+
+        // 3. APPLY_FACTLET -- newest Factlets that lack an open Task.
+        const ckApply = await createBudget('APPLY_FACTLET');
+        if (ckApply.eff > 0) {
+            const plannedF = await prisma.task.findMany({
+                where: { type: 'APPLY_FACTLET', status: { in: ['ready', 'claimed'] }, targetType: 'Factlet' },
+                select: { targetId: true }
+            });
+            const skipF = new Set(plannedF.map(p => p.targetId).filter(Boolean));
+            const factlets = await prisma.factlet.findMany({
+                orderBy: { createdAt: 'desc' },
+                take: ckApply.eff + skipF.size,
+                select: { id: true }
+            });
+            let made = 0;
+            for (const f of factlets) {
+                if (made >= ckApply.eff) break;
+                if (skipF.has(f.id)) continue;
+                const row = await createTask('APPLY_FACTLET', { targetType: 'Factlet', targetId: f.id });
+                if (!row) break;
+                made++;
+            }
+        }
+
+        // 4. ENRICH_CLIENT for stale/thin Clients
+        const ckEnrich = await createBudget('ENRICH_CLIENT');
+        if (ckEnrich.eff > 0) {
+            const plannedE = await prisma.task.findMany({
+                where: { type: 'ENRICH_CLIENT', status: { in: ['ready', 'claimed'] }, targetType: 'Client' },
+                select: { targetId: true }
+            });
+            const skipE = new Set(plannedE.map(p => p.targetId).filter(Boolean));
+            // Stale = lastEnriched null OR oldest. Thin = no email.
+            const clients = await prisma.client.findMany({
+                orderBy: [{ lastEnriched: 'asc' }],
+                take: ckEnrich.eff + skipE.size,
+                select: { id: true }
+            });
+            let made = 0;
+            for (const c of clients) {
+                if (made >= ckEnrich.eff) break;
+                if (skipE.has(c.id)) continue;
+                const row = await createTask('ENRICH_CLIENT', { targetType: 'Client', targetId: c.id });
+                if (!row) break;
+                made++;
+            }
+        }
+
+        // 5. JUDGE_AFFECTED for done Tasks whose output reports affected ids
+        //    but have not yet been judged. We mark them judged via output.judgedAt.
+        const ckJudge = await createBudget('JUDGE_AFFECTED');
+        if (ckJudge.eff > 0) {
+            const doneTasks = await prisma.task.findMany({
+                where: {
+                    status: 'done',
+                    type:   { in: ['SCRAPE_SOURCE', 'ENRICH_CLIENT', 'APPLY_FACTLET'] }
+                },
+                orderBy: { finishedAt: 'desc' },
+                take: 50
+            });
+            let made = 0;
+            for (const t of doneTasks) {
+                if (made >= ckJudge.eff) break;
+                const out = t.output ? safeJsonParse(t.output) : null;
+                if (!out || out.judgedAt) continue;
+                const { clientIds: cIds, bookingIds: bIds } = extractAffectedIds(out);
+                if (cIds.length === 0 && bIds.length === 0) continue;
+                const row = await createTask('JUDGE_AFFECTED', {
+                    targetType: 'none',
+                    input: { sourceTaskId: t.id, clientIds: cIds, bookingIds: bIds }
+                });
+                if (!row) break;
+                made++;
+            }
+        }
+
+        // 6. SHOW_HOT_LEEDZ if judged hot items exist
+        const hotExists = await prisma.booking.count({
+            where: { status: { in: ['leed_ready', 'outreach_ready'] } }
+        });
+        if (hotExists > 0) {
+            const ckHot = await createBudget('SHOW_HOT_LEEDZ');
+            if (ckHot.eff > 0) {
+                await createTask('SHOW_HOT_LEEDZ', { targetType: 'none' });
+            }
+        }
+    }
+
+    const sum = computeBudgetSummary(sessionCreatedSoFar);
+    const closed = await maybeCloseSession();
+
+    const explanationParts = [
+        `Planned ${created.length} task(s) in session ${sessionId}`,
+        `${reclaimed} stale claim(s) recycled`
+    ];
+    if (sum.budgetExhausted.length > 0) {
+        explanationParts.push(`budget exhausted for: ${sum.budgetExhausted.join(', ')}`);
+    }
+    if (closed.sessionClosed) {
+        explanationParts.push(`session closed (${closed.closeReason})`);
+    }
+
+    return createSuccessResponse(id, JSON.stringify({
+        mode,
+        session_id:     sessionId,
+        reclaimed,
+        counts,
+        created,
+        limits:         TASK_TYPE_LIMITS,
+        sessionBudgets: TASK_SESSION_BUDGETS,
+        budgetUsage:    sum.budgetUsage,
+        budgetExhausted: sum.budgetExhausted,
+        sessionClosed:  closed.sessionClosed,
+        closeReason:    closed.closeReason,
+        explanation:    explanationParts.join('; ') + '.'
+    }, null, 2));
+
+    // ---------------- helpers (closures over sessionId / sessionCreatedSoFar) ----------------
+    function computeBudgetSummary(_unused) {
+        const budgetUsage = {};
+        const budgetExhausted = [];
+        for (const type of Object.keys(TASK_SESSION_BUDGETS)) {
+            const used      = sessionCreatedSoFar[type] || 0;
+            const budget    = TASK_SESSION_BUDGETS[type];
+            const remaining = Math.max(0, budget - used);
+            budgetUsage[type] = { used, budget, remaining };
+            if (budget > 0 && remaining === 0) budgetExhausted.push(type);
+        }
+        return { budgetUsage, budgetExhausted };
+    }
+
+    async function maybeCloseSession() {
+        // Deterministic close: this plan call created zero new Tasks AND no
+        // open (ready/claimed) Task remains for this Session.
+        if (created.length > 0) return { sessionClosed: false, closeReason: null };
+        const openInSession = await prisma.task.count({
+            where: { sessionId, status: { in: ['ready', 'claimed'] } }
+        });
+        if (openInSession > 0) return { sessionClosed: false, closeReason: null };
+        await prisma.session.update({
+            where: { id: sessionId },
+            data:  { status: 'complete', finishedAt: new Date() }
+        });
+        await prisma.sessionEvent.create({
+            data: {
+                sessionId,
+                action:  'session_closed',
+                payload: JSON.stringify({
+                    by: 'planner',
+                    budgetUsage: computeBudgetSummary().budgetUsage
+                })
+            }
+        }).catch(() => {});
+        const reason = (TASK_TYPES.size > 0 &&
+                        computeBudgetSummary().budgetExhausted.length > 0)
+            ? 'budgets_exhausted_no_open_tasks'
+            : 'no_new_tasks_no_open_tasks';
+        return { sessionClosed: true, closeReason: reason };
+    }
+}
+
+async function pipelineClaimTask(id, args) {
+    const role      = args.role || 'worker';
+    const sessionId = args.session_id || null;
+    const types     = Array.isArray(args.types) ? args.types.filter(t => TASK_TYPES.has(t)) : null;
+
+    // Recycle stale claims before claiming.
+    await reclaimStaleTasks();
+
+    // Atomic claim: SELECT + UPDATE in a transaction, retry on lost race.
+    for (let attempt = 0; attempt < 5; attempt++) {
+        const where = { status: 'ready' };
+        if (types && types.length > 0) where.type = { in: types };
+        const candidate = await prisma.task.findFirst({
+            where,
+            orderBy: [{ createdAt: 'asc' }]
+        });
+        if (!candidate) {
+            return createSuccessResponse(id, JSON.stringify({ status: 'NO_TASK' }, null, 2));
+        }
+        // updateMany with the previous status acts as a compare-and-swap.
+        const upd = await prisma.task.updateMany({
+            where: { id: candidate.id, status: 'ready' },
+            data: {
+                status:    'claimed',
+                claimedAt: new Date(),
+                claimedBy: role,
+                sessionId: candidate.sessionId || sessionId
+            }
+        });
+        if (upd.count === 1) {
+            const row = await prisma.task.findUnique({ where: { id: candidate.id } });
+            return createSuccessResponse(id, JSON.stringify({
+                status: 'CLAIMED',
+                task:   taskRowToPacket(row)
+            }, null, 2));
+        }
+        // lost race; loop
+    }
+    return createSuccessResponse(id, JSON.stringify({ status: 'CONTENTION' }, null, 2));
+}
+
+async function pipelineCompleteTask(id, args) {
+    const taskId = args.taskId || args.id;
+    const status = args.status || 'done';
+    if (!taskId) return createErrorResponse(id, -32602, 'complete_task requires taskId.');
+    if (!['done', 'failed', 'cancelled'].includes(status)) {
+        return createErrorResponse(id, -32602, `complete_task status must be done|failed|cancelled (got "${status}").`);
+    }
+    const row = await prisma.task.findUnique({ where: { id: taskId } });
+    if (!row) return createErrorResponse(id, -32602, `Task not found: ${taskId}`);
+    if (row.status === 'done' || row.status === 'failed' || row.status === 'cancelled') {
+        return createErrorResponse(id, -32602, `Task ${taskId} already terminal (${row.status}).`);
+    }
+    const output = args.output != null ? JSON.stringify(args.output) : row.output;
+    const error  = args.error != null ? String(args.error) : row.error;
+    const updated = await prisma.task.update({
+        where: { id: taskId },
+        data: {
+            status,
+            output,
+            error,
+            finishedAt: new Date()
+        }
+    });
+    // Audit trail: log task completion into the linked Session's event log so
+    // report_session / audit_session can reconstruct the run from Tasks, not
+    // just legacy save events.
+    if (updated.sessionId) {
+        let outSummary = null;
+        try { outSummary = output ? JSON.parse(output)?.summary || null : null; } catch (_) { outSummary = null; }
+        try {
+            await prisma.sessionEvent.create({
+                data: {
+                    sessionId: updated.sessionId,
+                    action:    'task_completed',
+                    payload:   JSON.stringify({
+                        taskId:     updated.id,
+                        type:       updated.type,
+                        status:     updated.status,
+                        targetType: updated.targetType,
+                        targetId:   updated.targetId,
+                        summary:    outSummary,
+                        error:      updated.error || null
+                    })
+                }
+            });
+        } catch (e) {
+            // Audit failures must not break the worker. Log and move on.
+            logInfo(`complete_task audit log failed for task ${updated.id}: ${e.message}`);
+        }
+    }
+    return createSuccessResponse(id, JSON.stringify({
+        completed: true,
+        task:       taskRowToPacket(updated),
+        session_id: updated.sessionId || null
+    }, null, 2));
+}
+
+async function pipelineTasks(id, args) {
+    const where = {};
+    if (args.status)     where.status     = args.status;
+    if (args.type)       where.type       = args.type;
+    if (args.sessionId)  where.sessionId  = args.sessionId;
+    if (args.targetType) where.targetType = args.targetType;
+    if (args.targetId)   where.targetId   = args.targetId;
+    const limit = Math.min(args.limit || 100, 500);
+    const rows = await prisma.task.findMany({
+        where,
+        orderBy: [{ createdAt: 'desc' }],
+        take: limit
+    });
+    return createSuccessResponse(id, JSON.stringify({
+        count: rows.length,
+        tasks: rows.map(taskRowToPacket)
+    }, null, 2));
+}
+
+// ============================================================================
+// RECYCLER -- startup/manual cleanup of stale runtime/exhaust data.
+// Touches only Task and Factlet rows. Never deletes Clients, Bookings, Sources,
+// Sessions, or dossier text. See DOCS/WHAT_I_LEARNED.md subproject 8.
+// ============================================================================
+
+async function pipelineRecycler(id, args) {
+    const dryRun              = args.dryRun !== false;  // default true
+    // Precedence: explicit args > precrime_config.json > hardcoded defaults.
+    const _rec = (PRECRIME_CONFIG && PRECRIME_CONFIG.recycler) || {};
+    const _cfgFactletStale  = Number.isFinite(_rec.factletStaleDays)    ? _rec.factletStaleDays    : 180;
+    const _cfgTaskRetention = Number.isFinite(_rec.taskRetentionDays)   ? _rec.taskRetentionDays   : 30;
+    const _cfgClaimTimeout  = Number.isFinite(_rec.claimTimeoutMinutes) ? _rec.claimTimeoutMinutes : 10;
+    const factletStaleDays    = Number.isFinite(args.factletStaleDays)    ? args.factletStaleDays    : _cfgFactletStale;
+    const taskRetentionDays   = Number.isFinite(args.taskRetentionDays)   ? args.taskRetentionDays   : _cfgTaskRetention;
+    const claimTimeoutMinutes = Number.isFinite(args.claimTimeoutMinutes) ? args.claimTimeoutMinutes : _cfgClaimTimeout;
+
+    const now            = new Date();
+    const claimCutoff    = new Date(now.getTime() - claimTimeoutMinutes * 60 * 1000);
+    const taskCutoff     = new Date(now.getTime() - taskRetentionDays   * 24 * 60 * 60 * 1000);
+    const factletCutoff  = new Date(now.getTime() - factletStaleDays    * 24 * 60 * 60 * 1000);
+    const SAMPLE         = 10;
+    const warnings       = [];
+
+    // 1. Timed-out claimed Tasks -> ready
+    const staleClaims = await prisma.task.findMany({
+        where: { status: 'claimed', claimedAt: { lt: claimCutoff } },
+        select: { id: true }
+    });
+    const staleClaimIds = staleClaims.map(t => t.id);
+    if (!dryRun && staleClaimIds.length > 0) {
+        await prisma.task.updateMany({
+            where: { id: { in: staleClaimIds } },
+            data:  { status: 'ready', claimedAt: null, claimedBy: null }
+        });
+    }
+
+    // 2. Old finished Tasks -> delete. Use finishedAt when set, else updatedAt.
+    // Never touch ready or claimed Tasks here. (Timed-out claimed were requeued above.)
+    const finishedCandidates = await prisma.task.findMany({
+        where: {
+            status: { in: ['done', 'failed', 'cancelled'] },
+            OR: [
+                { finishedAt: { lt: taskCutoff } },
+                { AND: [{ finishedAt: null }, { updatedAt: { lt: taskCutoff } }] }
+            ]
+        },
+        select: { id: true }
+    });
+    const finishedIds = finishedCandidates.map(t => t.id);
+    if (!dryRun && finishedIds.length > 0) {
+        await prisma.task.deleteMany({ where: { id: { in: finishedIds } } });
+    }
+
+    // 3. Stale Factlets -> delete. Factlet stands alone now (no join table),
+    // so we just delete the rows directly. Dossier text is untouched.
+    const staleFactlets = await prisma.factlet.findMany({
+        where: { createdAt: { lt: factletCutoff } },
+        select: { id: true }
+    });
+    const staleFactletIds = staleFactlets.map(f => f.id);
+    if (!dryRun && staleFactletIds.length > 0) {
+        try {
+            await prisma.factlet.deleteMany({ where: { id: { in: staleFactletIds } } });
+        } catch (e) {
+            warnings.push(`factlet delete failed: ${e.message}`);
+        }
+    }
+
+    return createSuccessResponse(id, JSON.stringify({
+        dryRun,
+        now: now.toISOString(),
+        thresholds: { factletStaleDays, taskRetentionDays, claimTimeoutMinutes },
+        timedOutTasksRequeued: staleClaimIds.length,
+        finishedTasksDeleted:  finishedIds.length,
+        staleFactletsDeleted:  staleFactletIds.length,
+        sample: {
+            timedOutTaskIds:  staleClaimIds.slice(0, SAMPLE),
+            finishedTaskIds:  finishedIds.slice(0, SAMPLE),
+            staleFactletIds:  staleFactletIds.slice(0, SAMPLE)
+        },
+        warnings
     }, null, 2));
 }
 
@@ -2722,7 +4113,7 @@ async function enforceSessionWatchdog(id) {
             terminated: true,
             errorResponse: createErrorResponse(id, -32000,
                 `Session ${freshZombie.sess.id} (workflow="${freshZombie.sess.workflow}") auto-terminated at ${freshZombie.ageSec}s with 0 saves. ` +
-                `Switch strategy: claim a different source via pipeline.next_source(channel?, maxAgeDays?), or run skills/source-discovery.md to grow the queue. ` +
+                `Switch strategy: claim a different source via pipeline.next_source(channel?, maxAgeDays?), or call pipeline.plan_tasks({mode:"workflow"}) to enqueue a DISCOVER_SOURCES Task (or seed via pipeline.add_sources). ` +
                 `Do NOT re-open the same workflow without changing approach -- that just burns another 3 min.`)
         };
     }
@@ -2799,7 +4190,7 @@ async function pipelineStartSession(id, workflow, targetCount, metadata) {
     if (recentAbandoned) {
         return createErrorResponse(id, -32602,
             `Workflow "${workflow}" had a session auto-terminated <60s ago (${recentAbandoned.id}). ` +
-            `Wait 60s OR change strategy: claim a different source via pipeline.next_source(channel?, maxAgeDays?), or run skills/source-discovery.md to grow the queue. ` +
+            `Wait 60s OR change strategy: claim a different source via pipeline.next_source(channel?, maxAgeDays?), or call pipeline.plan_tasks({mode:"workflow"}) to enqueue a DISCOVER_SOURCES Task (or seed via pipeline.add_sources). ` +
             `Repeating the same workflow without saves only burns time.`);
     }
 
@@ -2857,6 +4248,32 @@ async function pipelineReportSession(id, sessionId, close) {
     const successes = session.events.filter(e => e.action === 'save_success');
     const failures  = session.events.filter(e => e.action === 'save_failed');
     const marks     = session.events.filter(e => e.action === 'source_marked');
+    const taskDone  = session.events.filter(e => e.action === 'task_completed');
+
+    // Task history -- the new Planner/Worker/Judge path writes a task_completed
+    // event for every complete_task call, and the Task rows themselves carry
+    // sessionId. Aggregate by type so headless final reports and audit_session
+    // can use server-truthful counts instead of LLM-rolled totals.
+    const sessionTasks = await prisma.task.findMany({
+        where: { sessionId: sessionId },
+        orderBy: { createdAt: 'asc' }
+    });
+    const taskCountsByType = {};
+    const taskOutcomesByType = {};   // { TYPE: { done: n, failed: n, cancelled: n, ready: n, claimed: n } }
+    for (const t of sessionTasks) {
+        taskCountsByType[t.type] = (taskCountsByType[t.type] || 0) + 1;
+        if (!taskOutcomesByType[t.type]) taskOutcomesByType[t.type] = {};
+        taskOutcomesByType[t.type][t.status] = (taskOutcomesByType[t.type][t.status] || 0) + 1;
+    }
+    const taskHistory = sessionTasks.map(t => ({
+        id:         t.id,
+        type:       t.type,
+        status:     t.status,
+        targetType: t.targetType,
+        targetId:   t.targetId,
+        finishedAt: t.finishedAt ? t.finishedAt.toISOString() : null,
+        error:      t.error || null
+    }));
 
     const savedClients = successes.map(e => {
         try { return JSON.parse(e.payload); } catch { return { raw: e.payload }; }
@@ -2901,9 +4318,15 @@ async function pipelineReportSession(id, sessionId, close) {
         failed: failures.length,
         saved_clients: savedClients,
         failures: failureList,
+        // Task-based truth (Planner/Worker/Judge architecture):
+        task_total:         sessionTasks.length,
+        task_counts_by_type: taskCountsByType,
+        task_outcomes:      taskOutcomesByType,
+        task_completions:   taskDone.length,
+        task_history:       taskHistory,
         started_at: session.startedAt.toISOString(),
         duration_ms: Date.now() - session.startedAt.getTime(),
-        note: 'This summary is generated by the server from the session event log. Echo verbatim — do not paraphrase.'
+        note: 'This summary is generated by the server from the session event log + Task table. Echo verbatim -- do not paraphrase.'
     };
     summary.summary_markdown = buildSummaryMarkdown(summary);
 
@@ -3024,14 +4447,17 @@ async function findBookings(id, args) {
 async function findFactlets(id, args) {
     const filters = args.filters || {};
 
-    // If clientId is provided, return linked factlets for that client
+    // If clientId is provided, return live Factlets relevant to that client via
+    // cheap content/source overlap on name / company / website host. No join
+    // table -- there is no longer a per-link "applied" pointer to read.
     if (filters.clientId) {
-        const links = await prisma.clientFactlet.findMany({
-            where: { clientId: filters.clientId },
-            include: { factlet: { select: { id: true, content: true, source: true, createdAt: true } } },
-            orderBy: { appliedAt: 'desc' }
-        });
-        return createSuccessResponse(id, JSON.stringify(links, null, 2));
+        const client = await prisma.client.findUnique({ where: { id: filters.clientId } });
+        if (!client) {
+            return createErrorResponse(id, -32602, `findFactlets: no client with id "${filters.clientId}".`);
+        }
+        const staleDays = await getFactletStaleDays();
+        const factlets = await findLiveFactletsForClient(client, staleDays);
+        return createSuccessResponse(id, JSON.stringify(factlets, null, 2));
     }
 
     // Otherwise, global factlet query (queue checking)
@@ -3242,6 +4668,36 @@ async function ensureSourceTable() {
     }
 }
 
+async function ensureTaskTable() {
+    try {
+        await prisma.$executeRawUnsafe(`
+            CREATE TABLE IF NOT EXISTS Task (
+                id          TEXT PRIMARY KEY,
+                type        TEXT NOT NULL,
+                status      TEXT NOT NULL DEFAULT 'ready',
+                sessionId   TEXT,
+                targetType  TEXT,
+                targetId    TEXT,
+                input       TEXT,
+                output      TEXT,
+                error       TEXT,
+                claimedAt   DATETIME,
+                claimedBy   TEXT,
+                createdAt   DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                updatedAt   DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                finishedAt  DATETIME
+            )
+        `);
+        await prisma.$executeRawUnsafe(`CREATE INDEX IF NOT EXISTS Task_status_idx ON Task(status)`);
+        await prisma.$executeRawUnsafe(`CREATE INDEX IF NOT EXISTS Task_type_idx ON Task(type)`);
+        await prisma.$executeRawUnsafe(`CREATE INDEX IF NOT EXISTS Task_sessionId_idx ON Task(sessionId)`);
+        await prisma.$executeRawUnsafe(`CREATE INDEX IF NOT EXISTS Task_target_idx ON Task(targetType, targetId)`);
+        logInfo('Task table verified (CREATE IF NOT EXISTS).');
+    } catch (err) {
+        logError(`ensureTaskTable failed: ${err.message}`);
+    }
+}
+
 function startMcpServer() {
     console.error(`[MCP] Starting Pre-Crime MCP server (3 tools)...`);
     console.error(`[MCP] Database: ${dbPath}`);
@@ -3251,6 +4707,7 @@ function startMcpServer() {
 
     // Run startup migrations before accepting any requests
     ensureSourceTable().catch(e => logError(`Startup migration error: ${e.message}`));
+    ensureTaskTable().catch(e => logError(`Startup migration error: ${e.message}`));
 
     const rl = readline.createInterface({
         input: process.stdin,

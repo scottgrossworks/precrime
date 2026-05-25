@@ -2,6 +2,24 @@
 setlocal
 cd /d "%~dp0"
 
+:: --- Require precrime_config.json (Subproject 10) ---
+:: Refuse to start when missing.
+if not exist "%~dp0precrime_config.json" (
+  echo.
+  echo  precrime_config.json not found at: %~dp0precrime_config.json
+  echo  Copy precrime_config.sample.json to precrime_config.json and fill it in.
+  echo.
+  pause
+  exit /b 1
+)
+for /f "usebackq delims=" %%v in (`node "%~dp0scripts\bootstrap_config.js"`) do %%v
+if errorlevel 1 (
+  echo.
+  echo  bootstrap_config.js failed. Check precrime_config.json is valid JSON.
+  pause
+  exit /b 1
+)
+
 :: Database: optional argument overrides default
 :: Usage:  hermes                       -> data\myproject.sqlite
 ::         hermes ca_schools_migrated   -> data\ca_schools_migrated.sqlite
@@ -24,22 +42,15 @@ if not exist "%DBPATH%" (
   exit /b 1
 )
 
-:: Write DATABASE_URL to server\.env -- Prisma reads this at runtime
-:: Must use absolute path (Prisma resolves relative paths from CWD, not from .env location)
->"%~dp0server\.env" echo DATABASE_URL="file:%DBPATH%"
-
-:: Also set env var for child processes
+:: Set DATABASE_URL for child processes.
 set "DATABASE_URL=file:%DBPATH%"
 
-:: --- Load API keys from .env (single source of truth, see .env.sample) ---
-if exist "%~dp0.env" (
-  for /f "usebackq eol=# delims=" %%i in ("%~dp0.env") do set "%%i"
-) else (
-  echo  .env file not found. Copy .env.sample to .env and fill in your API keys.
+:: API keys come from precrime_config.json via bootstrap_config.js.
+if "%OPENROUTER_API_KEY%"=="" if "%OPENAI_API_KEY%"=="" if "%ANTHROPIC_API_KEY%"=="" (
+  echo  No LLM API key in precrime_config.json apiKeys block.
   pause & exit /b 1
 )
-if "%OPENROUTER_API_KEY%"=="" ( echo  OPENROUTER_API_KEY missing from .env & pause & exit /b 1 )
-if "%TAVILY_API_KEY%"==""     ( echo  TAVILY_API_KEY missing from .env & pause & exit /b 1 )
+if "%TAVILY_API_KEY%"==""     ( echo  TAVILY_API_KEY missing in precrime_config.json apiKeys.tavily & pause & exit /b 1 )
 
 echo.
 echo  Pre-Crime (Hermes)
@@ -57,7 +68,8 @@ if errorlevel 1 (
 
 :: Launch Hermes via Docker
 docker run -it --rm ^
-  -e OPENROUTER_API_KEY=%OPENROUTER_API_KEY% ^
+  -e OPENAI_API_KEY=%OPENAI_API_KEY% ^
+  -e ANTHROPIC_API_KEY=%ANTHROPIC_API_KEY% ^
   -e TAVILY_API_KEY=%TAVILY_API_KEY% ^
   -e DATABASE_URL=%DATABASE_URL% ^
   -v "%CD%:/precrime" ^

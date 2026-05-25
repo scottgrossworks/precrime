@@ -1,678 +1,729 @@
 #!/usr/bin/env node
 /**
- * Pre-Crime — Lossless Database Migration Tool
+ * migrate-db.js -- single PRECRIME SQLite migration tool.
  *
- * Migrates any SQLite database to the Pre-Crime schema without losing data.
+ * Input:  one SQLite file.
+ * Output: a migrated SQLite file that matches the current Prisma schema.
  *
- *   SOURCE COLUMN EXISTS IN TARGET  → copied directly
- *   SOURCE COLUMN MISSING IN TARGET → column added to target, data preserved
- *   TARGET COLUMN MISSING IN SOURCE → stays NULL (enrichment fills it later)
- *   EXTRA SOURCE TABLE (no match)   → copied to target as _src_{tableName}
+ * Normal mode never mutates the source:
+ *   node scripts/migrate-db.js --source C:\path\old.sqlite
+ *   node scripts/migrate-db.js C:\path\old.sqlite --target C:\path\new.sqlite
  *
- * Uses SQLite ATTACH — no npm packages required. Requires Node.js >= 22.5.
+ * In-place wrapper mode:
+ *   node scripts/migrate-db.js --source C:\path\myproject.sqlite --in-place
  *
- * Usage (from PRECRIME root or anywhere):
- *   node scripts/migrate-db.js --source <path> [--target <path>] [--dry-run]
+ * In-place mode writes a temp migrated DB first, verifies it, creates a backup
+ * beside the original, and overwrites the original only after every verification
+ * passes. If verification fails, the source is left untouched.
  *
- *   --source   Path to the SQLite file to migrate FROM (read-only, never modified)
- *   --target   Path to write the migrated DB (default: {source-name}-migrated.sqlite)
- *              If the target already exists, new rows are added (INSERT OR IGNORE).
- *              If the target does NOT exist, it is created from template.sqlite.
- *   --dry-run  Inspect and show migration plan; write nothing
+ * Lossless rule:
+ * - Current PRECRIME tables are rebuilt into the canonical schema.
+ * - Every source table is also copied byte-for-byte by value into _legacy_<table>.
+ *   This preserves old/extra columns and removed tables such as ClientFactlet.
+ * - Old ClientFactlet links, when present, are folded into Client.dossier before
+ *   ClientFactlet is removed from the active schema.
  */
 
 'use strict';
 
-// Suppress the "SQLite is experimental" warning — we know, it's fine on 22.17+
-process.env.NODE_NO_WARNINGS = '1';
-
-const { DatabaseSync } = require('node:sqlite');
-const fs   = require('fs');
+const fs = require('fs');
 const path = require('path');
 
-// ---------------------------------------------------------------------------
-// CLI
-// ---------------------------------------------------------------------------
+const PRECRIME_ROOT = path.resolve(__dirname, '..');
+const BETTER_SQLITE3 = path.join(PRECRIME_ROOT, 'server', 'node_modules', 'better-sqlite3');
 
-const args   = process.argv.slice(2);
-const getArg = (f) => { const i = args.indexOf(f); return i !== -1 ? args[i + 1] : null; };
-const hasArg = (f) => args.includes(f);
-
-if (hasArg('--help') || hasArg('-h')) {
-  console.log(`
-Pre-Crime — Lossless Database Migration Tool
-
-Usage:
-  node scripts/migrate-db.js --source <path> [options]
-
-Options:
-  --source <path>   SQLite file to migrate FROM (required, never modified)
-  --target <path>   Output path (default: {source-name}-migrated.sqlite alongside source)
-  --exclude <list>  Comma-separated table names to skip (e.g., Booking,Config)
-  --dry-run         Show migration plan without writing anything
-  --help            This message
-
-Examples:
-  node scripts/migrate-db.js --source data/leedz_3.24.2026.sqlite
-  node scripts/migrate-db.js --source old.sqlite --target data/myproject.sqlite
-  node scripts/migrate-db.js --source old.sqlite --exclude Booking
-  node scripts/migrate-db.js --source old.sqlite --dry-run
-`);
-  process.exit(0);
+let Database;
+try {
+  Database = require(BETTER_SQLITE3);
+} catch (err) {
+  console.error('FATAL: cannot load better-sqlite3 from: ' + BETTER_SQLITE3);
+  console.error('Run: cd C:\\Users\\Admin\\Desktop\\WKG\\PRECRIME\\server && npm install');
+  console.error('Underlying error: ' + err.message);
+  process.exit(2);
 }
 
-const sourceArg = getArg('--source');
-if (!sourceArg) {
-  console.error('ERROR: --source is required. Run with --help for usage.');
-  process.exit(1);
-}
+const args = process.argv.slice(2);
+const getArg = (name) => {
+  const i = args.indexOf(name);
+  return i >= 0 ? args[i + 1] : null;
+};
+const hasArg = (name) => args.includes(name);
+
+if (hasArg('--help') || hasArg('-h')) usage(0);
+
+const positionalSource = args.find(a => !a.startsWith('--') && !['--source', '--target'].includes(a));
+const sourceArg = getArg('--source') || positionalSource;
+if (!sourceArg) usage(1, 'ERROR: source SQLite file is required.');
 
 const sourcePath = path.resolve(sourceArg);
-if (!fs.existsSync(sourcePath)) {
-  console.error(`ERROR: Source not found: ${sourcePath}`);
-  process.exit(1);
-}
-
-const targetPath = getArg('--target')
-  ? path.resolve(getArg('--target'))
-  : path.join(path.dirname(sourcePath),
-      path.basename(sourcePath, path.extname(sourcePath)) + '-migrated.sqlite');
-
 const dryRun = hasArg('--dry-run');
+const inPlace = hasArg('--in-place');
+const requestedTarget = getArg('--target');
 
-// --exclude Booking,Config → skip those tables during migration
-const excludeArg = getArg('--exclude');
-const excludeSet = new Set(
-  excludeArg ? excludeArg.split(',').map(t => t.trim()) : []
-);
-
-// Locate template.sqlite relative to this script (PRECRIME/data/template.sqlite)
-const PRECRIME_ROOT = path.resolve(__dirname, '..');
-const templateDb    = path.join(PRECRIME_ROOT, 'data', 'template.sqlite');
-
-// ---------------------------------------------------------------------------
-// Pre-Crime authoritative schema
-// Column definitions: [name, SQLiteType, defaultSql | null]
-// ---------------------------------------------------------------------------
-
-const PC_SCHEMA = {
-  Client: [
-    ['id',             'TEXT',     null],
-    ['name',           'TEXT',     null],
-    ['email',          'TEXT',     null],
-    ['phone',          'TEXT',     null],
-    ['company',        'TEXT',     null],
-    ['website',        'TEXT',     null],
-    ['clientNotes',    'TEXT',     null],
-    ['segment',        'TEXT',     null],
-    ['dossier',        'TEXT',     null],
-    ['targetUrls',     'TEXT',     null],
-    ['draft',          'TEXT',     null],
-    ['draftStatus',    'TEXT',     null],
-    ['sentAt',         'DATETIME', null],
-    ['warmthScore',    'REAL',     null],
-    ['dossierScore',   'INTEGER',  null],
-    ['contactGate',    'INTEGER',  '0'],
-    ['intelScore',     'INTEGER',  null],
-    ['lastEnriched',   'DATETIME', null],
-    ['lastQueueCheck', 'DATETIME', null],
-    ['source',         'TEXT',     null],
-    ['createdAt',      'DATETIME', "CURRENT_TIMESTAMP"],
-    ['updatedAt',      'DATETIME', "CURRENT_TIMESTAMP"],
-  ],
-  Booking: [
-    ['id',               'TEXT',     null],
-    ['clientId',         'TEXT',     null],
-    ['title',            'TEXT',     null],
-    ['description',      'TEXT',     null],
-    ['notes',            'TEXT',     null],
-    ['location',         'TEXT',     null],
-    ['startDate',        'DATETIME', null],
-    ['endDate',          'DATETIME', null],
-    ['startTime',        'TEXT',     null],
-    ['endTime',          'TEXT',     null],
-    ['duration',         'REAL',     null],
-    ['hourlyRate',       'REAL',     null],
-    ['flatRate',         'REAL',     null],
-    ['totalAmount',      'REAL',     null],
-    ['status',           'TEXT',     "'new'"],
-    ['source',           'TEXT',     null],
-    ['sourceUrl',        'TEXT',     null],
-    ['trade',            'TEXT',     null],
-    ['zip',              'TEXT',     null],
-    ['shared',           'INTEGER',  '0'],
-    ['sharedTo',         'TEXT',     null],
-    ['sharedAt',         'INTEGER',  null],
-    ['leedPrice',        'INTEGER',  null],
-    ['leedId',           'TEXT',     null],
-    ['bookingScore',     'INTEGER',  null],
-    ['contactQuality',   'TEXT',     null],
-    ['createdAt',        'DATETIME', "CURRENT_TIMESTAMP"],
-    ['updatedAt',        'DATETIME', "CURRENT_TIMESTAMP"],
-  ],
-  Factlet: [
-    ['id',        'TEXT',     null],
-    ['content',   'TEXT',     null],
-    ['source',    'TEXT',     null],
-    ['createdAt', 'DATETIME', "CURRENT_TIMESTAMP"],
-  ],
-  ClientFactlet: [
-    ['id',         'TEXT',     null],
-    ['clientId',   'TEXT',     null],
-    ['factletId',  'TEXT',     null],
-    ['signalType', 'TEXT',     null],
-    ['points',     'INTEGER',  null],
-    ['appliedAt',  'DATETIME', "CURRENT_TIMESTAMP"],
-  ],
-  Source: [
-    ['id',             'TEXT',     null],
-    ['url',            'TEXT',     null],
-    ['channel',        'TEXT',     null],
-    ['subtype',        'TEXT',     null],
-    ['label',          'TEXT',     null],
-    ['category',       'TEXT',     null],
-    ['scrapedAt',      'DATETIME', null],
-    ['claimedAt',      'DATETIME', null],
-    ['claimedBy',      'TEXT',     null],
-    ['clientsFound',   'INTEGER',  '0'],
-    ['failedReason',   'TEXT',     null],
-    ['discoveredAt',   'DATETIME', "CURRENT_TIMESTAMP"],
-    ['discoveredFrom', 'TEXT',     null],
-  ],
-  Config: [
-    ['id',                   'TEXT',    null],
-    ['companyName',          'TEXT',    null],
-    ['companyEmail',         'TEXT',    null],
-    ['businessDescription',  'TEXT',    null],
-    ['activeEntities',       'TEXT',    null],
-    ['defaultTrade',         'TEXT',    null],
-    ['defaultBookingAction', 'TEXT',    null],
-    ['marketplaceEnabled',   'INTEGER', '0'],
-    ['leadCaptureEnabled',   'INTEGER', '0'],
-    ['llmApiKey',            'TEXT',    null],
-    ['llmProvider',          'TEXT',    null],
-    ['llmBaseUrl',           'TEXT',    null],
-    ['llmAnthropicVersion',  'TEXT',    null],
-    ['llmMaxTokens',         'INTEGER', '1024'],
-    ['leedzEmail',           'TEXT',    null],
-    ['leedzSession',         'TEXT',    null],
-    ['createdAt',            'DATETIME',"CURRENT_TIMESTAMP"],
-    ['updatedAt',            'DATETIME',"CURRENT_TIMESTAMP"],
-  ]
-};
-
-// Infer a reasonable SQLite type for unknown source columns
-function inferType(colName) {
-  const n = colName.toLowerCase();
-  if (n === 'warmthscore' || n.includes('score') || n.includes('float') || n.includes('rating')) return 'REAL';
-  if (n.includes('count') || n.includes('num') || n.includes('int') || n.includes('tokens') || n.includes('max')) return 'INTEGER';
-  if (n.includes('at') || n.includes('date') || n.includes('time') || n.includes('stamp')) return 'DATETIME';
-  return 'TEXT';
+if (!fs.existsSync(sourcePath) || !fs.statSync(sourcePath).isFile()) {
+  fail('Source SQLite file not found: ' + sourcePath);
 }
 
-// Try to match a source table name to a Pre-Crime table name.
-// Exact match first, then case-insensitive, then common aliases.
+if (inPlace && requestedTarget) {
+  fail('Use either --in-place or --target, not both.');
+}
+
+const targetPath = inPlace
+  ? sourcePath
+  : path.resolve(requestedTarget || defaultTargetPath(sourcePath));
+
+if (!inPlace && path.resolve(targetPath) === path.resolve(sourcePath)) {
+  fail('--target cannot equal --source. Use --in-place for backup-and-replace mode.');
+}
+
+const tempPath = inPlace
+  ? path.join(path.dirname(sourcePath), `.${path.basename(sourcePath)}.migrating-${timestamp()}.sqlite`)
+  : targetPath;
+
+const CURRENT_SCHEMA = {
+  Client: {
+    columns: [
+      ['id', 'TEXT', 'PRIMARY KEY'],
+      ['name', 'TEXT', 'NOT NULL'],
+      ['email', 'TEXT', null],
+      ['phone', 'TEXT', null],
+      ['company', 'TEXT', null],
+      ['website', 'TEXT', null],
+      ['clientNotes', 'TEXT', null],
+      ['segment', 'TEXT', null],
+      ['dossier', 'TEXT', null],
+      ['targetUrls', 'TEXT', null],
+      ['draft', 'TEXT', null],
+      ['draftStatus', 'TEXT', null],
+      ['sentAt', 'DATETIME', null],
+      ['warmthScore', 'REAL', null],
+      ['dossierScore', 'INTEGER', null],
+      ['contactGate', 'BOOLEAN', 'NOT NULL DEFAULT false'],
+      ['intelScore', 'INTEGER', null],
+      ['lastEnriched', 'DATETIME', null],
+      ['lastQueueCheck', 'DATETIME', null],
+      ['source', 'TEXT', null],
+      ['createdAt', 'DATETIME', 'NOT NULL DEFAULT CURRENT_TIMESTAMP'],
+      ['updatedAt', 'DATETIME', 'NOT NULL DEFAULT CURRENT_TIMESTAMP'],
+    ],
+    indexes: [
+      'CREATE UNIQUE INDEX IF NOT EXISTS "Client_email_key" ON "Client"("email")'
+    ]
+  },
+  Booking: {
+    columns: [
+      ['id', 'TEXT', 'PRIMARY KEY'],
+      ['clientId', 'TEXT', 'NOT NULL'],
+      ['title', 'TEXT', null],
+      ['description', 'TEXT', null],
+      ['notes', 'TEXT', null],
+      ['location', 'TEXT', null],
+      ['startDate', 'DATETIME', null],
+      ['endDate', 'DATETIME', null],
+      ['startTime', 'TEXT', null],
+      ['endTime', 'TEXT', null],
+      ['duration', 'REAL', null],
+      ['hourlyRate', 'REAL', null],
+      ['flatRate', 'REAL', null],
+      ['totalAmount', 'REAL', null],
+      ['status', 'TEXT', "NOT NULL DEFAULT 'brewing'"],
+      ['source', 'TEXT', null],
+      ['sourceUrl', 'TEXT', null],
+      ['trade', 'TEXT', null],
+      ['zip', 'TEXT', null],
+      ['shared', 'BOOLEAN', 'NOT NULL DEFAULT false'],
+      ['sharedTo', 'TEXT', null],
+      ['sharedAt', 'BIGINT', null],
+      ['leedPrice', 'INTEGER', null],
+      ['leedId', 'TEXT', null],
+      ['bookingScore', 'INTEGER', null],
+      ['factletScore', 'INTEGER', null],
+      ['contactQuality', 'TEXT', null],
+      ['createdAt', 'DATETIME', 'NOT NULL DEFAULT CURRENT_TIMESTAMP'],
+      ['updatedAt', 'DATETIME', 'NOT NULL DEFAULT CURRENT_TIMESTAMP'],
+    ],
+    indexes: []
+  },
+  Factlet: {
+    columns: [
+      ['id', 'TEXT', 'PRIMARY KEY'],
+      ['content', 'TEXT', 'NOT NULL'],
+      ['source', 'TEXT', 'NOT NULL'],
+      ['createdAt', 'DATETIME', 'NOT NULL DEFAULT CURRENT_TIMESTAMP'],
+    ],
+    indexes: []
+  },
+  Session: {
+    columns: [
+      ['id', 'TEXT', 'PRIMARY KEY'],
+      ['workflow', 'TEXT', 'NOT NULL'],
+      ['status', 'TEXT', "NOT NULL DEFAULT 'active'"],
+      ['targetCount', 'INTEGER', null],
+      ['startedAt', 'DATETIME', 'NOT NULL DEFAULT CURRENT_TIMESTAMP'],
+      ['finishedAt', 'DATETIME', null],
+      ['metadata', 'TEXT', null],
+    ],
+    indexes: []
+  },
+  SessionEvent: {
+    columns: [
+      ['id', 'TEXT', 'PRIMARY KEY'],
+      ['sessionId', 'TEXT', 'NOT NULL'],
+      ['ts', 'DATETIME', 'NOT NULL DEFAULT CURRENT_TIMESTAMP'],
+      ['action', 'TEXT', 'NOT NULL'],
+      ['payload', 'TEXT', null],
+    ],
+    indexes: [
+      'CREATE INDEX IF NOT EXISTS "SessionEvent_sessionId_idx" ON "SessionEvent"("sessionId")',
+      'CREATE INDEX IF NOT EXISTS "SessionEvent_action_idx" ON "SessionEvent"("action")'
+    ]
+  },
+  Source: {
+    columns: [
+      ['id', 'TEXT', 'PRIMARY KEY'],
+      ['url', 'TEXT', 'NOT NULL'],
+      ['channel', 'TEXT', 'NOT NULL'],
+      ['subtype', 'TEXT', null],
+      ['label', 'TEXT', null],
+      ['category', 'TEXT', null],
+      ['scrapedAt', 'DATETIME', null],
+      ['claimedAt', 'DATETIME', null],
+      ['claimedBy', 'TEXT', null],
+      ['clientsFound', 'INTEGER', 'NOT NULL DEFAULT 0'],
+      ['failedReason', 'TEXT', null],
+      ['discoveredAt', 'DATETIME', 'NOT NULL DEFAULT CURRENT_TIMESTAMP'],
+      ['discoveredFrom', 'TEXT', null],
+    ],
+    indexes: [
+      'CREATE UNIQUE INDEX IF NOT EXISTS "Source_url_key" ON "Source"("url")',
+      'CREATE INDEX IF NOT EXISTS "Source_channel_idx" ON "Source"("channel")',
+      'CREATE INDEX IF NOT EXISTS "Source_scrapedAt_idx" ON "Source"("scrapedAt")',
+      'CREATE INDEX IF NOT EXISTS "Source_claimedAt_idx" ON "Source"("claimedAt")'
+    ]
+  },
+  Task: {
+    columns: [
+      ['id', 'TEXT', 'PRIMARY KEY'],
+      ['type', 'TEXT', 'NOT NULL'],
+      ['status', 'TEXT', "NOT NULL DEFAULT 'ready'"],
+      ['sessionId', 'TEXT', null],
+      ['targetType', 'TEXT', null],
+      ['targetId', 'TEXT', null],
+      ['input', 'TEXT', null],
+      ['output', 'TEXT', null],
+      ['error', 'TEXT', null],
+      ['claimedAt', 'DATETIME', null],
+      ['claimedBy', 'TEXT', null],
+      ['createdAt', 'DATETIME', 'NOT NULL DEFAULT CURRENT_TIMESTAMP'],
+      ['updatedAt', 'DATETIME', 'NOT NULL DEFAULT CURRENT_TIMESTAMP'],
+      ['finishedAt', 'DATETIME', null],
+    ],
+    indexes: [
+      'CREATE INDEX IF NOT EXISTS "Task_status_idx" ON "Task"("status")',
+      'CREATE INDEX IF NOT EXISTS "Task_type_idx" ON "Task"("type")',
+      'CREATE INDEX IF NOT EXISTS "Task_sessionId_idx" ON "Task"("sessionId")',
+      'CREATE INDEX IF NOT EXISTS "Task_targetType_targetId_idx" ON "Task"("targetType", "targetId")'
+    ]
+  },
+  Config: {
+    columns: [
+      ['id', 'TEXT', 'PRIMARY KEY'],
+      ['companyName', 'TEXT', null],
+      ['companyEmail', 'TEXT', null],
+      ['businessDescription', 'TEXT', null],
+      ['activeEntities', 'TEXT', null],
+      ['defaultTrade', 'TEXT', null],
+      ['defaultBookingAction', 'TEXT', null],
+      ['marketplaceEnabled', 'BOOLEAN', 'NOT NULL DEFAULT false'],
+      ['leadCaptureEnabled', 'BOOLEAN', 'NOT NULL DEFAULT false'],
+      ['leedzEmail', 'TEXT', null],
+      ['leedzSession', 'TEXT', null],
+      ['signature', 'TEXT', null],
+      ['llmApiKey', 'TEXT', null],
+      ['llmProvider', 'TEXT', null],
+      ['llmBaseUrl', 'TEXT', null],
+      ['llmAnthropicVersion', 'TEXT', null],
+      ['llmMaxTokens', 'INTEGER', 'DEFAULT 1024'],
+      ['factletStaleDays', 'INTEGER', 'DEFAULT 180'],
+      ['createdAt', 'DATETIME', 'NOT NULL DEFAULT CURRENT_TIMESTAMP'],
+      ['updatedAt', 'DATETIME', 'NOT NULL DEFAULT CURRENT_TIMESTAMP'],
+    ],
+    indexes: []
+  }
+};
+
 const TABLE_ALIASES = {
-  client:   'Client',
-  clients:  'Client',
-  contact:  'Client',
-  contacts: 'Client',
-  lead:     'Client',
-  leads:    'Client',
-  school:   'Client',
-  schools:  'Client',
-  org:      'Client',
-  orgs:     'Client',
-  factlet:        'Factlet',
-  factlets:       'Factlet',
-  facts:          'Factlet',
-  clientfactlet:  'ClientFactlet',
-  clientfactlets: 'ClientFactlet',
-  booking:  'Booking',
-  bookings: 'Booking',
-  gig:      'Booking',
-  gigs:     'Booking',
-  event:    'Booking',
-  events:   'Booking',
-  config:   'Config',
-  configs:  'Config',
-  settings: 'Config',
+  client: 'Client', clients: 'Client', contact: 'Client', contacts: 'Client',
+  lead: 'Client', leads: 'Client', school: 'Client', schools: 'Client',
+  booking: 'Booking', bookings: 'Booking', event: 'Booking', events: 'Booking',
+  gig: 'Booking', gigs: 'Booking',
+  factlet: 'Factlet', factlets: 'Factlet', facts: 'Factlet',
+  source: 'Source', sources: 'Source',
+  session: 'Session', sessions: 'Session',
+  sessionevent: 'SessionEvent', sessionevents: 'SessionEvent',
+  task: 'Task', tasks: 'Task',
+  config: 'Config', configs: 'Config', settings: 'Config'
 };
 
-function matchPcTable(sourceName) {
-  if (PC_SCHEMA[sourceName]) return sourceName;  // exact
-  const lower = sourceName.toLowerCase();
-  if (TABLE_ALIASES[lower]) return TABLE_ALIASES[lower];
-  // Case-insensitive direct match
-  const direct = Object.keys(PC_SCHEMA).find(k => k.toLowerCase() === lower);
-  if (direct) return direct;
-  return null;
-}
+main();
 
-// Escape a SQLite identifier by wrapping in double quotes
-function q(name) { return `"${name.replace(/"/g, '""')}"`; }
+function main() {
+  console.log('\nPRECRIME single DB migrator');
+  console.log('Source : ' + sourcePath);
+  console.log('Target : ' + (inPlace ? `${sourcePath} (in-place after verified temp)` : targetPath));
+  console.log('Mode   : ' + (dryRun ? 'dry-run' : inPlace ? 'in-place' : 'output'));
 
-// Windows path → SQLite-safe path (forward slashes, no drive-letter issues in ATTACH)
-function sqlitePath(p) { return p.replace(/\\/g, '/'); }
+  checkpointSource(sourcePath, dryRun);
 
-// ---------------------------------------------------------------------------
-// Header
-// ---------------------------------------------------------------------------
+  const sourceInfo = inspectSource(sourcePath);
+  printPlan(sourceInfo);
 
-console.log(`\n${'═'.repeat(62)}`);
-console.log(`  Pre-Crime — Lossless Database Migration`);
-console.log(`${'═'.repeat(62)}`);
-console.log(`  Source  : ${sourcePath}`);
-console.log(`  Target  : ${targetPath}`);
-console.log(`  Mode    : ${dryRun ? 'DRY RUN (no writes)' : 'LIVE'}`);
-if (excludeSet.size > 0) console.log(`  Exclude : ${[...excludeSet].join(', ')}`);
-console.log(`${'═'.repeat(62)}\n`);
+  if (dryRun) {
+    console.log('\nDry run complete. No files changed.');
+    return;
+  }
 
-// ---------------------------------------------------------------------------
-// Validate prerequisites
-// ---------------------------------------------------------------------------
+  if (fs.existsSync(tempPath)) fs.rmSync(tempPath, { force: true });
+  fs.mkdirSync(path.dirname(tempPath), { recursive: true });
 
-if (!fs.existsSync(templateDb)) {
-  console.error(`ERROR: template.sqlite not found at ${templateDb}`);
-  console.error(`       This script must be run from the PRECRIME root, or template.sqlite must exist at data/template.sqlite`);
-  process.exit(1);
-}
+  const report = migrateToTarget(sourcePath, tempPath, sourceInfo);
+  verifyMigration(sourcePath, tempPath, sourceInfo, report);
+  finalizeSqliteFile(tempPath);
 
-if (sourcePath === targetPath) {
-  console.error(`ERROR: --source and --target cannot be the same file.`);
-  console.error(`       The source is NEVER modified. Use a different --target path.`);
-  process.exit(1);
-}
+  if (inPlace) {
+    const backupPath = sourcePath + '.bak.' + timestamp();
+    fs.copyFileSync(sourcePath, backupPath);
+    fs.copyFileSync(tempPath, sourcePath);
+    fs.rmSync(tempPath, { force: true });
+    console.log('\nBackup written: ' + backupPath);
+    console.log('Original replaced only after verified migration passed.');
+  }
 
-// ---------------------------------------------------------------------------
-// Step 0: Checkpoint source WAL (flush any unflushed writes before reading)
-// ---------------------------------------------------------------------------
-
-const shmFile = sourcePath + '-shm';
-const walFile = sourcePath + '-wal';
-if (fs.existsSync(shmFile) || fs.existsSync(walFile)) {
-  console.log(`Checkpointing source WAL...`);
-  if (!dryRun) {
-    const ckDb = new DatabaseSync(sourcePath);
-    ckDb.exec('PRAGMA wal_checkpoint(TRUNCATE)');
-    ckDb.close();
-    console.log(`  WAL checkpointed — source is clean.`);
-  } else {
-    console.log(`  (dry-run) WAL files detected — would checkpoint before migrating.`);
+  console.log('\nMigration complete.');
+  console.log('Output: ' + (inPlace ? sourcePath : tempPath));
+  console.log('\nCanonical rows:');
+  for (const [table, counts] of Object.entries(report.canonicalRows)) {
+    console.log(`  ${table}: ${counts.inserted}/${counts.source}`);
+  }
+  console.log('\nLegacy copies:');
+  for (const [table, counts] of Object.entries(report.legacyRows)) {
+    console.log(`  _legacy_${table}: ${counts.copied}/${counts.source}`);
+  }
+  if (report.dossierFolded > 0) {
+    console.log(`\nFolded old ClientFactlet evidence into dossiers: ${report.dossierFolded}`);
+  }
+  if (report.warnings.length) {
+    console.log('\nWarnings:');
+    for (const w of report.warnings) console.log('  - ' + w);
   }
 }
 
-// ---------------------------------------------------------------------------
-// Step 1: Open source (read-only) and inspect
-// ---------------------------------------------------------------------------
+function migrateToTarget(srcPath, outPath, sourceInfo) {
+  const src = new Database(srcPath, { readonly: true, fileMustExist: true });
+  const dst = new Database(outPath);
+  const report = { canonicalRows: {}, legacyRows: {}, warnings: [], dossierFolded: 0 };
 
-console.log(`Inspecting source database...`);
-
-let src;
-try {
-  src = new DatabaseSync(sourcePath, { readOnly: true });
-} catch (e) {
-  console.error(`ERROR: Cannot open source database: ${e.message}`);
-  process.exit(1);
-}
-
-// Get all user tables from source
-const sourceTables = src
-  .prepare(`SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%' AND name NOT LIKE '_prisma_%' ORDER BY name`)
-  .all()
-  .map(r => r.name);
-
-if (sourceTables.length === 0) {
-  console.error(`ERROR: Source database has no user tables.`);
-  src.close();
-  process.exit(1);
-}
-
-// Get schema and row counts for each source table
-const sourceInfo = {};
-for (const tname of sourceTables) {
-  const cols  = src.prepare(`PRAGMA table_info(${q(tname)})`).all();
-  const count = src.prepare(`SELECT COUNT(*) AS n FROM ${q(tname)}`).get().n;
-  sourceInfo[tname] = {
-    columns:  cols,   // [{cid, name, type, notnull, dflt_value, pk}]
-    rowCount: count,
-  };
-  const colNames = cols.map(c => c.name).join(', ');
-  console.log(`  ${tname}: ${count} rows | ${cols.length} cols: ${colNames}`);
-}
-
-src.close();
-
-// ---------------------------------------------------------------------------
-// Step 2: Map source tables → Pre-Crime tables; identify extras
-// ---------------------------------------------------------------------------
-
-console.log(`\nMatching tables to Pre-Crime schema...`);
-
-const tableMap   = {};  // pcTableName → sourceTableName
-const extraTables = []; // source tables that don't match any Pre-Crime table
-
-for (const sTable of sourceTables) {
-  const pcTable = matchPcTable(sTable);
-  if (pcTable) {
-    if (excludeSet.has(pcTable)) {
-      console.log(`  ✗ ${pcTable} — excluded by --exclude`);
-      continue;
-    }
-    if (tableMap[pcTable]) {
-      // Collision: two source tables map to same PC table — prefer exact match
-      if (sTable === pcTable) tableMap[pcTable] = sTable;
-      console.warn(`  ⚠ Multiple source tables map to ${pcTable}: using "${tableMap[pcTable]}"`);
-    } else {
-      tableMap[pcTable] = sTable;
-      const arrow = sTable !== pcTable ? ` (mapped from "${sTable}")` : '';
-      console.log(`  ✓ ${pcTable}${arrow} — ${sourceInfo[sTable].rowCount} rows`);
-    }
-  } else {
-    extraTables.push(sTable);
-    console.log(`  ~ "${sTable}" — no Pre-Crime match → will copy as _src_${sTable}`);
-  }
-}
-
-const unmappedPcTables = Object.keys(PC_SCHEMA).filter(t => !tableMap[t]);
-if (unmappedPcTables.length > 0) {
-  console.log(`\n  Pre-Crime tables not found in source (will remain empty):`);
-  unmappedPcTables.forEach(t => console.log(`    ${t}`));
-}
-
-// ---------------------------------------------------------------------------
-// Step 3: For each mapped table, build the migration plan
-// ---------------------------------------------------------------------------
-
-console.log(`\nBuilding migration plan...`);
-
-// plan[pcTable] = {
-//   sourceTable: string,
-//   addColumns: [{name, type, default}],     // source cols to ADD to target
-//   insertCols: [string],                    // all cols for INSERT
-//   selectExprs: [string],                   // SELECT expressions (col or NULL)
-//   missingFromSource: [string],             // target cols not in source (will be NULL)
-// }
-const plan = {};
-
-for (const [pcTable, sourceTable] of Object.entries(tableMap)) {
-  const srcCols    = sourceInfo[sourceTable].columns.map(c => c.name);
-  const srcColSet  = new Set(srcCols);
-  const pcColDefs  = PC_SCHEMA[pcTable];
-  const pcColNames = pcColDefs.map(c => c[0]);
-  const pcColSet   = new Set(pcColNames);
-
-  // Source columns NOT in target → need ALTER TABLE ADD COLUMN
-  const addColumns = srcCols
-    .filter(cn => !pcColSet.has(cn))
-    .map(cn => ({ name: cn, type: inferType(cn), default: null }));
-
-  // Target columns NOT in source → will be NULL in INSERT (filled by enrichment)
-  const missingFromSource = pcColNames.filter(cn => !srcColSet.has(cn));
-
-  // Full column list for INSERT: all pcCols + extra source cols
-  const insertCols  = [...pcColNames, ...addColumns.map(c => c.name)];
-
-  // SELECT expression for each insertCol:
-  //   - if col exists in source → col name (reads from src table)
-  //   - if col is target-only   → NULL
-  const selectExprs = insertCols.map(cn => srcColSet.has(cn) ? q(cn) : 'NULL');
-
-  plan[pcTable] = { sourceTable, addColumns, insertCols, selectExprs, missingFromSource };
-
-  console.log(`\n  ${pcTable} ← ${sourceTable}`);
-  if (addColumns.length > 0) {
-    console.log(`    + Add ${addColumns.length} source-only col(s): ${addColumns.map(c => c.name).join(', ')}`);
-  }
-  if (missingFromSource.length > 0) {
-    console.log(`    ≈ ${missingFromSource.length} target col(s) will be NULL: ${missingFromSource.join(', ')}`);
-  }
-  console.log(`    → INSERT ${insertCols.length} cols, ${sourceInfo[sourceTable].rowCount} rows`);
-}
-
-// ---------------------------------------------------------------------------
-// Dry-run stops here
-// ---------------------------------------------------------------------------
-
-if (dryRun) {
-  console.log(`\n${'═'.repeat(62)}`);
-  console.log(`  DRY RUN complete — no files written.`);
-  console.log(`  Run without --dry-run to execute the migration.`);
-  console.log(`${'═'.repeat(62)}\n`);
-  process.exit(0);
-}
-
-// ---------------------------------------------------------------------------
-// Step 4: Prepare target file
-// ---------------------------------------------------------------------------
-
-console.log(`\nPreparing target...`);
-
-if (!fs.existsSync(targetPath)) {
-  fs.mkdirSync(path.dirname(targetPath), { recursive: true });
-  fs.copyFileSync(templateDb, targetPath);
-  console.log(`  Created ${targetPath} from template.sqlite`);
-} else {
-  console.log(`  Target exists — will INSERT OR IGNORE (no existing rows overwritten)`);
-}
-
-// ---------------------------------------------------------------------------
-// Step 5: Open target and ATTACH source
-// ---------------------------------------------------------------------------
-
-let db;
-try {
-  db = new DatabaseSync(targetPath);
-} catch (e) {
-  console.error(`ERROR: Cannot open target database: ${e.message}`);
-  process.exit(1);
-}
-
-// Disable FK checks during migration — Booking rows insert before Client rows
-// (alphabetical table order). Source DB already guarantees referential integrity.
-db.exec('PRAGMA foreign_keys = OFF');
-
-// ATTACH source (read-only, as 'src')
-const attachSql = `ATTACH DATABASE '${sqlitePath(sourcePath)}' AS src`;
-try {
-  db.exec(attachSql);
-} catch (e) {
-  console.error(`ERROR: Could not attach source database: ${e.message}`);
-  db.close();
-  process.exit(1);
-}
-
-// ---------------------------------------------------------------------------
-// Step 6: Execute migration plan
-// ---------------------------------------------------------------------------
-
-const report = {
-  tablesProcessed: [],
-  columnsAdded:    [],
-  rowsMigrated:    {},
-  extraTablesProcessed: [],
-  warnings:        [],
-};
-
-console.log(`\nExecuting migration...`);
-
-try {
-
-  for (const [pcTable, p] of Object.entries(plan)) {
-    console.log(`\n  ${pcTable}`);
-
-    // 6a. ADD COLUMN for source-only columns
-    for (const col of p.addColumns) {
-      const defaultClause = col.default ? ` DEFAULT ${col.default}` : '';
-      const alterSql = `ALTER TABLE ${q(pcTable)} ADD COLUMN ${q(col.name)} ${col.type}${defaultClause}`;
-      try {
-        db.exec(alterSql);
-        console.log(`    + Added column: ${col.name} (${col.type})`);
-        report.columnsAdded.push({ table: pcTable, column: col.name, type: col.type });
-      } catch (e) {
-        if (e.message.includes('duplicate column name')) {
-          console.log(`    ~ Column ${col.name} already exists in target — skipping ALTER`);
-        } else {
-          report.warnings.push(`ALTER TABLE ${pcTable} ADD COLUMN ${col.name}: ${e.message}`);
-          console.warn(`    ⚠ Could not add column ${col.name}: ${e.message}`);
-        }
-      }
-    }
-
-    // 6b. INSERT OR IGNORE ... SELECT from attached source
-    const colList    = p.insertCols.map(q).join(', ');
-    const selectList = p.selectExprs.join(', ');
-    const insertSql  = `INSERT OR IGNORE INTO main.${q(pcTable)} (${colList}) SELECT ${selectList} FROM src.${q(p.sourceTable)}`;
-
-    let migrated = 0;
-    try {
-      const result = db.prepare(insertSql).run();
-      migrated = result.changes;
-    } catch (e) {
-      // INSERT OR IGNORE should not throw for constraint violations, but just in case
-      report.warnings.push(`INSERT into ${pcTable}: ${e.message}`);
-      console.error(`    ✗ INSERT failed: ${e.message}`);
-      console.error(`      SQL: ${insertSql.substring(0, 120)}...`);
-    }
-
-    const sourceCount = sourceInfo[p.sourceTable].rowCount;
-    const skipped     = sourceCount - migrated;
-    report.rowsMigrated[pcTable] = { source: sourceCount, migrated, skipped };
-
-    if (skipped > 0 && skipped < sourceCount) {
-      console.log(`    ✓ ${migrated} rows inserted, ${skipped} skipped (already in target)`);
-    } else if (skipped === sourceCount && sourceCount > 0) {
-      console.log(`    ~ All ${sourceCount} rows already in target (no duplicates added)`);
-    } else {
-      console.log(`    ✓ ${migrated} rows inserted`);
-    }
-
-    report.tablesProcessed.push(pcTable);
-  }
-
-  // 6c. Copy extra source tables with _src_ prefix
-  if (extraTables.length > 0) {
-    console.log(`\n  Extra source tables:`);
-    for (const sTable of extraTables) {
-      const destTable = `_src_${sTable}`;
-      const srcCols   = sourceInfo[sTable].columns;
-
-      // Build CREATE TABLE based on source schema
-      const colDefs = srcCols.map(c => {
-        let def = `${q(c.name)} ${c.type || 'TEXT'}`;
-        if (c.pk === 1) def += ' PRIMARY KEY';
-        if (c.notnull && !c.pk) def += ' NOT NULL';
-        if (c.dflt_value !== null && c.dflt_value !== undefined) def += ` DEFAULT ${c.dflt_value}`;
-        return def;
-      }).join(', ');
-
-      try {
-        db.exec(`DROP TABLE IF EXISTS ${q(destTable)}`);
-        db.exec(`CREATE TABLE ${q(destTable)} (${colDefs})`);
-
-        const srcColList  = srcCols.map(c => q(c.name)).join(', ');
-        const insertExtra = `INSERT OR IGNORE INTO main.${q(destTable)} (${srcColList}) SELECT ${srcColList} FROM src.${q(sTable)}`;
-        const res = db.prepare(insertExtra).run();
-        console.log(`    ✓ "${sTable}" → "_src_${sTable}" — ${res.changes} rows`);
-        report.extraTablesProcessed.push({ source: sTable, dest: destTable, rows: res.changes });
-        report.rowsMigrated[destTable] = { source: sourceInfo[sTable].rowCount, migrated: res.changes, skipped: 0 };
-      } catch (e) {
-        report.warnings.push(`Extra table ${sTable}: ${e.message}`);
-        console.warn(`    ⚠ Could not copy ${sTable}: ${e.message}`);
-      }
-    }
-  }
-
-} finally {
-  // Always detach and close, even on error
-  try { db.exec(`DETACH DATABASE src`); } catch (_) {}
-  db.close();
-}
-
-// ---------------------------------------------------------------------------
-// Step 6d: Verify row counts
-// ---------------------------------------------------------------------------
-
-console.log(`\nVerifying...`);
-
-const verify = new DatabaseSync(targetPath, { readOnly: true });
-let allMatch = true;
-
-for (const [pcTable, counts] of Object.entries(report.rowsMigrated)) {
   try {
-    const actual = verify.prepare(`SELECT COUNT(*) AS n FROM ${q(pcTable)}`).get().n;
-    const expected = counts.migrated;
-    const ok = actual >= expected;
-    if (!ok) {
-      allMatch = false;
-      report.warnings.push(`VERIFY MISMATCH ${pcTable}: expected ≥${expected}, got ${actual}`);
+    dst.pragma('journal_mode = WAL');
+    dst.pragma('foreign_keys = OFF');
+
+    createCurrentSchema(dst);
+    copyAllLegacyTables(src, dst, sourceInfo, report);
+
+    const tx = dst.transaction(() => {
+      for (const table of Object.keys(CURRENT_SCHEMA)) {
+        const sourceTable = sourceInfo.tableMap[table];
+        if (!sourceTable) {
+          report.canonicalRows[table] = { source: 0, inserted: 0 };
+          continue;
+        }
+        const sourceRows = src.prepare(`SELECT * FROM ${q(sourceTable)}`).all();
+        const inserted = insertCanonicalRows(src, dst, table, sourceTable, sourceRows, sourceInfo, report);
+        report.canonicalRows[table] = { source: sourceRows.length, inserted };
+      }
+      report.dossierFolded = foldClientFactletsIntoDossiers(src, dst, sourceInfo, report);
+      repairBookingClientIds(dst, report);
+    });
+
+    tx();
+    dst.pragma('foreign_keys = ON');
+  } finally {
+    src.close();
+    dst.close();
+  }
+
+  return report;
+}
+
+function createCurrentSchema(db) {
+  for (const [table, def] of Object.entries(CURRENT_SCHEMA)) {
+    const colSql = def.columns.map(([name, type, extra]) =>
+      [q(name), type, extra].filter(Boolean).join(' ')
+    ).join(',\n      ');
+    db.exec(`CREATE TABLE ${q(table)} (\n      ${colSql}\n    )`);
+  }
+  for (const def of Object.values(CURRENT_SCHEMA)) {
+    for (const sql of def.indexes) db.exec(sql);
+  }
+}
+
+function insertCanonicalRows(src, dst, table, sourceTable, sourceRows, sourceInfo, report) {
+  const targetCols = CURRENT_SCHEMA[table].columns.map(c => c[0]);
+  const srcCols = new Set(sourceInfo.tables[sourceTable].columns.map(c => c.name));
+  const stmt = dst.prepare(buildInsertSql(table, targetCols));
+  let inserted = 0;
+
+  for (const sourceRow of sourceRows) {
+    const row = {};
+    for (const col of targetCols) {
+      row[col] = srcCols.has(col) ? normalizeValue(sourceRow[col]) : null;
     }
-    const label = pcTable.startsWith('_src_') ? `(extra) ${pcTable}` : pcTable;
-    console.log(`  ${ok ? '✓' : '✗'} ${label}: ${actual} rows in target`);
-  } catch (e) {
-    console.warn(`  ⚠ Could not verify ${pcTable}: ${e.message}`);
+    applyDefaults(table, row, sourceRow);
+    try {
+      stmt.run(row);
+      inserted++;
+    } catch (err) {
+      report.warnings.push(`${table}: skipped source row id=${sourceRow.id || '[none]'}: ${err.message}`);
+    }
+  }
+
+  return inserted;
+}
+
+function applyDefaults(table, row, sourceRow) {
+  const now = new Date().toISOString();
+  if (!row.id) row.id = `mig_${table.toLowerCase()}_${hash(JSON.stringify(sourceRow)).slice(0, 16)}`;
+  if ('createdAt' in row && !row.createdAt) row.createdAt = now;
+  if ('updatedAt' in row && !row.updatedAt) row.updatedAt = now;
+
+  if (table === 'Client') {
+    if (!row.name) row.name = row.company || row.email || `Legacy Client ${String(row.id).slice(-8)}`;
+    row.contactGate = boolish(row.contactGate);
+  }
+  if (table === 'Booking') {
+    if (!row.clientId) row.clientId = 'legacy_orphan_client';
+    if (!row.status) row.status = 'brewing';
+    row.shared = boolish(row.shared);
+  }
+  if (table === 'Factlet') {
+    if (!row.content) row.content = sourceRow.content || sourceRow.title || JSON.stringify(sourceRow);
+    if (!row.source) row.source = sourceRow.source || sourceRow.sourceUrl || 'legacy';
+  }
+  if (table === 'Source') {
+    if (!row.url) row.url = `legacy://source/${encodeURIComponent(row.id)}`;
+    if (!row.channel) row.channel = 'website';
+    if (row.clientsFound === null || row.clientsFound === undefined) row.clientsFound = 0;
+  }
+  if (table === 'Task') {
+    if (!row.type) row.type = 'LEGACY_IMPORTED';
+    if (!row.status) row.status = 'done';
+  }
+  if (table === 'Session') {
+    if (!row.workflow) row.workflow = 'legacy_import';
+    if (!row.status) row.status = 'complete';
+    if (!row.startedAt) row.startedAt = now;
+  }
+  if (table === 'SessionEvent') {
+    if (!row.sessionId) row.sessionId = 'legacy_orphan_session';
+    if (!row.action) row.action = 'legacy_import';
+    if (!row.ts) row.ts = now;
+  }
+  if (table === 'Config') {
+    row.marketplaceEnabled = boolish(row.marketplaceEnabled);
+    row.leadCaptureEnabled = boolish(row.leadCaptureEnabled);
   }
 }
 
-verify.close();
+function repairBookingClientIds(db, report) {
+  const missing = db.prepare(`
+    SELECT DISTINCT b.clientId AS id
+    FROM "Booking" b
+    LEFT JOIN "Client" c ON c.id = b.clientId
+    WHERE c.id IS NULL
+  `).all().map(r => r.id).filter(Boolean);
 
-// ---------------------------------------------------------------------------
-// Step 6e: Checkpoint WAL + switch to DELETE journal (no -shm/-wal artifacts)
-// ---------------------------------------------------------------------------
+  if (!missing.length) return;
 
-console.log(`\nFinalizing output...`);
-const tgtCk = new DatabaseSync(targetPath);
-tgtCk.exec('PRAGMA wal_checkpoint(TRUNCATE)');
-tgtCk.exec('PRAGMA journal_mode = DELETE');
-tgtCk.close();
-
-const tgtShm = targetPath + '-shm';
-const tgtWal = targetPath + '-wal';
-if (fs.existsSync(tgtShm) || fs.existsSync(tgtWal)) {
-  try { if (fs.existsSync(tgtShm)) fs.unlinkSync(tgtShm); } catch (_) {}
-  try { if (fs.existsSync(tgtWal)) fs.unlinkSync(tgtWal); } catch (_) {}
-  console.log(`  Cleaned residual WAL files.`);
-} else {
-  console.log(`  Target is clean — single file, no WAL artifacts.`);
+  const insert = db.prepare(`
+    INSERT OR IGNORE INTO "Client" ("id", "name", "source", "createdAt", "updatedAt")
+    VALUES (?, ?, 'migration:orphan-booking-client', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+  `);
+  for (const id of missing) {
+    insert.run(id, `Legacy Client ${String(id).slice(-8)}`);
+  }
+  report.warnings.push(`Created ${missing.length} stub Client row(s) for legacy Booking.clientId values without matching Client rows.`);
 }
 
-// ---------------------------------------------------------------------------
-// Final report
-// ---------------------------------------------------------------------------
+function foldClientFactletsIntoDossiers(src, dst, sourceInfo, report) {
+  const cfTable = sourceInfo.sourceTables.find(t => t.toLowerCase() === 'clientfactlet' || t.toLowerCase() === 'clientfactlets');
+  const fTable = sourceInfo.tableMap.Factlet;
+  if (!cfTable || !fTable) return 0;
 
-console.log(`\n${'═'.repeat(62)}`);
-console.log(`  Migration Complete`);
-console.log(`${'═'.repeat(62)}`);
-console.log(`  Output: ${targetPath}`);
+  const cfCols = new Set(sourceInfo.tables[cfTable].columns.map(c => c.name));
+  if (!cfCols.has('clientId') || !cfCols.has('factletId')) return 0;
 
-if (report.columnsAdded.length > 0) {
-  console.log(`\n  Columns added to target (source data preserved):`);
-  for (const ca of report.columnsAdded) {
-    console.log(`    + ${ca.table}.${ca.column} (${ca.type})`);
+  const rows = src.prepare(`
+    SELECT cf.clientId, cf.factletId, cf.appliedAt, cf.signalType, cf.points,
+           f.content, f.source, f.createdAt
+    FROM ${q(cfTable)} cf
+    LEFT JOIN ${q(fTable)} f ON f.id = cf.factletId
+  `).all();
+
+  if (!rows.length) return 0;
+
+  const byClient = new Map();
+  for (const r of rows) {
+    if (!r.clientId || !r.content) continue;
+    const date = String(r.createdAt || r.appliedAt || new Date().toISOString()).slice(0, 10);
+    const srcText = r.source ? ` from ${r.source}` : '';
+    const line = `[${date}] Legacy factlet${srcText}: ${String(r.content).trim()}`;
+    if (!byClient.has(r.clientId)) byClient.set(r.clientId, []);
+    byClient.get(r.clientId).push(line);
+  }
+
+  const getClient = dst.prepare('SELECT dossier FROM "Client" WHERE id = ?');
+  const update = dst.prepare('UPDATE "Client" SET dossier = ?, updatedAt = CURRENT_TIMESTAMP WHERE id = ?');
+  let folded = 0;
+  for (const [clientId, lines] of byClient.entries()) {
+    const cur = getClient.get(clientId);
+    if (!cur) continue;
+    const existing = cur.dossier || '';
+    const additions = dedupeLines(lines, existing);
+    if (!additions.length) continue;
+    const next = existing
+      ? existing + '\n' + additions.join('\n')
+      : additions.join('\n');
+    update.run(next, clientId);
+    folded += additions.length;
+  }
+  return folded;
+}
+
+function copyAllLegacyTables(src, dst, sourceInfo, report) {
+  for (const table of sourceInfo.sourceTables) {
+    const legacyName = `_legacy_${sanitizeIdentifier(table)}`;
+    const rows = src.prepare(`SELECT * FROM ${q(table)}`).all();
+    const cols = sourceInfo.tables[table].columns;
+    const ddlCols = cols.length
+      ? cols.map(c => `${q(c.name)} ${c.type || 'TEXT'}`).join(', ')
+      : '"_empty" TEXT';
+    dst.exec(`CREATE TABLE ${q(legacyName)} (${ddlCols})`);
+    if (cols.length && rows.length) {
+      const names = cols.map(c => c.name);
+      const stmt = dst.prepare(buildInsertSql(legacyName, names));
+      const tx = dst.transaction(() => {
+        for (const row of rows) {
+          const data = {};
+          for (const n of names) data[n] = normalizeValue(row[n]);
+          stmt.run(data);
+        }
+      });
+      tx();
+    }
+    report.legacyRows[table] = { source: rows.length, copied: rows.length };
   }
 }
 
-console.log(`\n  Rows migrated:`);
-for (const [table, counts] of Object.entries(report.rowsMigrated)) {
-  const note = counts.skipped > 0
-    ? ` (${counts.skipped} already existed — skipped)`
-    : '';
-  console.log(`    ${table}: ${counts.migrated}/${counts.source}${note}`);
+function verifyMigration(srcPath, outPath, sourceInfo, report) {
+  const db = new Database(outPath, { readonly: true, fileMustExist: true });
+  try {
+    const tables = new Set(listTables(db));
+    for (const table of Object.keys(CURRENT_SCHEMA)) {
+      if (!tables.has(table)) throw new Error(`required table missing: ${table}`);
+      const cols = new Set(listColumns(db, table).map(c => c.name));
+      for (const [col] of CURRENT_SCHEMA[table].columns) {
+        if (!cols.has(col)) throw new Error(`required column missing: ${table}.${col}`);
+      }
+    }
+    if (tables.has('ClientFactlet')) {
+      throw new Error('ClientFactlet must not exist in migrated active schema');
+    }
+
+    for (const sourceTable of sourceInfo.sourceTables) {
+      const legacyName = `_legacy_${sanitizeIdentifier(sourceTable)}`;
+      if (!tables.has(legacyName)) throw new Error(`legacy preservation table missing: ${legacyName}`);
+      const n = countRows(db, legacyName);
+      const expected = sourceInfo.tables[sourceTable].rowCount;
+      if (n !== expected) throw new Error(`${legacyName} row count mismatch: ${n} !== ${expected}`);
+    }
+
+    for (const [table, counts] of Object.entries(report.canonicalRows)) {
+      if (counts.source > 0 && counts.inserted <= 0) {
+        throw new Error(`${table} source had ${counts.source} row(s), but canonical insert wrote 0`);
+      }
+    }
+  } finally {
+    db.close();
+  }
 }
 
-if (report.warnings.length > 0) {
-  console.log(`\n  Warnings:`);
-  report.warnings.forEach(w => console.log(`    ⚠ ${w}`));
+function inspectSource(srcPath) {
+  const db = new Database(srcPath, { readonly: true, fileMustExist: true });
+  try {
+    const sourceTables = listTables(db);
+    if (!sourceTables.length) fail('Source database has no user tables.');
+    const tables = {};
+    for (const table of sourceTables) {
+      tables[table] = {
+        columns: listColumns(db, table),
+        rowCount: countRows(db, table)
+      };
+    }
+    const tableMap = {};
+    for (const table of sourceTables) {
+      const canonical = matchCanonicalTable(table);
+      if (!canonical) continue;
+      if (!tableMap[canonical] || table === canonical) tableMap[canonical] = table;
+    }
+    return { sourceTables, tables, tableMap };
+  } finally {
+    db.close();
+  }
 }
 
-if (!allMatch) {
-  console.log(`\n  ✗ Some row counts did not match. Check warnings above.`);
-} else {
-  console.log(`\n  ✓ All row counts verified.`);
+function printPlan(info) {
+  console.log('\nSource tables:');
+  for (const table of info.sourceTables) {
+    const canonical = matchCanonicalTable(table);
+    const mapped = canonical ? ` -> ${canonical}` : ' -> legacy copy only';
+    console.log(`  ${table}: ${info.tables[table].rowCount} row(s), ${info.tables[table].columns.length} col(s)${mapped}`);
+  }
+  console.log('\nActive target schema: ' + Object.keys(CURRENT_SCHEMA).join(', '));
+  console.log('Removed active table: ClientFactlet (preserved only as _legacy_ClientFactlet if present).');
 }
 
-console.log(`\n  Next steps:`);
-console.log(`    1. Copy to your deployment:  {rootDir}\\data\\{name}.sqlite`);
-console.log(`    2. Launch Claude from {rootDir} and call: get_stats()`);
-console.log(`    3. Verify client count, then run the enrichment workflow`);
-console.log(`${'═'.repeat(62)}\n`);
+function checkpointSource(srcPath, readOnlyPlan) {
+  const hasWal = fs.existsSync(srcPath + '-wal') || fs.existsSync(srcPath + '-shm');
+  if (!hasWal) return;
+  console.log('Source WAL files detected.');
+  if (readOnlyPlan) {
+    console.log('Dry run: would checkpoint source WAL before migration.');
+    return;
+  }
+  const db = new Database(srcPath);
+  try {
+    db.pragma('wal_checkpoint(TRUNCATE)');
+    db.pragma('journal_mode = DELETE');
+  } finally {
+    db.close();
+  }
+  console.log('Source WAL checkpointed.');
+}
+
+function finalizeSqliteFile(dbPath) {
+  const db = new Database(dbPath);
+  try {
+    db.pragma('wal_checkpoint(TRUNCATE)');
+    db.pragma('journal_mode = DELETE');
+  } finally {
+    db.close();
+  }
+  for (const suffix of ['-wal', '-shm']) {
+    const p = dbPath + suffix;
+    if (fs.existsSync(p)) fs.rmSync(p, { force: true });
+  }
+}
+
+function matchCanonicalTable(name) {
+  if (CURRENT_SCHEMA[name]) return name;
+  return TABLE_ALIASES[String(name).toLowerCase()] || null;
+}
+
+function listTables(db) {
+  return db.prepare(`
+    SELECT name FROM sqlite_master
+    WHERE type='table'
+      AND name NOT LIKE 'sqlite_%'
+      AND name NOT LIKE '_prisma_%'
+    ORDER BY name
+  `).all().map(r => r.name);
+}
+
+function listColumns(db, table) {
+  return db.prepare(`PRAGMA table_info(${q(table)})`).all();
+}
+
+function countRows(db, table) {
+  return db.prepare(`SELECT COUNT(*) AS n FROM ${q(table)}`).get().n;
+}
+
+function buildInsertSql(table, cols) {
+  const colSql = cols.map(q).join(', ');
+  const valSql = cols.map(c => `@${c}`).join(', ');
+  return `INSERT OR REPLACE INTO ${q(table)} (${colSql}) VALUES (${valSql})`;
+}
+
+function normalizeValue(value) {
+  if (typeof value === 'bigint') return Number(value);
+  if (value instanceof Date) return value.toISOString();
+  if (value === undefined) return null;
+  return value;
+}
+
+function boolish(value) {
+  if (value === true || value === 1 || value === '1' || String(value).toLowerCase() === 'true') return 1;
+  return 0;
+}
+
+function dedupeLines(lines, existing) {
+  const seen = new Set(String(existing || '').split(/\r?\n/).map(s => s.trim()).filter(Boolean));
+  const out = [];
+  for (const line of lines) {
+    const clean = line.trim();
+    if (!clean || seen.has(clean)) continue;
+    seen.add(clean);
+    out.push(clean);
+  }
+  return out;
+}
+
+function q(identifier) {
+  return '"' + String(identifier).replace(/"/g, '""') + '"';
+}
+
+function sanitizeIdentifier(value) {
+  return String(value).replace(/[^A-Za-z0-9_]/g, '_');
+}
+
+function hash(value) {
+  let h = 2166136261;
+  for (let i = 0; i < value.length; i++) {
+    h ^= value.charCodeAt(i);
+    h = Math.imul(h, 16777619);
+  }
+  return (h >>> 0).toString(16);
+}
+
+function timestamp() {
+  const d = new Date();
+  const pad = n => String(n).padStart(2, '0');
+  return `${d.getFullYear()}${pad(d.getMonth() + 1)}${pad(d.getDate())}-${pad(d.getHours())}${pad(d.getMinutes())}${pad(d.getSeconds())}`;
+}
+
+function defaultTargetPath(srcPath) {
+  const ext = path.extname(srcPath) || '.sqlite';
+  const base = path.basename(srcPath, ext);
+  return path.join(path.dirname(srcPath), `${base}-migrated.sqlite`);
+}
+
+function usage(code, msg) {
+  if (msg) console.error(msg + '\n');
+  console.log(`Usage:
+  node scripts/migrate-db.js --source <file.sqlite> [--target <out.sqlite>]
+  node scripts/migrate-db.js <file.sqlite> [--target <out.sqlite>]
+  node scripts/migrate-db.js --source <file.sqlite> --in-place
+  node scripts/migrate-db.js --source <file.sqlite> --dry-run
+
+Options:
+  --source <path>  Input SQLite file.
+  --target <path>  Output SQLite file. Default: <source>-migrated.sqlite.
+  --in-place       Create backup, migrate temp DB, verify, then overwrite source.
+  --dry-run        Inspect and print plan only.
+`);
+  process.exit(code);
+}
+
+function fail(message) {
+  console.error('ERROR: ' + message);
+  process.exit(1);
+}

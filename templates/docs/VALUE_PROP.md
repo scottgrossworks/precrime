@@ -10,9 +10,27 @@ This document is the Composer's reference. The enrichment agent reads it before 
 **[YOUR PRODUCT NAME]**
 **Trade:** [LEEDZ TRADE CATEGORY -- must match a name returned by precrime__trades()]
 **Seller:** [YOUR NAME] -- [YOUR COMPANY]
+**Email:** [YOUR EMAIL]
 **Website:** [YOUR WEBSITE]
 **Geography:** [GEOGRAPHY SERVED]
 **Pricing:** [PRICING]
+
+---
+
+## SIGNATURE
+
+<!-- The literal signature block appended verbatim to every outreach email.
+     Drafting skills call `precrime__pipeline({ action:"get_config", key:"signature" })`
+     and append the returned value exactly as-is. No greeting words here.
+     Edit the lines below; everything between the heading and the next `---` is
+     captured. Lines that still contain `[YOUR ...]` placeholders are treated as
+     unset and the wizard will prompt for them. -->
+
+[YOUR NAME]
+[YOUR COMPANY]
+[YOUR EMAIL]
+[YOUR PHONE]
+[YOUR WEBSITE]
 
 ---
 

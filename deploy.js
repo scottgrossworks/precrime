@@ -275,6 +275,44 @@ if (fs.existsSync(schemaSrc)) {
   console.warn(`  ⚠ server/prisma/schema.prisma missing: ${schemaSrc}`);
 }
 
+// 2d.1 Copy server/config/precrime_config.js — runtime config loader (required by mcp_server.js)
+const cfgLoaderSrc = path.join(PRECRIME, 'server', 'config', 'precrime_config.js');
+const cfgLoaderDst = path.join(outputDir, 'server', 'config', 'precrime_config.js');
+if (fs.existsSync(cfgLoaderSrc)) {
+  copyFile(cfgLoaderSrc, cfgLoaderDst);
+} else {
+  console.error(`  ✗ FATAL: server/config/precrime_config.js missing — mcp_server will not start`);
+  process.exit(1);
+}
+
+// 2d.2 Copy scripts/bootstrap_config.js — regenerates .mcp.json / goose config from precrime_config.json
+const bootSrc = path.join(PRECRIME, 'scripts', 'bootstrap_config.js');
+const bootDst = path.join(outputDir, 'scripts', 'bootstrap_config.js');
+if (fs.existsSync(bootSrc)) {
+  copyFile(bootSrc, bootDst);
+} else {
+  console.warn(`  ⚠ scripts/bootstrap_config.js missing`);
+}
+
+// 2d.3 Ship precrime_config.json (starter with empty apiKey strings — user fills locally)
+const cfgSampleSrc = path.join(PRECRIME, 'precrime_config.sample.json');
+const cfgDst       = path.join(outputDir, 'precrime_config.json');
+const cfgSampleDst = path.join(outputDir, 'precrime_config.sample.json');
+if (fs.existsSync(cfgSampleSrc)) {
+  copyFile(cfgSampleSrc, cfgSampleDst);
+  if (!fs.existsSync(cfgDst)) {
+    // Stamp deploymentName from manifest so the starter file matches this build
+    const starter = JSON.parse(fs.readFileSync(cfgSampleSrc, 'utf8'));
+    starter.deploymentName = manifest.deployment.name || starter.deploymentName || 'MyProject';
+    starter.databaseFile   = manifest.deployment.dbFile || starter.databaseFile || 'data/myproject.sqlite';
+    fs.writeFileSync(cfgDst, JSON.stringify(starter, null, 2));
+    console.log('  ✓ precrime_config.json (starter — fill apiKeys before running)');
+  }
+} else {
+  console.error('  ✗ FATAL: precrime_config.sample.json missing — cannot ship config file');
+  process.exit(1);
+}
+
 // 2e. npm install + prisma generate in generated workspace
 if (!noInstall) {
   console.log('\nInstalling server dependencies (npm install)...');
@@ -322,18 +360,27 @@ if (!noInstall) {
   console.log('[--no-install] Skipping RSS npm install');
 }
 
-// 2g. Copy tools/ — all files, dynamically (no manual update needed when new tools are added).
-// Filter out directories (e.g. __pycache__) and dotfiles to prevent fs.copyFileSync crashes.
+// 2g. Copy tools/ — explicit allowlist of files wired into the runtime
+// (.mcp.json + templates/goose_config.template.yaml). Standalone harvesters
+// (ig_harvest.py, reddit_harvest.py) and *.legacy.* files are excluded.
+const ACTIVE_TOOLS = [
+  'tavily_lean_mcp.py',   // Tavily MCP server (registered as `tavily`)
+  'tavily_lean.py',       // imported by tavily_lean_mcp.py at runtime
+  'leedz_proxy_mcp.py'    // Leedz proxy MCP server (registered as `leedz`)
+];
 const toolsSrc = path.join(PRECRIME, 'tools');
 if (fs.existsSync(toolsSrc)) {
-  for (const toolFile of fs.readdirSync(toolsSrc)) {
-    if (toolFile.startsWith('.') || toolFile === '__pycache__') continue;
+  for (const toolFile of ACTIVE_TOOLS) {
     const srcPath = path.join(toolsSrc, toolFile);
-    if (!fs.statSync(srcPath).isFile()) continue;
+    if (!fs.existsSync(srcPath) || !fs.statSync(srcPath).isFile()) {
+      console.error(`  ✗ FATAL: active tool missing from PRECRIME/tools/: ${toolFile}`);
+      process.exit(1);
+    }
     copyFile(srcPath, path.join(outputDir, 'tools', toolFile));
   }
 } else {
-  console.warn('  ⚠ PRECRIME/tools/ directory missing');
+  console.error('  ✗ FATAL: PRECRIME/tools/ directory missing');
+  process.exit(1);
 }
 
 // 3. Copy blank template DB — schema is already applied, no prisma db push needed at runtime
@@ -352,11 +399,7 @@ if (fs.existsSync(blankDb)) {
 // 3. Build tokens
 const tokens = buildTokens(manifest);
 
-// 4a. Generate server/.env (Prisma reads this automatically)
-// Use path relative to server/ so it works in both build context and deployed workspace
-const dbRelToServer = path.relative(path.join(outputDir, 'server'), dbDest).replace(/\\/g, '/');
-write(path.join(outputDir, 'server', '.env'),
-  `DATABASE_URL="file:${dbRelToServer}"\n`);
+// 4a. (removed) DATABASE_URL is set as process.env by precrime.bat at runtime, not via server/.env.
 
 // 4b. DB already shipped as blank.sqlite — no prisma db push needed
 if (!noInstall) {
@@ -416,7 +459,12 @@ const data = ${JSON.stringify(seedData)};
     const seedPath = path.join(outputDir, 'server', '_seed_config.js');
     fs.writeFileSync(seedPath, seedScript);
     try {
-      execSync('node _seed_config.js', { cwd: path.join(outputDir, 'server'), stdio: 'inherit' });
+      const seedDbUrl = `file:${path.relative(path.join(outputDir, 'server'), dbDest).replace(/\\/g, '/')}`;
+      execSync('node _seed_config.js', {
+        cwd: path.join(outputDir, 'server'),
+        stdio: 'inherit',
+        env: { ...process.env, DATABASE_URL: seedDbUrl }
+      });
     } catch (e) {
       console.warn('  ⚠ Config seed failed — Config table left empty, init-wizard will fill it');
     } finally {
@@ -488,35 +536,41 @@ if (fs.existsSync(baseIgCfgPath)) {
 }
 
 // 7. Copy + substitute skill templates
+//
+// Packaged set is the Planner/Worker/Judge/Presenter architecture only:
+//   - init-wizard          (router)
+//   - headless_flow        (Planner-driven orchestrator)
+//   - url-loop / enrichment-agent / apply-factlet / show-hot-leedz   (one-Task workers)
+//   - share-skill / leed-drafter / outreach-drafter                  (share/draft helpers)
+//   - client-finder, shared/*                                        (helpers called by workers)
+// Plus per-channel _sources.md / discovered_directories.md seed files that
+// init-wizard.md Step 1.5 imports once at startup via pipeline.import_sources.
+//
+// Intentionally NOT packaged (orphaned by the new architecture; only legacy
+// docs referenced them):
+//   marketplace_flow.md  hybrid_flow.md  outreach_flow.md
+//   source-discovery.md (top-level skill)
+//   client-seeder.md  draft-checker.md  relevance-judge.md  value-prop-validator.md
+//   {rss,fb,reddit,ig,x}-factlet-harvester/SKILL.md (harvester SKILL.md files)
 console.log('\nSkill playbooks:');
 [
-  ['skills/enrichment-agent.md',              'skills/enrichment-agent.md'],
-  ['skills/relevance-judge.md',               'skills/relevance-judge.md'],
-  ['skills/rss-factlet-harvester/SKILL.md',   'skills/rss-factlet-harvester/SKILL.md'],
-  ['skills/rss-factlet-harvester/rss_sources.md', 'skills/rss-factlet-harvester/rss_sources.md'],
-  ['skills/fb-factlet-harvester/SKILL.md',    'skills/fb-factlet-harvester/SKILL.md'],
-  ['skills/fb-factlet-harvester/fb_sources.md','skills/fb-factlet-harvester/fb_sources.md'],
-  ['skills/reddit-factlet-harvester/SKILL.md',      'skills/reddit-factlet-harvester/SKILL.md'],
-  ['skills/reddit-factlet-harvester/reddit_sources.md','skills/reddit-factlet-harvester/reddit_sources.md'],
-  ['skills/ig-factlet-harvester/SKILL.md',    'skills/ig-factlet-harvester/SKILL.md'],
-  ['skills/ig-factlet-harvester/ig_sources.md','skills/ig-factlet-harvester/ig_sources.md'],
-  ['skills/x-factlet-harvester/SKILL.md',    'skills/x-factlet-harvester/SKILL.md'],
-  ['skills/x-factlet-harvester/x_sources.md','skills/x-factlet-harvester/x_sources.md'],
-  ['skills/client-seeder.md',                 'skills/client-seeder.md'],
-  ['skills/share-skill.md',                   'skills/share-skill.md'],
-  ['skills/source-discovery.md',              'skills/source-discovery.md'],
-  ['skills/source-discovery/discovered_directories.md', 'skills/source-discovery/discovered_directories.md'],
   ['skills/init-wizard.md',                   'skills/init-wizard.md'],
-  ['skills/client-finder.md',                 'skills/client-finder.md'],
-  ['skills/draft-checker.md',                 'skills/draft-checker.md'],
-  ['skills/leed-drafter.md',                  'skills/leed-drafter.md'],
-  ['skills/marketplace_flow.md',              'skills/marketplace_flow.md'],
-  ['skills/hybrid_flow.md',                   'skills/hybrid_flow.md'],
   ['skills/headless_flow.md',                 'skills/headless_flow.md'],
   ['skills/url-loop.md',                      'skills/url-loop.md'],
+  ['skills/enrichment-agent.md',              'skills/enrichment-agent.md'],
+  ['skills/apply-factlet.md',                 'skills/apply-factlet.md'],
+  ['skills/show-hot-leedz.md',                'skills/show-hot-leedz.md'],
+  ['skills/share-skill.md',                   'skills/share-skill.md'],
+  ['skills/leed-drafter.md',                  'skills/leed-drafter.md'],
   ['skills/outreach-drafter.md',              'skills/outreach-drafter.md'],
-  ['skills/outreach_flow.md',                 'skills/outreach_flow.md'],
-  ['skills/value-prop-validator.md',          'skills/value-prop-validator.md'],
+  ['skills/client-finder.md',                 'skills/client-finder.md'],
+  // Source seed files (read once at startup by pipeline.import_sources):
+  ['skills/rss-factlet-harvester/rss_sources.md',       'skills/rss-factlet-harvester/rss_sources.md'],
+  ['skills/fb-factlet-harvester/fb_sources.md',         'skills/fb-factlet-harvester/fb_sources.md'],
+  ['skills/reddit-factlet-harvester/reddit_sources.md', 'skills/reddit-factlet-harvester/reddit_sources.md'],
+  ['skills/ig-factlet-harvester/ig_sources.md',         'skills/ig-factlet-harvester/ig_sources.md'],
+  ['skills/x-factlet-harvester/x_sources.md',           'skills/x-factlet-harvester/x_sources.md'],
+  ['skills/source-discovery/discovered_directories.md', 'skills/source-discovery/discovered_directories.md'],
   ['skills/shared/booking-detect.md',        'skills/shared/booking-detect.md'],
   ['skills/shared/classify-contact.md',      'skills/shared/classify-contact.md'],
   ['skills/shared/factlet-rules.md',         'skills/shared/factlet-rules.md'],
@@ -539,20 +593,7 @@ console.log('\nDocs:');
 copyTemplate('CLAUDE.md', 'CLAUDE.md', tokens);
 copyTemplate('GOOSE.md', 'GOOSE.md', tokens);
 
-// 8c. Ship .env.sample and a starter .env (with REPLACE_ME placeholders).
-// goose.bat detects REPLACE_ME and shows a clear message with the exact file path.
-const envSampleSrc = path.join(TMPL, '.env.sample');
-if (fs.existsSync(envSampleSrc)) {
-  copyFile(envSampleSrc, path.join(outputDir, '.env.sample'));
-  // Only create .env if it doesn't already exist (don't clobber a configured install)
-  const envDst = path.join(outputDir, '.env');
-  if (!fs.existsSync(envDst)) {
-    copyFile(envSampleSrc, envDst);
-    console.log('  ✓ .env (starter — fill in API keys before running)');
-  }
-} else {
-  console.warn('  ⚠ templates/.env.sample missing — recipient will not know which keys to set');
-}
+// 8c. (removed) .env / .env.sample no longer shipped — precrime_config.json is the sole user-facing config.
 
 // 9. Create empty run log
 write(path.join(outputDir, 'logs', 'ROUNDUP.md'),

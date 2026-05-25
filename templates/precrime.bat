@@ -2,6 +2,25 @@
 setlocal
 cd /d "%~dp0"
 
+:: --- Require precrime_config.json (Subproject 10) ---
+:: Refuse to start when missing. bootstrap_config.js emits `set` lines for
+:: PRECRIME_* runtime vars and (if filled) OPENAI_API_KEY/ANTHROPIC_API_KEY/TAVILY_API_KEY.
+if not exist "%~dp0precrime_config.json" (
+  echo.
+  echo  precrime_config.json not found at: %~dp0precrime_config.json
+  echo  Copy precrime_config.sample.json to precrime_config.json and fill it in.
+  echo.
+  pause
+  exit /b 1
+)
+for /f "usebackq delims=" %%v in (`node "%~dp0scripts\bootstrap_config.js"`) do %%v
+if errorlevel 1 (
+  echo.
+  echo  bootstrap_config.js failed. Check precrime_config.json is valid JSON.
+  pause
+  exit /b 1
+)
+
 :: Database: optional argument overrides default
 :: Usage:  precrime                       -> data\myproject.sqlite
 ::         precrime ca_schools_migrated   -> data\ca_schools_migrated.sqlite
@@ -24,11 +43,8 @@ if not exist "%DBPATH%" (
   exit /b 1
 )
 
-:: Write DATABASE_URL to server\.env -- Prisma reads this at runtime
-:: Must use absolute path (Prisma resolves relative paths from CWD, not from .env location)
->"%~dp0server\.env" echo DATABASE_URL="file:%DBPATH%"
-
-:: Also set env var for any child processes
+:: Set DATABASE_URL for child processes -- Prisma reads this at runtime.
+:: Must be absolute (Prisma resolves relative paths from CWD).
 set "DATABASE_URL=file:%DBPATH%"
 
 echo.

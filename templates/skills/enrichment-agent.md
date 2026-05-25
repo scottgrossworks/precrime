@@ -1,121 +1,158 @@
 ---
 name: {{DEPLOYMENT_NAME}}-enrichment
-description: Enrich clients -- scrape intel, score, compose drafts for qualifying contacts
+description: One-Task ENRICH_CLIENT worker. Claim one ENRICH_CLIENT Task, enrich exactly one Client, save with judge:false, complete the Task, stop. Does not decide global workflow, does not iterate clients.
 triggers:
-  - run enrichment
-  - enrich clients
-  - run the enrichment workflow
+  - enrich one client
+  - run enrich client task
+  - ENRICH_CLIENT worker
 ---
 
-# Enrichment Agent
+# enrichment-agent -- One-Task ENRICH_CLIENT Worker
 
-Takes thin client records and enriches them with intelligence. This is the ENRICH function from `DOCS/FOUNDATION.md`. For each client: discover URLs, scrape them, extract signals, score, compose draft if qualified.
+This skill is a worker. It executes exactly one `ENRICH_CLIENT` Task and stops.
 
----
+The Planner (`pipeline.plan_tasks`) decides which Clients are stale and need enrichment. The Judge (`pipeline.judge_affected`) decides scoring and status promotion. This skill does neither. It enriches one Client, writes facts, and completes its Task.
 
-## Setup
-
-1. **Use latched mode.** The caller already selected interactive or headless. If unset, default to interactive and do not run tree/session scans.
-2. **Verify tools.** `precrime__pipeline({ action: "status" })` -- if this fails, STOP.
-3. **Hold VALUE_PROP config** from the validated config object passed by init-wizard. Do not re-read VALUE_PROP.md.
+Do not iterate to the next Client. Do not call `pipeline.next`. Do not run a queue. Do not call `pipeline.rescore`. The legacy multi-client loop is preserved at `C:\Users\Admin\Desktop\WKG\PRECRIME\templates\skills\enrichment-agent.legacy.md` for reference only.
 
 ---
 
-## The Loop
+## Step 1 -- Claim one Task
 
-### Step 0: Load Client
-
-```
-precrime__pipeline({ action: "next", criteria: {
-  lastEnrichedBefore: "<ISO timestamp 30 days ago>"
-}})
-```
-
-Always pass `lastEnrichedBefore`. Without it, the queue cycles through all clients forever instead of prioritizing new contacts.
-
-- Returns nothing -> `QUEUE_EXHAUSTED`. Log it. Stop the loop.
-- Returns client with `draftStatus === "sent"` -> skip. Log `SKIPPED_ALREADY_SENT`. Next client.
-- Returns client with `lastEnriched` within 30 days AND `dossierScore >= 3` -> skip. Log `SKIPPED_FRESH`. Next client.
-
-### Step 1: Factlet Check
+Call:
 
 ```
-precrime__find({ action: "factlets", filters: { clientId } })
+precrime__pipeline({
+  action: "claim_task",
+  role:   "enrichment-agent",
+  types:  ["ENRICH_CLIENT"]
+})
 ```
 
-Load linked factlets into context. Check for new factlets since `lastQueueCheck` and link relevant ones:
+Response shape:
 
-```
-precrime__pipeline({ action: "save", id: clientId, patch: {
-  factlets: [{ content, source, signalType: "pain"|"occasion"|"context" }],
-  lastQueueCheck: new Date().toISOString()
-}})
-```
-
-See `skills/shared/factlet-rules.md` for signal types and classification.
-
-### Step 2: URL Discovery
-
-If `targetUrls` is empty, find up to 5 URLs for the client: website, LinkedIn, Facebook, news, directory. Write them:
-
-```
-precrime__pipeline({ action: "save", id: clientId, patch: { targetUrls: JSON.stringify([...]) }})
+```json
+{
+  "status": "CLAIMED",
+  "task": {
+    "id": "task_...",
+    "type": "ENRICH_CLIENT",
+    "status": "claimed",
+    "targetType": "Client",
+    "targetId": "cli_...",
+    "input": null
+  }
+}
 ```
 
-### Step 2.5: Relationship Check
+Branching:
 
-**One question: if this engagement happens, does the seller get paid -- or pay them?**
-
-- **GET_PAID** (they hire the seller) -> proceed to Step 3.
-- **VENDOR_OPPORTUNITY** (seller pays them for booth/vendor access) -> save `warmthScore: 0`, log `VENDOR_OPPORTUNITY`, skip to next client. Do not scrape or score.
-
-### Step 3: Scrape + Intel Scoring
-
-Scrape each URL in `targetUrls`. Use SESSION_AI (interactive) or Tavily (headless).
-
-Extract signals relevant to VALUE_PROP config: pain points, buying occasions, org context.
-
-**Intel Score (D2 + D3, max 7):**
-- D2 Intel Depth: 0-3 (actionable content from sources scraped)
-- D3 Direct Signals: 0-4 (explicit pain, buying occasion, org context, timing/geography)
-
-For contacts found about OTHER people/orgs -> run `skills/shared/classify-contact.md`.
-For broadly applicable intel -> follow `skills/shared/factlet-rules.md`.
-
-### Step 3.5: Email Verification
-
-If client email is generic (info@, contact@, etc.) or missing, invoke `skills/client-finder.md` with the client's name, company, and domain.
-
-### Step 4: Score + Save
-
-```
-precrime__pipeline({ action: "save", id: clientId, patch: {
-  dossier: "[appended findings]",
-  intelScore: N,
-  warmthScore: N,
-  lastEnriched: new Date().toISOString()
-}})
-```
-
-Scoring runs automatically. Check returned `canDraft` and `contactGate`.
-
-### Step 5: Draft Gate
-
-If `canDraft = true` AND `warmthScore >= 9` -> compose draft using `skills/outreach-drafter.md`. Save with `draftStatus: "ready"`.
-
-Otherwise -> save with `draftStatus: "brewing"`. Note what's missing in dossier.
-
-### Step 6: Next Client
-
-Repeat from Step 0.
+- `status === "NO_TASK"` -> STOP. Do not look for another Client. Exit the skill.
+- `status === "CLAIMED"` -> hold `taskId = task.id`, `clientId = task.targetId`. Proceed to Step 2.
+- Any other status (`CONTENTION`, error) -> STOP. Exit the skill.
 
 ---
 
-## Run Log
+## Step 2 -- Load the one Client
 
-Write to `logs/ROUNDUP.md` as you go. Per client:
 ```
-### Client: [name] -- [company]
-- Score: contactGate=[PASS/FAIL] | intel=[N/7] | factlets=[N pts] | warmth=[N]
-- Draft: [composed/skipped -- reason]
+precrime__find({ action: "clients", filters: { id: clientId }, limit: 1 })
 ```
+
+Capture existing `name`, `company`, `email`, `phone`, `website`, `targetUrls`, `dossier`, `clientNotes`, and recent linked factlets. This is the only Client this worker touches.
+
+If the Client cannot be loaded, go to Step 5 (failure path).
+
+---
+
+## Step 3 -- Enrich exactly this Client
+
+Do the enrichment work for this single Client only:
+
+1. If `targetUrls` is empty or stale, find up to 5 high-signal URLs (website, LinkedIn, Facebook, news, directory). Scrape them via `tavily__tavily_extract`.
+2. Extract direct contact info, current event signals, pain signals, buying-occasion signals, and org context relevant to the deployment VALUE_PROP.
+3. For contacts found about OTHER people/orgs while reading this Client's pages, follow `C:\Users\Admin\Desktop\WKG\PRECRIME\templates\skills\shared\classify-contact.md` and save them as their own Clients via `pipeline.save({ judge:false, patch: ... })` (the Planner will enrich them later in their own Tasks).
+4. For broadly reusable signals, follow `C:\Users\Admin\Desktop\WKG\PRECRIME\templates\skills\shared\factlet-rules.md` and save them as factlets attached to this Client where applicable.
+5. Verify direct email if needed via `C:\Users\Admin\Desktop\WKG\PRECRIME\templates\skills\client-finder.md`.
+
+You may make multiple read/scrape calls in this step. You may NOT claim another Task. You may NOT enrich another Client.
+
+---
+
+## Step 4 -- Save changes with judge:false
+
+Save the accumulated enrichment for THIS Client in one call:
+
+```
+precrime__pipeline({
+  action: "save",
+  id:     clientId,
+  judge:  false,
+  patch: {
+    name:        "<corrected if needed>",
+    email:       "<verified direct email if found>",
+    phone:       "<if found>",
+    website:     "<if found>",
+    targetUrls:  "<JSON.stringify of resolved URL list>",
+    dossier:     "<appended dated findings>",
+    clientNotes: "<short operational note if needed>",
+    factlets:    [
+      { content: "...", source: "...", signalType: "occasion|context|pain" }
+    ],
+    lastEnriched: "<ISO timestamp now>"
+  }
+})
+```
+
+CRITICAL: this `pipeline.save` call MUST pass `judge: false`. Scoring is owned by the Judge via the JUDGE_AFFECTED Task the Planner will create from this Task's output. Do not call `pipeline.judge_affected` here. Do not call `pipeline.rescore` here. Do not write `Booking.status` directly. Do not compose marketplace leeds.
+
+Collect `affectedClientIds`, `affectedBookingIds`, and any factlet ids returned. If you saved sibling Clients (Step 3.3) via additional `pipeline.save({ judge:false })` calls, collect their `clientId` too.
+
+---
+
+## Step 5 -- Complete the Task
+
+On success:
+
+```
+precrime__pipeline({
+  action: "complete_task",
+  taskId: taskId,
+  status: "done",
+  output: {
+    clientIds:   [clientId, <any sibling clients you created/touched>],
+    bookingIds:  [<affected booking ids>],
+    factletIds:  [<saved factlet ids>],
+    sourceIds:   [],
+    summary:     "Enriched <clientId>: <short result, e.g. email verified, 2 factlets, 1 booking>.",
+    needsJudge:  true
+  }
+})
+```
+
+`needsJudge: true` whenever any client/booking/factlet id was produced. If absolutely nothing changed, set `needsJudge: false` and the summary should say "no enrichable signal".
+
+On failure (Client unloadable, all scrapes failed, no usable signal anywhere, or any tool error you cannot work around):
+
+```
+precrime__pipeline({
+  action: "complete_task",
+  taskId: taskId,
+  status: "failed",
+  error:  "<short reason: client_missing | scrape_failed | no_signal | tool_error>",
+  output: {
+    clientIds:  [clientId],
+    bookingIds: [],
+    summary:    "Enrichment failed for <clientId>: <reason>.",
+    needsJudge: false
+  }
+})
+```
+
+Never leave a claimed Task uncompleted. If anything goes wrong, complete the Task as `failed` with a short `error`. Do not hide tool failures in prose; record them in `error`.
+
+---
+
+## Step 6 -- Stop
+
+After `complete_task` returns, exit the skill. Do not claim another Task. Do not load another Client. Do not call `report_session`. Do not call `plan_tasks`. The Planner decides what is next; the worker is done.

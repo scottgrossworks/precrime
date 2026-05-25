@@ -12,7 +12,7 @@ This is a known failure mode of fast/cheap LLMs under multi-step tool-call frict
 
 ## Implementation
 
-Three new actions on the `pipeline` MCP tool, two new SQLite tables, one migration script, one updated skill.
+Three new actions on the `pipeline` MCP tool, two new SQLite tables, one migration path, one updated skill.
 
 **Schema additions** (`server/prisma/schema.prisma`):
 - `Session` -- one row per workflow run. Fields: `id` (server-issued, `ses_*`), `workflow`, `status` (`active`/`complete`/`abandoned`), `targetCount`, `startedAt`, `finishedAt`, `metadata`.
@@ -24,11 +24,10 @@ Three new actions on the `pipeline` MCP tool, two new SQLite tables, one migrati
 - `pipeline.report_session` -> aggregates the event log server-side, marks the session complete, and returns `{ requested, actually_saved, failed, saved_clients[], failures[] }`. **This is the only sanctioned summary of session results.**
 - `pipeline.audit_session` -> same shape as `report_session` without closing the session (mid-flight check).
 
-**Migration** (`scripts/migrate_sessions.js`):
-- Idempotent (`CREATE TABLE IF NOT EXISTS` + `CREATE INDEX IF NOT EXISTS`).
-- Verifies pre/post row counts on every legacy table and refuses to claim success on data loss.
-- Auto-detects the three known DB locations (PRECRIME canonical, TDS deployment, PHOTOBOOTH legacy); accepts a custom path arg too.
-- Supports `--dry-run`.
+**Migration** (`scripts/migrate-db.js`):
+- Single database migrator for legacy installs.
+- Takes one SQLite file as input and writes a migrated output file, or runs `--in-place` only after a verified temporary migration succeeds.
+- Preserves source tables as `_legacy_*` copies, removes `ClientFactlet` from the active schema, and supports `--dry-run`.
 
 **Skill update** (`skills/url-loop.md`):
 - Step 0: open a session.
@@ -52,6 +51,6 @@ Three new actions on the `pipeline` MCP tool, two new SQLite tables, one migrati
 |---|---|
 | `server/prisma/schema.prisma` | Session + SessionEvent models |
 | `server/mcp/mcp_server.js` | Three new actions + session_id threading through save |
-| `scripts/migrate_sessions.js` | Idempotent migration for any deployment DB |
+| `scripts/migrate-db.js` | Single lossless migrator for any deployment DB |
 | `scripts/smoke_test_sessions.js` | 20-assertion end-to-end test of the layer |
 | `skills/url-loop.md` | Recursive URL loop backbone |

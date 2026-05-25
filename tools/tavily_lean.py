@@ -38,30 +38,21 @@ from pathlib import Path
 import requests
 
 # ---- API key resolution ----
-# Single source of truth: env var TAVILY_API_KEY (typically loaded from .env at project root by goose.bat / hermes.bat).
-# Fallback: read .env directly from project root if env var not set (useful when running this script standalone).
+# Single source of truth: env var TAVILY_API_KEY, set by the launcher
+# (precrime.bat / goose.bat / hermes.bat) from precrime_config.json apiKeys.tavily
+# via scripts/bootstrap_config.js. No .env fallback.
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
-ENV_FILE = PROJECT_ROOT / ".env"
 
 
 def get_api_key() -> str:
-    """Resolve TAVILY_API_KEY from env, then from project .env."""
+    """Resolve TAVILY_API_KEY from the process environment."""
     env = os.environ.get("TAVILY_API_KEY", "").strip()
     if env:
         return env
-    if ENV_FILE.exists():
-        for raw in ENV_FILE.read_text(encoding="utf-8").splitlines():
-            line = raw.strip()
-            if not line or line.startswith("#"):
-                continue
-            if line.startswith("TAVILY_API_KEY="):
-                value = line.split("=", 1)[1].strip().strip('"').strip("'")
-                if value and not value.endswith("REPLACE_ME"):
-                    return value
     raise RuntimeError(
-        f"TAVILY_API_KEY not in environment and not in {ENV_FILE}. "
-        f"Copy .env.sample to .env and fill in your key."
+        "TAVILY_API_KEY not set in environment. "
+        "Fill apiKeys.tavily in precrime_config.json and relaunch via precrime.bat/goose.bat."
     )
 
 

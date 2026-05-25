@@ -318,7 +318,7 @@ Ask:
 > node scripts/migrate-db.js --source "C:\path\to\your.sqlite" --dry-run
 > ```
 >
-> "That shows you exactly what will happen — which columns get added, which rows get carried over — without touching anything. Review the output, then run it without `--dry-run` to execute."
+> "That shows you exactly what will happen -- which tables map to the active schema and which legacy tables are preserved -- without touching anything. Review the output, then run the target command to execute."
 >
 > ```
 > node scripts/migrate-db.js --source "C:\path\to\your.sqlite" --target "{rootDir}\{dbFile}"
@@ -327,11 +327,11 @@ Ask:
 > "The migrated file goes directly into your deployment as the live database. Tell me when it's done."
 
 What the migration tool does:
-- Source columns that exist in Pre-Crime schema → copied directly
-- Source columns NOT in Pre-Crime schema → added to target, data preserved (nothing is dropped)
-- Pre-Crime columns not in source (dossier, draft, warmthScore, etc.) → start as NULL, filled by enrichment
-- Extra source tables with no Pre-Crime equivalent → copied with `_src_` prefix (e.g., `_src_Booking`)
-- Uses `INSERT OR IGNORE` — never overwrites existing rows in target
+- Source tables are copied into `_legacy_*` tables with exact row-count verification.
+- Rows matching the active Pre-Crime schema are copied into canonical tables.
+- Pre-Crime columns not in source start as NULL and are filled by enrichment.
+- `ClientFactlet` is removed from the active schema and preserved only as `_legacy_ClientFactlet` if present.
+- In-place migration creates a verified temporary DB and backup before overwriting the original.
 
 **If schema is already correct (no migration needed):**
 > "Copy it directly to `{rootDir}\{dbFile}`. If the `segment` column is missing, the migration tool handles that automatically."

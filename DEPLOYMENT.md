@@ -122,13 +122,13 @@ node scripts/migrate-db.js --source "C:\path\to\your.sqlite" --target "{rootDir}
 ```
 
 What the migration tool guarantees:
-- Source columns in Pre-Crime schema → copied directly
-- Source columns NOT in Pre-Crime schema → added to target, data preserved
-- Pre-Crime columns not in source → start NULL, filled by enrichment pipeline
-- Extra source tables (no Pre-Crime equivalent) → preserved as `_src_{tableName}`
-- `INSERT OR IGNORE` — never overwrites existing rows in target
+- Source tables are copied into `_legacy_*` tables with exact row-count verification.
+- Rows matching the active Pre-Crime schema are copied into the canonical tables.
+- `ClientFactlet` is removed from the active schema; legacy evidence is preserved in `_legacy_ClientFactlet` if present.
+- `--in-place` creates a verified temporary migration and backup first, then overwrites the original only after conversion succeeds.
+- WAL files are checkpointed and cleaned up by the script.
 
-Requires Node.js ≥ 22.5. No npm dependencies.
+Requires the bundled server dependencies installed by `setup.bat`.
 
 **Option B: Start from empty template**
 

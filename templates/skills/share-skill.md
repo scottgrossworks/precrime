@@ -23,27 +23,27 @@ precrime__find({ action: "bookings", filters: { id: bookingId } })
 precrime__find({ action: "clients", filters: { id: clientId }, summary: false })
 ```
 
-Rescore before sharing:
-```
-precrime__pipeline({ action: "rescore", scope: bookingId })
-```
-Proceed only if the booking is still `status: "leed_ready"`. The MCP server is the authority because it applies `DOCS/SCORING.json`.
+Proceed only if the booking is still `status: "leed_ready"`. `share_booking` (Step 2) re-runs Judge server-side and refuses any Booking that is not `leed_ready` at the moment of the call -- the LLM never calls `pipeline.rescore` from this skill.
 
 ---
 
-## Step 2: Build Payload
+## Step 2: Draft via share_booking (server-built payload)
 
-Read and follow `skills/leed-drafter.md` to construct the addLeed JSON.
+Do not build the addLeed JSON yourself. Do not compute `st` or `et`. Call:
 
-Show EVERY field. No ellipsis. No truncation.
+```
+precrime__pipeline({ action: "share_booking", bookingId, mode: "draft", timezone: "America/Los_Angeles" })
+```
+
+The server loads the Booking + Client, rescores via Judge, demands `leed_ready`, runs structured `resolve_dates`, and returns `{ payload, humanReadable: { startDisplay, endDisplay, timezone } }`. Show EVERY field of `payload`. No ellipsis. No truncation. The `humanReadable` block is the verification dates the user reads before approving.
 
 ---
 
 ## Step 3: Route by defaultBookingAction
 
-The caller (marketplace_flow or hybrid_flow) already obtained user approval (`post`). Execute immediately:
+This skill assumes the caller has already obtained user approval (interactive via `show-hot-leedz.md`) or is dispatching post-only (`headless_flow.md`). Execute the route for the current `Config.defaultBookingAction`:
 
-**`leedz_api`:** Call `leedz__createLeed` with the payload. On error, log full payload to `logs/ROUNDUP.md` and stop.
+**`leedz_api`:** Call `precrime__pipeline({ action: "share_booking", bookingId, mode: "post", timezone })`. Never call `leedz__createLeed` directly. The server is the only sanctioned poster; it persists `leedId`, `sharedAt`, and flips `status` to `shared`. On error, log the returned object to `logs/ROUNDUP.md` and stop.
 
 **`email_share`:** Send via `gmail__gmail_send` to share@theleedz.com.
 
@@ -53,12 +53,13 @@ The caller (marketplace_flow or hybrid_flow) already obtained user approval (`po
 
 ## Step 4: Record Result
 
-On success:
+`share_booking(mode:"post")` already writes `leedId`, `sharedAt`, `sharedTo: "leedz_api"`, and `status: "shared"` server-side. Do not write these fields by hand from the LLM.
+
+For `email_share` or `email_user` paths (gmail-based, no marketplace post), record the share manually:
 ```
 precrime__pipeline({ action: "save", id: bookingId, patch: {
-  leedId: "[from API response]",
   status: "shared",
-  sharedTo: "leedz_api" | "email_share" | "email_user",
+  sharedTo: "email_share" | "email_user",
   sharedAt: new Date().toISOString()
 }})
 ```
@@ -77,8 +78,9 @@ On stop: halt all sharing.
 
 ## Leed JSON Rules
 
-- `cn`, `em`, `ph` come from the CLIENT record, not config. The user is a vendor, not the contact.
-- `st` and `et` must be MCP-resolved epoch milliseconds. Never calculate them in the LLM. Never share a leed without an end time.
+- The server builds the entire payload via `share_booking`. The LLM never assembles `st`, `et`, or any other field by hand.
+- `cn`, `em`, `ph` come from the CLIENT record server-side. The user is a vendor, not the contact.
+- `st` and `et` are computed by MCP from the Booking's structured date provenance + IANA timezone passed on the action. Never calculate them in the LLM. Never accept an LLM-supplied `st`/`et`; `share_booking` rejects them by name.
 - `dt` and `rq` are third-person event descriptions. No greetings, no first-person, no pricing, no vendor names.
 - `sh: "*"` means broadcast to all matching vendors by default.
 - `pr` is always `0` (free).

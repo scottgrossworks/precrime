@@ -1,4 +1,8 @@
 // sync-config.js -- reads VALUE_PROP.md masthead, writes to DB Config.
+// VALUE_PROP.md is the sole source for product/sales fields (companyName,
+// companyEmail, businessDescription, defaultTrade, leedzEmail, pitch).
+// precrime_config.json is NEVER read here -- it owns runtime/API config only.
+// SQLite Config is an internal runtime mirror, not a user surface.
 // If VALUE_PROP.md is missing or incomplete, exits 0 silently.
 // The init-wizard handles prompting for missing fields interactively.
 const fs = require('fs');
@@ -15,10 +19,18 @@ const email = (text.match(/\*\*Email:\*\*\s*(.+)/)?.[1] || '').trim();
 const pitchMatch = text.match(/## THE PITCH[^\n]*\n+([\s\S]*?)(?=\n---|\n## )/);
 const pitch = (pitchMatch?.[1] || '').trim();
 
+// SIGNATURE: literal block from VALUE_PROP.md between `## SIGNATURE` and the
+// next `---` or `## `. Strip <!-- html comments -->. If every line still carries
+// a [YOUR ...] placeholder, treat as unset.
+const sigMatch = text.match(/## SIGNATURE[^\n]*\n+([\s\S]*?)(?=\n---|\n## |$)/);
+let signature = (sigMatch?.[1] || '').replace(/<!--[\s\S]*?-->/g, '').trim();
+const sigUsable = signature && signature.split(/\r?\n/).some(line => line.trim() && !/\[YOUR/i.test(line));
+
 const patch = {};
 if (seller && !seller.match(/\[YOUR/i)) patch.companyName = seller;
 if (email && !email.match(/\[YOUR/i)) patch.companyEmail = email;
 if (pitch && !pitch.match(/\[YOUR|\[Describe|\[FILL/i)) patch.businessDescription = pitch;
+if (sigUsable) patch.signature = signature;
 
 // Auto-detect trade from product name/title
 const trades = ["activity party","airbrush","baker","balloons","bartender","braider","car detailer","caricatures","caterer","concessions","dancer","decor","dj","drones","esthetician","event rentals","eyelashes","face painter","flowers","gaming trailer","hair","henna","inflatables","juggler","lighting","magician","makeup","massage","musician","nails","photo booth","photographer","restrooms","security","tennis","tent rental","trainer","valet","videographer","yoga"];

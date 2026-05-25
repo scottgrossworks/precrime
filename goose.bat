@@ -2,6 +2,25 @@
 setlocal
 cd /d "%~dp0"
 
+:: --- Require precrime_config.json (Subproject 10) ---
+:: Refuse to start when missing. bootstrap_config.js emits `set` lines for
+:: PRECRIME_* runtime vars and (if filled) OPENAI_API_KEY/ANTHROPIC_API_KEY/TAVILY_API_KEY.
+if not exist "%~dp0precrime_config.json" (
+  echo.
+  echo  precrime_config.json not found at: %~dp0precrime_config.json
+  echo  Copy precrime_config.sample.json to precrime_config.json and fill it in.
+  echo.
+  pause
+  exit /b 1
+)
+for /f "usebackq delims=" %%v in (`node "%~dp0scripts\bootstrap_config.js"`) do %%v
+if errorlevel 1 (
+  echo.
+  echo  bootstrap_config.js failed. Check precrime_config.json is valid JSON.
+  pause
+  exit /b 1
+)
+
 :: Mode: --headless flag triggers autonomous marketplace mode (no user interaction).
 :: Usage:  goose.bat                       -> interactive
 ::         goose.bat --headless            -> headless marketplace
@@ -35,51 +54,28 @@ if not exist "%DBPATH%" (
   exit /b 1
 )
 
-:: Write DATABASE_URL to server\.env -- Prisma reads this at runtime
-:: Must use absolute path (Prisma resolves relative paths from CWD, not from .env location)
->"%~dp0server\.env" echo DATABASE_URL="file:%DBPATH%"
-
-:: Set env var for child processes -- goose-spawned MCP servers inherit this
+:: Set DATABASE_URL for child processes -- goose-spawned MCP servers inherit this.
 set "DATABASE_URL=file:%DBPATH%"
 
 :: Ensure goose is on PATH (default install location from download_cli.ps1)
 set "PATH=%USERPROFILE%\.local\bin;%PATH%"
 
-:: --- Load API keys from .env (single source of truth, see .env.sample) ---
-:: To rotate any key: edit %~dp0.env, save, re-run.
-if exist "%~dp0.env" (
-  for /f "usebackq eol=# delims=" %%i in ("%~dp0.env") do set "%%i"
-) else (
+:: API key presence check. Keys come from precrime_config.json via bootstrap_config.js.
+if "%OPENROUTER_API_KEY%"=="" if "%OPENAI_API_KEY%"=="" if "%ANTHROPIC_API_KEY%"=="" (
   echo.
-  echo  .env file not found at: %~dp0.env
-  echo  Copy .env.sample to .env and fill in your API keys.
-  echo.
-  pause
-  exit /b 1
-)
-
-if "%OPENROUTER_API_KEY%"=="" (
-  echo  OPENROUTER_API_KEY missing from .env. Add it and re-run.
-  pause & exit /b 1
-)
-if "%OPENROUTER_API_KEY%"=="sk-or-v1-REPLACE_ME" (
-  echo.
-  echo  API keys not set. Edit this file with your real keys, then restart:
-  echo    %~dp0.env
+  echo  No LLM API key in precrime_config.json apiKeys block.
+  echo  Edit: %~dp0precrime_config.json
   echo.
   pause & exit /b 1
 )
 if "%TAVILY_API_KEY%"=="" (
-  echo  TAVILY_API_KEY missing from .env. Add it and re-run.
-  pause & exit /b 1
-)
-if "%TAVILY_API_KEY%"=="tvly-REPLACE_ME" (
   echo.
-  echo  API keys not set. Edit this file with your real keys, then restart:
-  echo    %~dp0.env
+  echo  TAVILY_API_KEY missing in precrime_config.json apiKeys.tavily.
+  echo  Edit: %~dp0precrime_config.json
   echo.
   pause & exit /b 1
 )
+if "%GOOSE_MODEL%"=="" if not "%PRECRIME_LLM_MODEL%"=="" set "GOOSE_MODEL=%PRECRIME_LLM_MODEL%"
 if "%GOOSE_MODEL%"=="" set "GOOSE_MODEL=google/gemini-3-flash-preview"
 
 :: --- Write goose user config from template ---
@@ -115,7 +111,6 @@ if errorlevel 1 (
 
 :: GOOSE.md is the single entry point. init-wizard.md handles both interactive
 :: and headless modes (mode passed as arg; default interactive).
-:: GOOSE.md is injected via the --system flag at launch (see bottom of this file).
 
 :: Preflight: confirm goose is actually on PATH
 where goose >nul 2>&1
@@ -146,14 +141,6 @@ if errorlevel 1 (
 node "%~dp0server\sync-config.js" 2>nul
 
 :: Launch goose session.
-:: GOOSE.md is the routing table. --system can't hold the whole file (multi-line
-:: text gets mangled by Windows arg passing), so the system instruction is short:
-:: "Your first action is to read GOOSE.md from disk, then follow it." The model
-:: bootstraps itself via developer__shell type on turn 1.
-:: Use full path to goose.exe: cmd resolves CWD before PATH, so bare 'goose'
-:: would match THIS .bat file and infinite-loop.
-:: The -t flag sets the initial user message. "headless" in the message triggers
-:: headless mode per GOOSE.md routing table; otherwise "run" triggers interactive.
 if "%PRECRIME_MODE%"=="headless" (
   set "GOOSE_TRIGGER=headless precrime (database: %DBNAME%)"
 ) else (
