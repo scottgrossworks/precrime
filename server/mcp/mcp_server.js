@@ -14,6 +14,11 @@ const readline = require('readline');
 const fs = require('fs');
 const path = require('path');
 
+// Procedural cold/brewing/hot gates and the VALUE_PROP parser live in their own
+// pure, unit-tested helper modules (see classification.test.js / value_prop.test.js).
+const classification = require('./classification');
+const valueProp = require('./value_prop');
+
 const PRECRIME_ROOT = path.resolve(__dirname, '..', '..');
 
 // --- CRASH VISIBILITY ---
@@ -254,19 +259,19 @@ function handleToolsList(id) {
                         '',
                         'action="status": Read full system state in one call. Returns { config, stats, completeness, readyDrafts, brewingCount }. completeness is a derived check of whether config has the fields needed for the current defaultBookingAction. Use this at startup and between enrichment rounds.',
                         '',
-                        'action="configure": Update Config fields. Pass patch with any Config fields (companyName, companyEmail, businessDescription, activeEntities, defaultTrade, marketplaceEnabled, leadCaptureEnabled, leedzEmail, leedzSession, llmApiKey, llmProvider, llmBaseUrl, llmAnthropicVersion, llmMaxTokens, factletStaleDays, defaultBookingAction). Returns updated config.',
+                        'action="configure": Update Config fields. Pass patch with any Config fields (companyName, companyEmail, businessDescription, activeEntities, defaultTrade, marketplaceEnabled, leadCaptureEnabled, leedzEmail, leedzSession, llmApiKey, llmProvider, llmModel, llmBaseUrl, llmAnthropicVersion, llmMaxTokens, factletStaleDays, defaultBookingAction). Returns updated config.',
                         '',
                         'action="next": Atomically claim the next work item and return it fully hydrated. Pass entity="client" (default) or entity="booking". For clients: returns the client record with all linked factlets and bookings in one payload. The lastQueueCheck is stamped before return so no other agent claims it. Pass optional criteria to filter (company, name, draftStatus). Returns null if queue is empty. Response is automatically trimmed for context efficiency: dossier tail-clipped to last 2000 chars (or override via dossierLimit), factlets capped to 8 most recent (or override via factletLimit). Pass 0 to disable a cap. _clipped metadata is included if anything was trimmed.',
                         '',
-                        'action="save": Atomically persist client work in a single transaction. Two modes: (1) UPDATE existing client - pass id and patch with any of: dossierAppend, draft, draftStatus, targetUrls, intelScore, name, email, phone, company, website, clientNotes, segment, factlets[], bookings[]. (2) CREATE new client - omit id, patch must include name OR company. Company-only sparse records are allowed when relevant; enrichment fills person/email later. Optional fields: email, phone, website, segment, source, factlets[], bookings[]. Optionally pass session_id (returned by start_session) to log this save against an open workflow session. After persisting, runs score_target on the client AND re-scores every booking under that client, writing leed_ready status back only when the canonical DOCS/SCORING.json gate passes.',
+                        'action="save": Atomically persist client work in a single transaction. Two modes: (1) UPDATE existing client - pass id and patch with any of: dossierAppend, draft, draftStatus, targetUrls, intelScore, name, email, phone, company, website, clientNotes, segment, factlets[], bookings[]. (2) CREATE new client - omit id, patch must include name OR company. Company-only sparse records are allowed when relevant; enrichment fills person/email later. Optional fields: email, phone, website, segment, source, factlets[], bookings[]. Optionally pass session_id (returned by start_session) to log this save against an open workflow session. After persisting, refreshes the client enrichment signal AND re-classifies every booking under that client to cold / brewing / hot via the procedural gates (server/mcp/classification.js) plus the LLM product-market-fit judge. See DOCS/CLASSIFICATION.md.',
                         '',
                         'action="delete": Permanently remove a record. Pass target ("booking" | "client" | "factlet") and id. For target="client", any attached bookings and factlet links are removed too (cascade). Returns { deleted: true, target, id, cascadedBookings, cascadedFactlets }. Use this when the user says "delete this booking", "remove this client", "drop this factlet", or any imperative removal.',
                         '',
-                        'action="rescore": Re-evaluate every non-terminal booking against DOCS/SCORING.json and update status field (leed_ready or new) accordingly. Use after editing DOCS/SCORING.json gates or constants. Pass scope="all" (default), scope="leed_ready" to sanity-check the current queue, or scope=<clientId> to limit to one client. Returns counts: rescored, promoted, demoted, unchanged.',
+                        'action="rescore": Re-classify every booking to cold / brewing / hot (procedural gates + LLM judge). Use after editing DOCS/CLASSIFICATION.md policy or DOCS/SCORING.json knobs. Pass scope="all" (default), scope="hot" to sanity-check the current hot queue, or scope=<clientId> to limit to one client. Returns counts: rescored, changed, before/after status distribution.',
                         '',
                         'action="resolve_dates": STRUCTURED-ONLY. Server-side date validation + tz-aware epoch math. Required: start { year, month, day, hour, minute, ampm? }, end { year, month, day, hour, minute, ampm? }, timezone (IANA, e.g. "America/Los_Angeles"). Optional: zip (echoed only -- zip-to-tz derivation NOT supported), rawText (informational evidence only -- timezone smuggled inside rawText is REJECTED), sourceProof. The LLM is forbidden from computing epoch ms; it must only extract the structured fields. Returns { ok, st, et, startIso, endIso, timezone, zip, warnings } on success, or { ok:false, errors:[fieldName:reason] } on failure.',
                         '',
-                        'action="share_booking": ONLY normal path to marketplace posting. Required: bookingId, mode ("draft" | "post"). FORBIDDEN inputs: st, et (LLM-supplied epochs are rejected by name). Loads the Booking + Client, rescores via judgeAffected, requires status leed_ready, then calls resolve_dates internally with the Booking\'s structured date provenance. In "draft" mode returns the addLeed payload + humanReadable verification block. In "post" mode posts to Leedz and records leedId/sharedAt.',
+                        'action="share_booking": ONLY normal path to marketplace posting. Required: bookingId, mode ("draft" | "post"). FORBIDDEN inputs: st, et (LLM-supplied epochs are rejected by name). Loads the Booking + Client, rescores via judgeAffected, requires status hot, then calls resolve_dates internally with the Booking\'s structured date provenance. In "draft" mode returns the addLeed payload + humanReadable verification block. In "post" mode posts to Leedz and records leedId/sharedAt.',
                         '',
                         'action="start_session": Open a workflow session and receive a server-issued session_id. Pass workflow (string, e.g. "convention-leeds") and optional target_count (e.g. 5) and metadata (object). The session_id MUST be passed to subsequent save calls in this workflow so the server can log each save. Use this BEFORE any save calls when you intend to summarize results — the report_session call will return the truth.',
                         '',
@@ -351,6 +356,18 @@ function handleToolsList(id) {
                                 enum: ['draft', 'post'],
                                 description: 'For action=share_booking: "draft" returns the payload + humanReadable; "post" posts to Leedz.'
                             },
+                            titleDraft: {
+                                type: 'string',
+                                description: 'Optional share_booking prose override for payload.ti only. No emails, phones, epochs, or unsupported date/time claims.'
+                            },
+                            dtDraft: {
+                                type: 'string',
+                                description: 'Optional share_booking prose override for payload.dt only. Vendor-facing event prose; additional useful contact info is allowed when evidence-backed. No epochs, payload fields, or unsupported date/time claims.'
+                            },
+                            rqDraft: {
+                                type: 'string',
+                                description: 'Optional share_booking prose override for payload.rq only. Requirements/follow-up prose; additional useful contact info is allowed when evidence-backed. No epochs, payload fields, or unsupported date/time claims.'
+                            },
                             st: {
                                 type: 'number',
                                 description: 'FORBIDDEN on share_booking. The LLM is not allowed to supply marketplace epoch ms. Pass structured date pieces and let MCP resolve them.'
@@ -418,7 +435,7 @@ function handleToolsList(id) {
                             },
                             scope: {
                                 type: 'string',
-                                description: 'For action=rescore only. "all" (default) re-scores every non-terminal booking. "leed_ready" sanity-checks only the current ready queue. Or pass a clientId to re-score one client only. Use after editing DOCS/SCORING.json.'
+                                description: 'For action=rescore only. "all" (default) re-classifies every booking. "hot" sanity-checks only the current hot queue. Or pass a clientId to re-classify one client only. Use after editing DOCS/CLASSIFICATION.md or DOCS/SCORING.json.'
                             },
                             entity: {
                                 type: 'string',
@@ -523,127 +540,6 @@ function isGenericEmail(email) {
     return GENERIC_EMAIL_PREFIXES.has(prefix);
 }
 
-function computeBookingScore(booking, client) {
-    const b = {};
-    const bookingPolicy = SCORING.booking || {};
-    const weights = bookingPolicy.scoreWeights || {};
-    const datePolicy = bookingPolicy.date || {};
-    const locationPolicy = bookingPolicy.location || {};
-    const contactPolicy = bookingPolicy.contact || {};
-
-    b.trade = booking.trade ? (bookingPolicy.trade?.present ?? weights.trade ?? 20) : (bookingPolicy.trade?.missing ?? 0);
-
-    // Date: 0, 5, 10, or 20
-    if (booking.startDate) {
-        if (!booking.endDate) {
-            b.date = 20;
-        } else {
-            const start = new Date(booking.startDate);
-            const end   = new Date(booking.endDate);
-            const spanDays = (end - start) / (1000 * 60 * 60 * 24);
-            if (spanDays <= (datePolicy.tightWindowMaxDays ?? 7))       b.date = datePolicy.tightWindow ?? weights.date ?? 20;
-            else if (spanDays <= (datePolicy.roughWindowMaxDays ?? 30)) b.date = datePolicy.roughWindow ?? 10;
-            else                                                        b.date = datePolicy.ongoing ?? 5;
-        }
-    } else {
-        b.date = datePolicy.missing ?? 0;
-    }
-
-    // Location: 0, 5, 10, 15, or 20
-    const loc    = (booking.location || '').trim();
-    const hasZip = !!(booking.zip && booking.zip.trim());
-    const patterns = locationPolicy.patterns || {};
-    const tiers = locationPolicy.tiers || {};
-    const CAMPUS_VAGUE = new RegExp(patterns.campusVague || '\\b(campus|university|college|complex|fairgrounds|convention center|park)\\b', 'i');
-    const HAS_VENUE    = new RegExp(patterns.venue || '\\b(hall|arena|stadium|ballroom|theater|theatre|auditorium|pavilion|lawn|plaza|center|centre|gym|library|room|building|bldg)\\b', 'i');
-    const HAS_STREET   = new RegExp(patterns.street || '\\d+\\s+\\w+\\s+(st|street|ave|avenue|blvd|boulevard|dr|drive|rd|road|way|ln|lane|ct|court|pl|place)\\b', 'i');
-
-    if (loc && hasZip) {
-        const hasStreet = HAS_STREET.test(loc);
-        const hasVenue  = HAS_VENUE.test(loc);
-        const isVague   = CAMPUS_VAGUE.test(loc) && !hasVenue;
-        if (hasStreet && hasVenue)       b.location = tiers.streetAndVenue ?? weights.location ?? 20;
-        else if (hasStreet && !isVague)  b.location = tiers.cleanStreet ?? 15;
-        else if (hasVenue)               b.location = tiers.namedVenue ?? 15;
-        else if (hasStreet && isVague)   b.location = tiers.streetInVague ?? 10;
-        else if (isVague)                b.location = tiers.vagueOnly ?? 10;
-        else                             b.location = tiers.bareCity ?? 5;
-    } else if (hasZip || loc) {
-        b.location = tiers.partial ?? 5;
-    } else {
-        b.location = tiers.none ?? 0;
-    }
-
-    // Contact: 0, 10, 15, or 20
-    const hasName      = !!(client?.name && client.name.trim());
-    const email        = (client?.email || '').trim();
-    const generic      = email ? isGenericEmail(email) : false;
-    const hasNamedEmail = email && !generic;
-    if (hasName && hasNamedEmail) b.contact = contactPolicy.nameAndNamedEmail ?? weights.contact ?? 20;
-    else if (hasNamedEmail)       b.contact = contactPolicy.namedEmailOnly ?? 15;
-    else if (hasName)             b.contact = contactPolicy.nameOnly ?? 10;
-    else                          b.contact = contactPolicy.none ?? 0;
-
-    // Description: 0 or 10
-    const desc      = (booking.description || '').trim();
-    const wordCount = desc ? desc.split(/\s+/).length : 0;
-    b.description = wordCount >= (bookingPolicy.description?.minWords ?? 10) ? (bookingPolicy.description?.points ?? weights.description ?? 10) : 0;
-
-    // Time: 0 or 10
-    const hasTime     = !!(booking.startTime && booking.startTime.trim());
-    const hasDuration = !!(booking.duration && booking.duration > 0);
-    b.time = (hasTime || hasDuration) ? (bookingPolicy.time?.points ?? weights.time ?? 10) : 0;
-
-    const total = b.trade + b.date + b.location + b.contact + b.description + b.time;
-
-    // Data-only readiness is advisory. computeBookingTargetScore re-runs the
-    // canonical DOCS/SCORING.json leedReady gate with factlets and API fields.
-    const dataReady =
-        total >= (bookingPolicy.minimumForLeedReady ?? 90) &&
-        b.trade >= (bookingPolicy.trade?.present ?? weights.trade ?? 20) &&
-        b.date >= (datePolicy.singleDay ?? weights.date ?? 20) &&
-        b.location >= (locationPolicy.tiers?.cleanStreet ?? 15) &&
-        b.contact >= (contactPolicy.nameAndNamedEmail ?? weights.contact ?? 20) &&
-        b.description >= (bookingPolicy.description?.points ?? weights.description ?? 10);
-    // Backward-compat alias used by legacy callers. This is NOT authoritative.
-    const shareReady = dataReady;
-
-    // Contact quality label
-    let contactQuality;
-    if (b.contact === 20)      contactQuality = 'named_email_and_name';
-    else if (b.contact === 15) contactQuality = 'named_email';
-    else if (b.contact === 10) contactQuality = 'name_only';
-    else if (generic)          contactQuality = 'generic_email';
-    else                       contactQuality = 'none';
-
-    // Recommended next action
-    let action = null;
-    if (!shareReady) {
-        if (b.trade === 0) {
-            action = 'CLASSIFY: Assign a trade category before sharing. addLeed requires tn.';
-        } else if (b.contact === 0 && generic) {
-            action = `ENRICH: ${email} is a generic inbox. Find a named contact via website, LinkedIn, or Facebook.`;
-        } else if (b.contact === 0) {
-            action = 'ENRICH: No contact found. Search for a named person at this organization.';
-        } else if (b.location < 15) {
-            action = 'ENRICH: Location is not specific enough to share. A vendor needs a real venue address they can show up to. Find the specific hall, lawn, or room.';
-        } else if (b.date < 20) {
-            if (!booking.startDate) {
-                action = 'ENRICH: No event date. Search or send probe email to confirm timing.';
-            } else {
-                action = 'ENRICH: Date range is too broad to be a single bookable event. Find specific event dates or sessions.';
-            }
-        } else if (b.time === 0) {
-            action = 'ENRICH: No start time or duration. A vendor needs hours to quote a price.';
-        } else if (b.description === 0) {
-            action = 'ENRICH: No description. Scrape event page or add context about the opportunity.';
-        } else {
-            action = 'OUTREACH: Send probe email to confirm missing details.';
-        }
-    }
-
-    return { total, breakdown: b, shareReady, contactQuality, action };
-}
 
 // =============================================================================
 // SCORING POLICY LOADED FROM DOCS/SCORING.json AT STARTUP
@@ -659,45 +555,34 @@ try {
     process.exit(1);
 }
 
-const SIGNAL_POINTS = SCORING.client.signalPoints;
 const FACTLET_THRESHOLD = SCORING.factlet.threshold;
 const FACTLET_POINTS_PER = SCORING.factlet.pointsPerFreshFactlet;
 const DRAFT_THRESHOLD_CLIENT = SCORING.client.draftThreshold;
 GENERIC_EMAIL_PREFIXES = new Set(SCORING.booking.genericEmailPrefixes || []);
 
-/**
- * Generic gate evaluator. Reads a gate definition from SCORING.gates and
- * tests every rule against the provided context.  Returns true only if EVERY
- * rule passes.  This is the only place gate logic exists -- if the result
- * is wrong, edit DOCS/SCORING.json (the data), not this function.
- *
- * @param {object} gate - { all: [{field, op, value}, ...] }
- * @param {object} ctx  - field name -> value
- * @returns {boolean}
- */
-function evaluateGate(gate, ctx) {
-    if (!gate || !Array.isArray(gate.all)) return false;
-    for (const rule of gate.all) {
-        const v = ctx[rule.field];
-        let pass;
-        switch (rule.op) {
-            case '===':     pass = v === rule.value; break;
-            case '>=':      pass = typeof v === 'number' && v >= rule.value; break;
-            case '<=':      pass = typeof v === 'number' && v <= rule.value; break;
-            case 'present': pass = v !== null && v !== undefined && v !== ''; break;
-            case 'matches': pass = typeof v === 'string' && new RegExp(rule.value).test(v); break;
-            case 'directEmail': pass = typeof v === 'string' && v.includes('@') && !isGenericEmail(v); break;
-            case 'afterField': {
-                const other = ctx[rule.value];
-                pass = v !== null && v !== undefined && other !== null && other !== undefined && Number(v) > Number(other);
-                break;
-            }
-            default:        pass = false;
-        }
-        if (!pass) return false;
-    }
-    return true;
+// VALUE_PROP profile -- the user's business, parsed from DOCS/VALUE_PROP.md and fed
+// to the LLM judge so it can reason about product-market fit. Warn (not fatal) when
+// incomplete, mirroring the TRADE-gate philosophy: a thin VALUE_PROP yields weak
+// judgments, but the server should still boot.
+const VALUE_PROP_PATH = path.resolve(PRECRIME_ROOT, 'DOCS', 'VALUE_PROP.md');
+let VALUE_PROP = { trade: '' };
+try {
+    VALUE_PROP = valueProp.parse(fs.readFileSync(VALUE_PROP_PATH, 'utf8'));
+    const vpCheck = valueProp.validate(VALUE_PROP);
+    if (!vpCheck.ok) console.error(`[MCP] VALUE_PROP.md incomplete: missing ${vpCheck.missing.join(', ')}. Fill in DOCS/VALUE_PROP.md.`);
+} catch (e) {
+    console.error(`[MCP] VALUE_PROP.md missing or unreadable: ${e.message}`);
 }
+
+// Server-side LLM prompts (DOCS/PROMPTS.json). Edit the prose, restart the server.
+const PROMPTS_PATH = path.resolve(PRECRIME_ROOT, 'DOCS', 'PROMPTS.json');
+let PROMPTS = { judge: { lines: [] }, judgeMode: {} };
+try {
+    PROMPTS = JSON.parse(fs.readFileSync(PROMPTS_PATH, 'utf8'));
+} catch (e) {
+    console.error(`[MCP] DOCS/PROMPTS.json missing or malformed: ${e.message}`);
+}
+
 
 async function getFactletStaleDays() {
     const cfg = await prisma.config.findFirst();
@@ -744,18 +629,89 @@ async function findLiveFactletsForClient(client, staleDays) {
     });
 }
 
-function computeFactletStats(factletRows, staleDays) {
+const VALUE_PROP_TOKEN_STOPWORDS = new Set([
+    'about', 'after', 'again', 'against', 'also', 'and', 'because', 'before',
+    'being', 'between', 'business', 'client', 'clients', 'company', 'could',
+    'event', 'events', 'from', 'have', 'into', 'local', 'market', 'offer',
+    'party', 'people', 'service', 'services', 'that', 'their', 'them', 'there',
+    'these', 'they', 'this', 'through', 'vendor', 'vendors', 'were', 'what',
+    'when', 'where', 'which', 'with', 'would', 'your'
+]);
+
+function normalizeDemandText(value) {
+    return String(value || '').toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim();
+}
+
+function collectValuePropDemandTerms(booking, cfg) {
+    const phrases = new Set();
+    const tokens = new Set();
+
+    function addPhrase(value) {
+        const normalized = normalizeDemandText(value);
+        if (!normalized || normalized.length < 4) return;
+        phrases.add(normalized);
+        for (const tok of normalized.split(/\s+/)) {
+            if (tok.length >= 4 && !VALUE_PROP_TOKEN_STOPWORDS.has(tok)) tokens.add(tok);
+        }
+    }
+
+    addPhrase(booking?.trade);
+    addPhrase(cfg?.defaultTrade);
+
+    const description = normalizeDemandText(cfg?.businessDescription);
+    if (description) {
+        for (const tok of description.split(/\s+/)) {
+            if (tok.length >= 5 && !VALUE_PROP_TOKEN_STOPWORDS.has(tok)) tokens.add(tok);
+        }
+    }
+
+    return { phrases: Array.from(phrases), tokens: Array.from(tokens) };
+}
+
+function factletMentionsValueProp(factlet, booking, cfg) {
+    const terms = collectValuePropDemandTerms(booking, cfg);
+    if (terms.phrases.length === 0 && terms.tokens.length === 0) return false;
+
+    const hay = normalizeDemandText(`${factlet?.content || ''} ${factlet?.source || ''}`);
+    if (!hay) return false;
+
+    if (terms.phrases.some(phrase => hay.includes(phrase))) return true;
+
+    let hits = 0;
+    for (const tok of terms.tokens) {
+        if (hay.includes(tok)) hits++;
+        if (hits >= 2) return true;
+    }
+    return false;
+}
+
+function computeFactletStats(factletRows, staleDays, opts = {}) {
     const now = Date.now();
     let score = 0;
     let freshCount = 0;
+    let demandScore = 0;
+    let demandFreshCount = 0;
+    const demandFactletIds = [];
     for (const f of factletRows) {
         if (!f || !f.createdAt) continue;
         const ageDays = (now - new Date(f.createdAt).getTime()) / (1000 * 60 * 60 * 24);
         const weight = Math.max(0, 1 - ageDays / staleDays);
         if (weight > 0) freshCount++;
         score += weight;
+
+        if (weight > 0 && factletMentionsValueProp(f, opts.booking || null, opts.config || null)) {
+            demandFreshCount++;
+            demandScore += weight;
+            if (f.id) demandFactletIds.push(f.id);
+        }
     }
-    return { score, count: factletRows.length, freshCount };
+    return { score, count: factletRows.length, freshCount, demandScore, demandFreshCount, demandFactletIds };
+}
+
+function computeFactletPointScore(stats) {
+    const demandPoints = SCORING.factlet.pointsPerDemandFactlet || (FACTLET_POINTS_PER * 3);
+    const demandBonus = Math.max(0, demandPoints - FACTLET_POINTS_PER);
+    return Math.round((stats.score * FACTLET_POINTS_PER) + (stats.demandScore * demandBonus));
 }
 
 async function computeClientScore(clientId, intelOverride) {
@@ -766,7 +722,8 @@ async function computeClientScore(clientId, intelOverride) {
     // Live Factlet relevance via cheap content/source overlap on the Client's
     // stable identifiers (name / company / website host). No join table.
     const liveFactlets = await findLiveFactletsForClient(client, staleDays);
-    const fs = computeFactletStats(liveFactlets, staleDays);
+    const cfg = await prisma.config.findFirst();
+    const fs = computeFactletStats(liveFactlets, staleDays, { config: cfg });
 
     const hasName         = !!(client.name && client.name.trim());
     const email           = (client.email || '').trim();
@@ -775,7 +732,7 @@ async function computeClientScore(clientId, intelOverride) {
     const contactGate     = hasName && hasDirectEmail;
 
     const intelScore    = (intelOverride !== null && intelOverride !== undefined) ? intelOverride : (client.intelScore || 0);
-    const dossierScore  = intelScore + Math.round(fs.score * FACTLET_POINTS_PER);
+    const dossierScore  = intelScore + computeFactletPointScore(fs);
     const draftReady    = contactGate && dossierScore >= DRAFT_THRESHOLD_CLIENT;
 
     const updateData = { dossierScore, contactGate };
@@ -814,40 +771,13 @@ async function computeClientScore(clientId, intelOverride) {
     };
 }
 
-/**
- * Demand signal detection. The core PRECRIME act (see FOUNDATION.md).
- * Returns { present, type, reason }.
- *   - explicit: a demand verb pattern matches the booking text
- *   - inferred: enough fresh relevant factlets stacked (Prom Pattern proxy)
- *   - llm_inferred: LLM judged the text expresses demand for the trade
- *   - none: neither
- * Never stored. Recomputed every score from current evidence.
- *
- * LLM fallback fires only when:
- *   - procedural (regex + factlet count) returned none
- *   - booking has substantive text (>= MIN_LLM_WORDS) AND a trade
- *   - Config.llmApiKey is set
- * Results cached in-memory for 5 minutes keyed by hash of (trade + text)
- * so repeated saves/rescores of the same booking do not re-query.
- */
-const MIN_LLM_WORDS = 30;
-const LLM_CACHE_TTL_MS = 5 * 60 * 1000;
-const _llmCache = new Map();   // key -> { value, expires }
 
-function _llmCacheGet(key) {
-    const hit = _llmCache.get(key);
-    if (!hit) return null;
-    if (hit.expires < Date.now()) { _llmCache.delete(key); return null; }
-    return hit.value;
-}
-function _llmCacheSet(key, value) {
-    _llmCache.set(key, { value, expires: Date.now() + LLM_CACHE_TTL_MS });
-}
-
-async function _llmJudgeDemand(trade, text, cfg) {
+// Generic one-shot LLM completion. Provider, base URL, and model are all
+// configurable (Config.llmProvider / llmBaseUrl / llmModel) so deployments can
+// point at OpenRouter and trial cheap models. Returns the text, or null on failure.
+async function _llmComplete(prompt, cfg, maxTokens = 64) {
     if (!cfg || !cfg.llmApiKey) return null;
     const provider = (cfg.llmProvider || 'anthropic').toLowerCase();
-    const prompt = `Trade: ${trade}\nBooking text:\n"""${text.slice(0, 2000)}"""\n\nDoes this text describe a specific buyer who needs or will imminently need a ${trade} for a specific event? Answer with one word: YES or NO.`;
     try {
         if (provider === 'anthropic') {
             const res = await fetch((cfg.llmBaseUrl || 'https://api.anthropic.com') + '/v1/messages', {
@@ -858,68 +788,69 @@ async function _llmJudgeDemand(trade, text, cfg) {
                     'anthropic-version': cfg.llmAnthropicVersion || '2023-06-01'
                 },
                 body: JSON.stringify({
-                    model: 'claude-haiku-4-5-20251001',
-                    max_tokens: 8,
+                    model: cfg.llmModel || 'claude-haiku-4-5-20251001',
+                    max_tokens: maxTokens,
                     messages: [{ role: 'user', content: prompt }]
                 })
             });
-            if (!res.ok) { console.error(`[demand-llm] http ${res.status}`); return null; }
+            if (!res.ok) { console.error(`[judge-llm] http ${res.status}`); return null; }
             const j = await res.json();
-            const out = (j.content && j.content[0] && j.content[0].text || '').trim().toUpperCase();
-            return out.startsWith('YES');
+            return (j.content && j.content[0] && j.content[0].text || '').trim();
         }
-        // generic openai-compatible
-        const res = await fetch((cfg.llmBaseUrl || 'https://api.openai.com') + '/v1/chat/completions', {
+        // openai-compatible (openai, openrouter, local). Append /v1/chat/completions
+        // unless the configured base already ends in /v1 (avoids a double /v1).
+        const base = (cfg.llmBaseUrl || 'https://api.openai.com').replace(/\/+$/, '');
+        const url = /\/v1$/.test(base) ? base + '/chat/completions' : base + '/v1/chat/completions';
+        const headers = { 'content-type': 'application/json', 'authorization': `Bearer ${cfg.llmApiKey}` };
+        if (provider === 'openrouter') {
+            headers['HTTP-Referer'] = 'https://www.theleedz.com';
+            headers['X-Title'] = 'PRECRIME';
+        }
+        const res = await fetch(url, {
             method: 'POST',
-            headers: { 'content-type': 'application/json', 'authorization': `Bearer ${cfg.llmApiKey}` },
+            headers,
             body: JSON.stringify({
                 model: cfg.llmModel || 'gpt-4o-mini',
-                max_tokens: 8,
+                max_tokens: maxTokens,
                 messages: [{ role: 'user', content: prompt }]
             })
         });
-        if (!res.ok) { console.error(`[demand-llm] http ${res.status}`); return null; }
+        if (!res.ok) { console.error(`[judge-llm] http ${res.status}`); return null; }
         const j = await res.json();
-        const out = (j.choices && j.choices[0] && j.choices[0].message && j.choices[0].message.content || '').trim().toUpperCase();
-        return out.startsWith('YES');
+        return (j.choices && j.choices[0] && j.choices[0].message && j.choices[0].message.content || '').trim();
     } catch (e) {
-        console.error('[demand-llm] error:', e.message);
+        console.error('[judge-llm] error:', e.message);
         return null;
     }
 }
 
-async function detectDemandSignal(booking, freshRelevantFactletCount, cfg) {
-    const ds = SCORING.demandSignal || {};
-    const text = [booking.title, booking.description, booking.notes]
-        .filter(Boolean).join(' ');
-    const lower = text.toLowerCase();
-    if (lower) {
-        for (const pat of ds.explicitPatterns || []) {
-            try {
-                if (new RegExp(pat, 'i').test(lower)) {
-                    return { present: true, type: 'explicit', reason: `matched /${pat}/` };
-                }
-            } catch (_) { /* skip malformed pattern */ }
-        }
-    }
-    const threshold = ds.factletsForInferred ?? 3;
-    if (freshRelevantFactletCount >= threshold) {
-        return { present: true, type: 'inferred', reason: `${freshRelevantFactletCount} fresh relevant factlets >= ${threshold}` };
-    }
-    // LLM fallback
-    const trade = booking.trade;
-    if (trade && text && text.split(/\s+/).length >= MIN_LLM_WORDS && cfg && cfg.llmApiKey) {
-        const key = `${trade}::${text.slice(0, 4000)}`;
-        let verdict = _llmCacheGet(key);
-        if (verdict === null) {
-            verdict = await _llmJudgeDemand(trade, text, cfg);
-            if (verdict !== null) _llmCacheSet(key, verdict);
-        }
-        if (verdict === true) {
-            return { present: true, type: 'llm_inferred', reason: `LLM judged text expresses demand for ${trade}` };
-        }
-    }
-    return { present: false, type: 'none', reason: null };
+// The headless objective picks the LLM bar. Interactive (no single objective)
+// uses the lower outreach bar so the user sees every candidate.
+function bookingActionToMode(defaultBookingAction) {
+    return defaultBookingAction === 'leedz_api' ? 'marketplace' : 'outreach';
+}
+
+// The ONLY LLM call in classification: the promote-gate from a procedurally
+// hot-eligible booking to hot. Judges product-market fit between VALUE_PROP and
+// the Client.dossier + Booking. Prompt comes from DOCS/PROMPTS.json. Returns
+// { state: 'hot' | 'brewing', reason }. Defaults to brewing: if we cannot get a
+// confident hot, keep enriching.
+async function judgeLeed(vp, dossier, booking, mode, cfg) {
+    if (!cfg || !cfg.llmApiKey) return { state: 'brewing', reason: 'no_llm_key' };
+    const modeGuidance = (PROMPTS.judgeMode && (PROMPTS.judgeMode[mode] || PROMPTS.judgeMode.outreach)) || '';
+    const isoDate = booking.startDate ? new Date(booking.startDate).toISOString().slice(0, 10) : '';
+    const bookingLine = `title ${booking.title || ''} | date ${isoDate} | location ${booking.location || ''} | trade ${booking.trade || ''} | notes ${String(booking.notes || '').slice(0, 500)}`;
+    const prompt = (PROMPTS.judge && Array.isArray(PROMPTS.judge.lines) ? PROMPTS.judge.lines.join('\n') : '')
+        .replace('{valueProp}', JSON.stringify(vp, null, 2))
+        .replace('{dossier}', String(dossier || '(empty dossier)').slice(0, 6000))
+        .replace('{bookingLine}', bookingLine)
+        .replace('{modeGuidance}', modeGuidance);
+
+    const out = await _llmComplete(prompt, cfg);
+    if (out === null) return { state: 'brewing', reason: 'judge_unavailable' };
+    const word = out.trim().toLowerCase();
+    if (word.startsWith('hot')) return { state: 'hot', reason: out.trim().slice(0, 200) };
+    return { state: 'brewing', reason: out.trim().slice(0, 200) || 'judge_not_hot' };
 }
 
 async function computeBookingTargetScore(bookingId) {
@@ -929,140 +860,53 @@ async function computeBookingTargetScore(bookingId) {
     });
     if (!booking) return null;
 
-    // startDate passed = event passed. Reset to brewing for next cycle.
-    // leedId bookings are owned by the marketplace; never reset.
-    if (booking.startDate && new Date(booking.startDate).getTime() < Date.now() && !booking.leedId) {
-        await prisma.booking.update({
-            where: { id: bookingId },
-            data: { status: 'brewing', bookingScore: 0 }
-        });
-        return {
-            targetType: 'booking',
-            targetId:   bookingId,
-            total:      0,
-            status:     'brewing',
-            shareReady: false,
-            action:     'DATE_PASSED_RESET: startDate is past. Reset to brewing.'
-        };
-    }
-
     const client = booking.client;
+    const cfg = await prisma.config.findFirst();
     const staleDays = await getFactletStaleDays();
 
-    const data = computeBookingScore(booking, client);
-    // Live Factlet relevance via content/source overlap on the Client's stable
-    // identifiers. There is no join table; Factlet rows stand alone.
+    // Live factlet count drives the COLD "no_factlets" gate and feeds the client
+    // enrichment score below.
     const liveFactlets = client ? await findLiveFactletsForClient(client, staleDays) : [];
-    const fs = computeFactletStats(liveFactlets, staleDays);
-    const factletMultiplier = Math.min(1.0, fs.score / FACTLET_THRESHOLD);
+    const fs = computeFactletStats(liveFactlets, staleDays, { booking, config: cfg });
 
-    // Score = booking completeness only. Factlets feed demand-signal detection
-    // (see detectDemandSignal), NOT score suppression. The leedReady gate already
-    // requires demandSignal === true, so the old multiplier double-counted factlets.
-    const total = data.total;
-
-    // Demand signal — the core PRECRIME act. Recomputed every score, never stored.
-    const cfg = await prisma.config.findFirst();
-    const demand = await detectDemandSignal(booking, fs.freshCount, cfg);
-
-    // Authoritative status decision: evaluate gates against canonical DOCS/SCORING.json.
-    // This is the only place that assigns booking status.
-    const fullCtx = {
-        score:                total,
-        dataScore:            data.total,
-        trade:                data.breakdown.trade,
-        date:                 data.breakdown.date,
-        location:             data.breakdown.location,
-        contact:              data.breakdown.contact,
-        tn:                   booking.trade || '',
-        ti:                   booking.title || booking.description || '',
-        lc:                   booking.location || '',
-        zp:                   booking.zip || '',
-        st:                   booking.startDate ? new Date(booking.startDate).getTime() : null,
-        et:                   booking.endDate ? new Date(booking.endDate).getTime() : null,
-        cn:                   client?.name || '',
-        em:                   client?.email || '',
-        dt:                   booking.description || booking.notes || '',
-        pr:                   0,
-        sh:                   '*',
-        sourceUrl:            booking.sourceUrl || '',
-        hasZip:               !!(booking.zip && String(booking.zip).trim()),
-        hasTime:              !!((booking.startTime && booking.startTime.trim()) || (booking.duration && booking.duration > 0)),
-        factletMultiplier,
-        freshRelevantFactlets: fs.freshCount,
-        demandSignal:         demand.present
-    };
-    const gates = SCORING.booking.gates || {};
-    let leedReady    = evaluateGate(gates.leedReady, fullCtx);
-    const outreachReady = evaluateGate(gates.outreachReady, fullCtx);
-
-    // Override: an already-posted leed (leedId set) is proven leedworthy.
-    // Bypass demand re-evaluation so it stays leed_ready after a re-tag.
-    if (!leedReady && booking.leedId) {
-        leedReady = true;
-    }
-
-    // Highest passing gate wins. brewing is the fallback.
-    let status;
-    if (leedReady)         status = 'leed_ready';
-    else if (outreachReady) status = 'outreach_ready';
-    else                    status = 'brewing';
-
-    // hot is a derived flag: leed_ready AND startDate within hotDaysOut window.
-    const hotDaysOut = (SCORING.demandSignal && SCORING.demandSignal.hotDaysOut) ?? 14;
-    let hot = false;
-    if (leedReady && booking.startDate) {
-        const daysOut = (new Date(booking.startDate).getTime() - Date.now()) / 86400000;
-        hot = daysOut >= 0 && daysOut <= hotDaysOut;
-    }
-
-    // Back-compat alias used by legacy callers.
-    const shareReady = leedReady;
-
-    const draftReady = evaluateGate(SCORING.booking.gates.draftReady, {
-        shareReadyDataOnly: data.shareReady,
-        contactGate: data.breakdown.contact === 20,
-        dossierScore: total,
-        factletMultiplier
+    // Procedural classification first (deterministic, no LLM): cold / brewing /
+    // hot_eligible. See DOCS/CLASSIFICATION.md and classification.js.
+    const futureMinHours = (SCORING.classification && SCORING.classification.futureMinHours) ?? 12;
+    const proc = classification.classify(client, booking, {
+        factletCount: fs.count,
+        futureMinHours,
+        genericEmailPrefixes: (SCORING.booking && SCORING.booking.genericEmailPrefixes) || []
     });
 
-    await prisma.booking.update({
-        where: { id: bookingId },
-        data: {
-            bookingScore:   total,
-            factletScore:   Math.round(fs.score),
-            contactQuality: data.contactQuality
-        }
-    });
+    let status = proc.state === 'hot_eligible' ? 'brewing' : proc.state;
+    let reason = proc.reason || (proc.missing && proc.missing.length ? `missing: ${proc.missing.join(', ')}` : null);
 
-    let action = data.action;
-    if (status === 'outreach_ready' && !demand.present) {
-        action = `ENRICH_FOR_DEMAND: Booking is outreach_ready. To promote to leed_ready, find a demand signal: either explicit request in the source text, or ${SCORING.demandSignal.factletsForInferred} fresh relevant factlets stacking the Prom Pattern (decision-maker, event, precedent purchase, vocal customer, thematic fit).`;
-    } else if (status === 'leed_ready' && demand.type === 'inferred' && factletMultiplier < 1.0) {
-        action = `ENRICH_FACTLETS: leed_ready on inferred demand. Strengthen with more fresh relevant factlets (have ${fs.freshCount}, threshold ${FACTLET_THRESHOLD}).`;
+    // Only a procedurally hot-eligible leed reaches the LLM. judgeLeed is the sole
+    // promote-gate to hot, judging product-market fit (mode-aware).
+    if (proc.state === 'hot_eligible') {
+        const mode = bookingActionToMode(cfg && cfg.defaultBookingAction);
+        const verdict = await judgeLeed(VALUE_PROP, (client && client.dossier) || '', booking, mode, cfg);
+        status = verdict.state;          // 'hot' or 'brewing'
+        reason = verdict.reason || reason;
     }
+
+    // Keep the client enrichment signal (dossierScore / contactGate) fresh. KTD4:
+    // dossierScore is an internal enrichment-priority signal, never a promotion gate.
+    if (client) await computeClientScore(client.id, null);
+
+    await prisma.booking.update({ where: { id: bookingId }, data: { status } });
 
     return {
         targetType: 'booking',
         targetId:   bookingId,
-        total,
         status,
-        hot,
-        shareReady,
-        draftReady,
-        demandSignal: demand,
+        reason,
         components: {
-            dataScore:         data.total,
-            dataBreakdown:     data.breakdown,
-            leedGate:          fullCtx,
-            factletScore:      Math.round(fs.score * 100) / 100,
+            procedural:        proc,
             factletCount:      fs.count,
             factletFreshCount: fs.freshCount,
-            factletMultiplier: Math.round(factletMultiplier * 100) / 100,
-            factletStaleDays:  staleDays,
-            contactQuality:    data.contactQuality
-        },
-        action
+            factletStaleDays:  staleDays
+        }
     };
 }
 
@@ -1239,10 +1083,6 @@ function looksLikeHomepageRedirect(originalUrl, finalUrl) {
     return original.host === final.host && original.path !== '/' && final.path === '/';
 }
 
-function extractYear(value) {
-    const m = String(value || '').match(/\b(20\d{2})\b/);
-    return m ? m[1] : null;
-}
 
 function isStrictDateValue(value) {
     if (value instanceof Date) return !Number.isNaN(value.getTime());
@@ -1707,18 +1547,6 @@ async function resolveEventDates(args = {}) {
     };
 }
 
-function proofTermsFromText(value) {
-    const stop = new Set([
-        'about', 'after', 'again', 'event', 'events', 'festival', 'tickets',
-        'market', 'vendor', 'vendors', 'with', 'from', 'this', 'that', 'their',
-        'there', 'will', 'have', 'city', 'county', 'center', 'centre'
-    ]);
-    const words = String(value || '')
-        .toLowerCase()
-        .replace(/https?:\/\/\S+/g, ' ')
-        .match(/[a-z0-9][a-z0-9'-]{3,}/g) || [];
-    return [...new Set(words.filter(w => !stop.has(w)))].slice(0, 12);
-}
 
 async function fetchUrlTextForProof(url) {
     const controller = new AbortController();
@@ -1770,49 +1598,6 @@ async function verifyEvidenceUrl(url, options = {}) {
     return { ok: true, status: fetched.status, finalUrl: fetched.finalUrl };
 }
 
-async function validatePatchEvidenceUrls(sessionId, patch) {
-    const failures = [];
-
-    if (Array.isArray(patch.factlets)) {
-        for (const f of patch.factlets) {
-            const url = f.sourceUrl || f.url || (isHttpUrl(f.source) ? f.source : null);
-            if (!url) continue;
-            const expectedYear = f.expectedYear || extractYear(f.content);
-            const proofTerms = proofTermsFromText(f.content);
-            const result = await verifyEvidenceUrl(url, { expectedYear, proofTerms });
-            if (!result.ok) failures.push({ kind: 'factlet', url, reason: result.reason });
-        }
-    }
-
-    if (Array.isArray(patch.bookings)) {
-        for (const b of patch.bookings) {
-            const url = b.sourceUrl;
-            if (!url) continue;
-            const expectedYear = extractYear(b.startDate) || extractYear(b.endDate) ||
-                extractYear(b.title) || extractYear(b.description);
-            const proofTerms = proofTermsFromText([b.title, b.location, b.description].filter(Boolean).join(' '));
-            const result = await verifyEvidenceUrl(url, { expectedYear, proofTerms });
-            if (!result.ok) failures.push({ kind: 'booking', url, reason: result.reason });
-            if (b.startDate && isStrictDateValue(b.startDate)) {
-                const start = strictDateToDate(b.startDate);
-                const end = b.endDate && isStrictDateValue(b.endDate) ? strictDateToDate(b.endDate) : start;
-                const dateProof = await verifyResolvedDateSource(url, {
-                    year: start.getUTCFullYear(),
-                    startMonth: start.getUTCMonth() + 1,
-                    startDay: start.getUTCDate(),
-                    endMonth: end.getUTCMonth() + 1,
-                    endDay: end.getUTCDate()
-                });
-                if (!dateProof.ok) failures.push({ kind: 'booking_date', url, reason: dateProof.reason });
-            }
-        }
-    }
-
-    if (failures.length > 0) {
-        await logSessionEvent(sessionId, 'save_rejected_bad_url_evidence', { failures });
-    }
-    return failures;
-}
 
 function normalizeSourceUrl(input, channel /*, subtype */) {
     const raw = (input || '').trim();
@@ -2177,19 +1962,19 @@ async function pipelineDelete(id, target, recordId) {
  * and write status back. Use after editing SCORING constants or gates.
  *
  * scope:
- *   "all"        -> every booking not in shared/taken/expired (default)
- *   "leed_ready" -> only bookings currently flagged leed_ready (sanity-check the queue)
+ *   "all"        -> every booking
+ *   "hot"        -> only bookings currently flagged hot (sanity-check the queue)
  *   "<clientId>" -> only that client's bookings
  *
  * Returns a summary: count of bookings touched, before/after status counts.
  */
 async function pipelineRescore(id, scope) {
-    let where = { status: { notIn: ['shared', 'taken', 'expired'] } };
-    if (scope === 'leed_ready') {
-        where = { status: 'leed_ready' };
+    let where = {};
+    if (scope === 'hot') {
+        where = { status: 'hot' };
     } else if (scope && scope !== 'all') {
         // Treat as clientId
-        where = { clientId: scope, status: { notIn: ['shared', 'taken', 'expired'] } };
+        where = { clientId: scope };
     }
 
     const bookings = await prisma.booking.findMany({ where, select: { id: true, status: true } });
@@ -2234,8 +2019,7 @@ async function pipelineStatus(id) {
     const [totalClients, totalFactlets, brewing, ready, sent,
            contactGatePass, contactGateFail,
            dossierHigh, dossierMid, dossierLow, dossierNone,
-           totalBookings, bookingsBrewing, bookingsOutreachReady, leedReady, taken, shared, bookingsNewLegacy,
-           scoreHigh, scoreMid, scoreLow, scoreNone] = await Promise.all([
+           totalBookings, bookingsCold, bookingsBrewing, bookingsHot, bookingsShared] = await Promise.all([
         prisma.client.count(),
         prisma.factlet.count(),
         prisma.client.count({ where: { draftStatus: 'brewing' } }),
@@ -2248,16 +2032,10 @@ async function pipelineStatus(id) {
         prisma.client.count({ where: { AND: [{ dossierScore: { not: null } }, { dossierScore: { lt: 5 } }] } }),
         prisma.client.count({ where: { dossierScore: null } }),
         prisma.booking.count(),
+        prisma.booking.count({ where: { status: 'cold' } }),
         prisma.booking.count({ where: { status: 'brewing' } }),
-        prisma.booking.count({ where: { status: 'outreach_ready' } }),
-        prisma.booking.count({ where: { status: 'leed_ready' } }),
-        prisma.booking.count({ where: { status: 'taken' } }),
-        prisma.booking.count({ where: { status: 'shared' } }),
-        prisma.booking.count({ where: { status: 'new' } }),
-        prisma.booking.count({ where: { bookingScore: { gte: 70 } } }),
-        prisma.booking.count({ where: { bookingScore: { gte: 50, lt: 70 } } }),
-        prisma.booking.count({ where: { AND: [{ bookingScore: { not: null } }, { bookingScore: { lt: 50 } }] } }),
-        prisma.booking.count({ where: { bookingScore: null } })
+        prisma.booking.count({ where: { status: 'hot' } }),
+        prisma.booking.count({ where: { shared: true } })
     ]);
 
     // Ready drafts (top 5, summary)
@@ -2298,13 +2076,10 @@ async function pipelineStatus(id) {
             dossierScores: { high: dossierHigh, mid: dossierMid, low: dossierLow, unscored: dossierNone },
             bookings: {
                 total: totalBookings,
+                cold: bookingsCold,
                 brewing: bookingsBrewing,
-                outreach_ready: bookingsOutreachReady,
-                leed_ready: leedReady,
-                taken,
-                shared,
-                legacy_new: bookingsNewLegacy,
-                scores: { share_ready: scoreHigh, needs_work: scoreMid, incomplete: scoreLow, unscored: scoreNone }
+                hot: bookingsHot,
+                shared: bookingsShared
             }
         },
         completeness,
@@ -2337,15 +2112,15 @@ async function pipelineWorkStatus(id) {
     ]);
 
     // Booking counts
-    const [leedReady, bookingsNeedsEnrichment] = await Promise.all([
-        prisma.booking.count({ where: { status: 'leed_ready' } }),
-        prisma.booking.count({ where: { status: 'needs_enrichment' } })
+    const [hotBookings, brewingBookings] = await Promise.all([
+        prisma.booking.count({ where: { status: 'hot' } }),
+        prisma.booking.count({ where: { status: 'brewing' } })
     ]);
 
     // Recommendation
     const totalReady = Object.values(sources).reduce((s, c) => s + c.ready, 0);
     let recommendation;
-    if (leedReady > 0 || readyDrafts > 0) {
+    if (hotBookings > 0 || readyDrafts > 0) {
         recommendation = 'present';
     } else if (thin > 0 || needsEnrichment > 0) {
         recommendation = 'enrich';
@@ -2361,7 +2136,7 @@ async function pipelineWorkStatus(id) {
     return createSuccessResponse(id, JSON.stringify({
         sources,
         clients: { thin, needs_enrichment: needsEnrichment, ready_drafts: readyDrafts },
-        bookings: { leed_ready: leedReady, needs_enrichment: bookingsNeedsEnrichment },
+        bookings: { hot: hotBookings, brewing: brewingBookings },
         recommendation
     }, null, 2));
 }
@@ -2687,21 +2462,10 @@ async function pipelineSave(id, clientId, patch, sessionId, judge) {
 
     if (!clientId && !patch.name && !patch.company && patch.content && patch.source) {
         const sourceUrl = patch.sourceUrl || patch.url || (isHttpUrl(patch.source) ? patch.source : null);
-        if (sourceUrl) {
-            const expectedYear = patch.expectedYear || extractYear(patch.content);
-            const proofTerms = proofTermsFromText(patch.content);
-            const verified = await verifyEvidenceUrl(sourceUrl, { expectedYear, proofTerms });
-            if (!verified.ok) {
-                await logSessionEvent(sessionId, 'save_failed', {
-                    error: 'bad_url_evidence',
-                    failures: [{ kind: 'factlet', url: sourceUrl, reason: verified.reason }]
-                });
-                return createErrorResponse(id, -32602,
-                    'URL evidence rejected before save. Bad URLs are not stored. ' +
-                    JSON.stringify({ failures: [{ kind: 'factlet', url: sourceUrl, reason: verified.reason }] }, null, 2)
-                );
-            }
-        }
+        // No live re-fetch on save. Proof is captured ONCE when a worker first reads
+        // the page (scrape path / resolve_dates) and trusted thereafter. The old
+        // save-time verifyEvidenceUrl rejected RFP/PDF/aggregator pages and blocked
+        // promotion (the leed-ready Catch-22). See DOCS/CLASSIFICATION.md.
 
         const factlet = await prisma.factlet.create({
             data: { content: patch.content, source: sourceUrl || patch.source }
@@ -2719,17 +2483,9 @@ async function pipelineSave(id, clientId, patch, sessionId, judge) {
         }, null, 2));
     }
 
-    const urlFailures = await validatePatchEvidenceUrls(sessionId, patch);
-    if (urlFailures.length > 0) {
-        await logSessionEvent(sessionId, 'save_failed', {
-            error: 'bad_url_evidence',
-            failures: urlFailures
-        });
-        return createErrorResponse(id, -32602,
-            'URL evidence rejected before save. Bad URLs are not stored. ' +
-            JSON.stringify({ failures: urlFailures }, null, 2)
-        );
-    }
+    // Live-URL re-verification on save removed (the leed-ready Catch-22): proof is
+    // captured once at fetch (scrape / resolve_dates) and trusted thereafter. See
+    // DOCS/CLASSIFICATION.md. Non-network date normalization below stays.
 
     const dateFailures = await normalizeBookingDatesForSave(sessionId, patch);
     if (dateFailures.length > 0) {
@@ -2748,6 +2504,25 @@ async function pipelineSave(id, clientId, patch, sessionId, judge) {
         if (!existing) {
             await logSessionEvent(sessionId, 'save_failed', { id: clientId, error: 'client_not_found' });
             return createErrorResponse(id, -32602, `Client not found: ${clientId}`);
+        }
+        // HARD GATE: a Client at draftStatus="sent" has already received outreach.
+        // Refuse to flip back to "ready" / "brewing" / null without explicit
+        // patch.force=true. Prevents an ENRICH_CLIENT worker from resurrecting a
+        // sent client and causing a duplicate email on the next outreach pass.
+        // To intentionally re-engage, pass { force: true } in the same save.
+        if (existing.draftStatus === 'sent'
+            && patch.draftStatus !== undefined
+            && patch.draftStatus !== 'sent'
+            && patch.force !== true) {
+            await logSessionEvent(sessionId, 'save_rejected_sent_resurrection', {
+                clientId,
+                attemptedDraftStatus: patch.draftStatus
+            });
+            return createErrorResponse(id, -32602,
+                `Client ${clientId} is draftStatus="sent" (already emailed). ` +
+                `Refusing to set draftStatus="${patch.draftStatus}" without patch.force=true. ` +
+                `Pass { force: true } in the save call to deliberately re-engage.`
+            );
         }
     } else {
         // No id = create new client. Requires patch.name OR patch.company.
@@ -2870,7 +2645,7 @@ async function pipelineSave(id, clientId, patch, sessionId, judge) {
                 const bookingData = { clientId };
                 const bookingFields = [
                     'title', 'description', 'notes', 'location', 'startTime', 'endTime',
-                    'source', 'sourceUrl', 'trade', 'zip', 'sharedTo', 'squarePaymentUrl', 'leedId',
+                    'source', 'sourceUrl', 'trade', 'zip', 'sharedTo', 'leedId',
                     'status'
                 ];
                 for (const f of bookingFields) {
@@ -2896,6 +2671,28 @@ async function pipelineSave(id, clientId, patch, sessionId, judge) {
                     await tx.booking.create({ data: bookingData });
                 }
             }
+        }
+
+        // Auto-mirror: any Booking just flipped to status="shared" via an email
+        // path (email_share or email_user) also marks the parent Client as
+        // outreach-sent so ENRICH_CLIENT and the drafter cannot re-queue it for
+        // another email. Marketplace shares (sharedTo="leedz_api") do NOT trigger
+        // this mirror -- a marketplace post is per-Booking and leaves the Client
+        // free to receive direct outreach for other Bookings. Idempotent: skips
+        // if Client.draftStatus is already "sent".
+        const EMAIL_SHARE_PATHS = new Set(['email_share', 'email_user']);
+        const emailShared = Array.isArray(patch.bookings) && patch.bookings.some(b =>
+            b.status === 'shared' && EMAIL_SHARE_PATHS.has(b.sharedTo)
+        );
+        if (emailShared && existing && existing.draftStatus !== 'sent') {
+            await tx.client.update({
+                where: { id: clientId },
+                data:  { draftStatus: 'sent', sentAt: new Date() }
+            });
+            await logSessionEvent(sessionId, 'client_auto_marked_sent', {
+                clientId,
+                reason: 'booking_status_shared_via_email_path'
+            });
         }
     });
 
@@ -2973,7 +2770,6 @@ async function judgeAffected({ clientIds, bookingIds, reason, writeStatus, intel
     const changed = [];
     const errors  = [];
     for (const b of bookings) {
-        if (b.status === 'shared' || b.status === 'taken' || b.status === 'expired') continue;
         try {
             const score = await computeBookingTargetScore(b.id);
             if (!score || !score.status) continue;
@@ -3039,7 +2835,7 @@ async function pipelineJudgeAffected(id, args) {
 // ============================================================================
 // share_booking is the ONLY normal way to push a Booking to the Leedz
 // marketplace. The LLM is not allowed to supply st/et. The MCP loads the
-// Booking, rescores via Judge, demands status==leed_ready, then resolves
+// Booking, rescores via Judge, demands status==hot, then resolves
 // dates from the Booking's structured provenance via the structured
 // resolveEventDates() above. mode:"draft" returns the payload; mode:"post"
 // posts to Leedz and persists leedId/sharedAt/status.
@@ -3091,6 +2887,109 @@ function bookingToStructuredDates(booking, fallbackTimezone) {
     };
 }
 
+// Look up the objective recorded on the most-recent active Session (falls back
+// to the most-recent finished Session within the last hour, so a freshly-closed
+// outreach run still blocks a stray share_booking call). Returns null if no
+// session has a recorded objective -- legacy / no-Planner callers stay
+// permissive so this gate is defense in depth, not a regression.
+async function getActiveSessionObjective() {
+    try {
+        const active = await prisma.session.findFirst({
+            where:   { status: 'active' },
+            orderBy: { startedAt: 'desc' }
+        });
+        const sess = active || await prisma.session.findFirst({
+            where: {
+                status:     { in: ['complete', 'abandoned'] },
+                finishedAt: { gte: new Date(Date.now() - 60 * 60 * 1000) }
+            },
+            orderBy: { finishedAt: 'desc' }
+        });
+        if (!sess || !sess.metadata) return null;
+        let meta;
+        try { meta = JSON.parse(sess.metadata); } catch (_) { return null; }
+        const obj = meta && meta.objective;
+        if (!obj || !VALID_OBJECTIVES.has(obj)) return null;
+        return obj;
+    } catch (_) {
+        return null;
+    }
+}
+
+const SHARE_DRAFT_LIMITS = { titleDraft: 120, dtDraft: 1000, rqDraft: 1000 };
+
+function normalizeShareTime(value) {
+    const raw = String(value || '').trim();
+    if (!raw) return null;
+    const m = raw.match(/\b(\d{1,2})(?::(\d{2}))?\s*(AM|PM)?\b/i);
+    if (!m) return null;
+    let hour = parseInt(m[1], 10);
+    const minute = m[2] ? parseInt(m[2], 10) : 0;
+    const ampm = m[3] ? m[3].toUpperCase() : null;
+    if (ampm === 'PM' && hour < 12) hour += 12;
+    if (ampm === 'AM' && hour === 12) hour = 0;
+    return `${String(hour).padStart(2, '0')}:${String(minute).padStart(2, '0')}`;
+}
+
+function validateShareDraftField(name, value, booking) {
+    if (value === undefined || value === null || value === '') return { ok: true, value: null };
+    if (typeof value !== 'string') return { ok: false, reason: `${name}:must_be_string` };
+
+    const text = value.trim().replace(/\s+/g, ' ');
+    if (!text) return { ok: true, value: null };
+    if (text.length > SHARE_DRAFT_LIMITS[name]) return { ok: false, reason: `${name}:too_long` };
+
+    if (name === 'titleDraft' && /[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}/i.test(text)) return { ok: false, reason: `${name}:contains_email` };
+    if (name === 'titleDraft' && /(?:\+?1[\s.-]?)?(?:\(?\d{3}\)?[\s.-]?)\d{3}[\s.-]?\d{4}\b/.test(text)) return { ok: false, reason: `${name}:contains_phone` };
+    if (/\b\d{10,13}\b/.test(text)) return { ok: false, reason: `${name}:contains_epoch_like_number` };
+    if (/\b(cn|em|ph|st|et|zp|lc|tn|pr|sh)\s*[:=]/i.test(text)) return { ok: false, reason: `${name}:looks_like_payload_field` };
+
+    const years = new Set([booking.startDate, booking.endDate]
+        .filter(Boolean)
+        .map(d => new Date(d).getFullYear()));
+    const yearHits = text.match(/\b(?:19|20)\d{2}\b/g) || [];
+    for (const y of yearHits) {
+        if (!years.has(parseInt(y, 10))) return { ok: false, reason: `${name}:unsupported_year_${y}` };
+    }
+
+    const monthNames = [
+        ['january', 'jan'], ['february', 'feb'], ['march', 'mar'], ['april', 'apr'],
+        ['may'], ['june', 'jun'], ['july', 'jul'], ['august', 'aug'],
+        ['september', 'sep', 'sept'], ['october', 'oct'], ['november', 'nov'], ['december', 'dec']
+    ];
+    const allowedMonths = new Set([booking.startDate, booking.endDate]
+        .filter(Boolean)
+        .map(d => new Date(d).getMonth()));
+    const lower = text.toLowerCase();
+    for (let i = 0; i < monthNames.length; i++) {
+        if (monthNames[i].some(m => new RegExp(`\\b${m}\\b`, 'i').test(lower)) && !allowedMonths.has(i)) {
+            return { ok: false, reason: `${name}:unsupported_month_${monthNames[i][0]}` };
+        }
+    }
+
+    const timeHits = text.match(/\b\d{1,2}(?::\d{2})?\s*(?:AM|PM|am|pm)\b/g) || [];
+    if (timeHits.length > 0) {
+        const allowedTimes = new Set([normalizeShareTime(booking.startTime), normalizeShareTime(booking.endTime)].filter(Boolean));
+        if (allowedTimes.size === 0) return { ok: false, reason: `${name}:time_claim_without_booking_time` };
+        for (const t of timeHits) {
+            if (!allowedTimes.has(normalizeShareTime(t))) return { ok: false, reason: `${name}:unsupported_time_${t}` };
+        }
+    }
+
+    return { ok: true, value: text };
+}
+
+function validateShareDrafts(args, booking) {
+    const out = {};
+    const errors = [];
+    for (const name of ['titleDraft', 'dtDraft', 'rqDraft']) {
+        const result = validateShareDraftField(name, args[name], booking);
+        if (!result.ok) errors.push(result.reason);
+        else if (result.value) out[name] = result.value;
+    }
+    return { ok: errors.length === 0, errors, drafts: out };
+}
+
 async function pipelineShareBooking(id, args) {
     // 1. Forbid LLM-supplied epochs by name.
     if (args.st !== undefined) {
@@ -3109,6 +3008,23 @@ async function pipelineShareBooking(id, args) {
     if (!bookingId) return createErrorResponse(id, -32602, 'share_booking: bookingId required.');
     if (mode !== 'draft' && mode !== 'post') {
         return createErrorResponse(id, -32602, 'share_booking: mode must be "draft" or "post".');
+    }
+
+    // 1.5. Defense in depth -- if the active session's objective is 'outreach',
+    // refuse marketplace posting even if a caller bypasses the Planner. The
+    // Planner already declines to schedule SHARE_BOOKING under outreach; this
+    // gate catches direct calls (manual test scripts, stale interactive flows,
+    // a future skill that forgets the rule). Legacy sessions with no recorded
+    // objective fall through (helper returns null).
+    const activeObjective = await getActiveSessionObjective();
+    if (activeObjective === 'outreach') {
+        return createSuccessResponse(id, JSON.stringify({
+            mode,
+            posted: false,
+            error: 'share_booking_under_outreach_objective',
+            activeObjective,
+            hint: 'Active session objective is "outreach"; marketplace posting is disabled. Re-run with --marketplace or --hybrid.'
+        }, null, 2));
     }
 
     // 2. Load booking + client.
@@ -3130,11 +3046,11 @@ async function pipelineShareBooking(id, args) {
     });
     const fresh = await prisma.booking.findUnique({ where: { id: bookingId } });
 
-    if (fresh.status !== 'leed_ready') {
+    if (fresh.status !== 'hot') {
         return createSuccessResponse(id, JSON.stringify({
             mode,
             posted: false,
-            error: 'booking_not_leed_ready',
+            error: 'booking_not_hot',
             currentStatus: fresh.status,
             judgedStatus: fresh.status,
             judgedChanged: judged.changed
@@ -3190,14 +3106,26 @@ async function pipelineShareBooking(id, args) {
         }, null, 2));
     }
 
-    // 5. Build marketplace payload server-side. Mirrors the leed-drafter
-    // contract: tn, ti, lc, dt, rq, st, et, zp, cn, em, ph, pr, sh.
+    const draftCheck = validateShareDrafts(args, fresh);
+    if (!draftCheck.ok) {
+        return createSuccessResponse(id, JSON.stringify({
+            mode,
+            posted: false,
+            error: 'unsafe_share_draft',
+            draftErrors: draftCheck.errors,
+            hint: 'Only titleDraft, dtDraft, and rqDraft may contain LLM prose. Do not include emails/phones in titleDraft. Do not include payload fields, epochs, or unsupported date/time claims.'
+        }, null, 2));
+    }
+
+    // 5. Build marketplace payload server-side from DB hard fields plus
+    // validated share-skill prose drafts: tn, ti, lc, dt, rq, st, et, zp,
+    // cn, em, ph, pr, sh.
     const payload = {
         tn: fresh.trade || '',
-        ti: fresh.title || '',
+        ti: draftCheck.drafts.titleDraft || fresh.title || '',
         lc: fresh.location || '',
-        dt: fresh.description || fresh.notes || '',
-        rq: fresh.notes || '',
+        dt: draftCheck.drafts.dtDraft || fresh.description || fresh.notes || '',
+        rq: draftCheck.drafts.rqDraft || fresh.notes || '',
         st: resolved.st,
         et: resolved.et,
         zp: fresh.zip || '',
@@ -3277,7 +3205,7 @@ async function pipelineShareBooking(id, args) {
             sharedTo: 'leedz_api',
             sharedAt: BigInt(Date.now()),
             leedId:   leedzId,
-            status:   'shared'
+            status:   'cold'
         }
     });
 
@@ -3305,7 +3233,8 @@ const _TASK_TYPE_LIMITS_DEFAULT = {
     ENRICH_CLIENT:    10,
     JUDGE_AFFECTED:   5,
     SHOW_HOT_LEEDZ:   1,
-    SHARE_BOOKING:    3
+    SHARE_BOOKING:    3,
+    DRAFT_OUTREACH:   5
 };
 const _CFG_TASK_LIMITS = (PRECRIME_CONFIG && PRECRIME_CONFIG.tasks && PRECRIME_CONFIG.tasks.limits) || {};
 const TASK_TYPE_LIMITS = Object.assign({}, _TASK_TYPE_LIMITS_DEFAULT, _CFG_TASK_LIMITS);
@@ -3322,14 +3251,65 @@ const _TASK_SESSION_BUDGETS_DEFAULT = {
     ENRICH_CLIENT:    50,
     JUDGE_AFFECTED:   50,
     SHOW_HOT_LEEDZ:   1,
-    SHARE_BOOKING:    10
+    SHARE_BOOKING:    10,
+    DRAFT_OUTREACH:   25
 };
+
+// ----------------------------------------------------------------------------
+// Objective hierarchy. Mode = how the agent is being driven (interactive vs
+// headless); Objective = what end state Tasks should aim for. The Planner uses
+// objective to gate SHARE_BOOKING (marketplace path) and DRAFT_OUTREACH
+// (outreach path) independently. See templates/GOOSE.md for the contract.
+// ----------------------------------------------------------------------------
+const VALID_OBJECTIVES = new Set(['marketplace', 'outreach', 'hybrid']);
+
+function normalizeObjective(rawObjective, mode) {
+    if (rawObjective !== undefined && rawObjective !== null && rawObjective !== '') {
+        const obj = String(rawObjective).toLowerCase();
+        if (!VALID_OBJECTIVES.has(obj)) {
+            const err = new Error(`plan_tasks: invalid objective "${rawObjective}". Expected one of: marketplace, outreach, hybrid.`);
+            err.code = -32602;
+            throw err;
+        }
+        return obj;
+    }
+    if (mode === 'headless') return 'marketplace';
+    return 'hybrid';   // workflow, hot_only, anything else
+}
 const _CFG_SESSION_BUDGETS = (PRECRIME_CONFIG && PRECRIME_CONFIG.tasks && PRECRIME_CONFIG.tasks.sessionBudgets) || {};
 const TASK_SESSION_BUDGETS = Object.assign({}, _TASK_SESSION_BUDGETS_DEFAULT, _CFG_SESSION_BUDGETS);
 
 const TASK_TYPES = new Set(Object.keys(_TASK_TYPE_LIMITS_DEFAULT));
 const _CFG_CLAIM_TIMEOUT = PRECRIME_CONFIG && PRECRIME_CONFIG.recycler && PRECRIME_CONFIG.recycler.claimTimeoutMinutes;
 const CLAIM_TIMEOUT_MINUTES = Number.isFinite(_CFG_CLAIM_TIMEOUT) ? _CFG_CLAIM_TIMEOUT : 10;
+const _CFG_WORKFLOW_STRATEGY = (PRECRIME_CONFIG && PRECRIME_CONFIG.tasks && PRECRIME_CONFIG.tasks.workflowStrategy) || {};
+const FACTLET_BACKLOG_DISCOVERY_PAUSE = Number.isFinite(_CFG_WORKFLOW_STRATEGY.factletBacklogDiscoveryPause)
+    ? _CFG_WORKFLOW_STRATEGY.factletBacklogDiscoveryPause
+    : 25;
+const TASK_TERMINAL_STATUSES = ['done', 'failed', 'cancelled'];
+// Claim order mirrors the business loop (DOCS/WHAT_I_LEARNED.md):
+//   judge first   -- we must know if hot work already exists before doing
+//                    anything else
+//   hot action    -- once judged hot, the workflow interrupts and presents
+//                    / shares / drafts
+//   apply         -- consume known evidence (Factlets) before spending search
+//                    effort improving Clients
+//   enrich        -- improve one Client after judging current evidence
+//   scrape / discover -- LAST: they create more input, must not run while the
+//                    existing input pile is unprocessed
+//
+// Worker skills that pass `types:[...]` override this priority for THAT one
+// claim only (e.g. apply-factlet.md claims types:["APPLY_FACTLET"]).
+const TASK_CLAIM_PRIORITY = [
+    'JUDGE_AFFECTED',
+    'SHOW_HOT_LEEDZ',
+    'SHARE_BOOKING',
+    'DRAFT_OUTREACH',
+    'APPLY_FACTLET',
+    'ENRICH_CLIENT',
+    'SCRAPE_SOURCE',
+    'DISCOVER_SOURCES'
+];
 
 function taskRowToPacket(row) {
     if (!row) return null;
@@ -3353,6 +3333,50 @@ function taskRowToPacket(row) {
 
 function safeJsonParse(s) {
     try { return JSON.parse(s); } catch { return null; }
+}
+
+async function getTerminalAppliedFactletIds() {
+    const rows = await prisma.task.findMany({
+        where: {
+            type: 'APPLY_FACTLET',
+            targetType: 'Factlet',
+            targetId: { not: null },
+            status: { in: TASK_TERMINAL_STATUSES }
+        },
+        select: { targetId: true }
+    });
+    return new Set(rows.map(r => r.targetId).filter(Boolean));
+}
+
+async function computeWorkflowIntakeState() {
+    const staleDays = await getFactletStaleDays();
+    const factletCutoff = new Date(Date.now() - staleDays * 24 * 60 * 60 * 1000);
+    const [liveFactlets, terminalAppliedFactletIds, claimableSources] = await Promise.all([
+        prisma.factlet.findMany({
+            where: { createdAt: { gte: factletCutoff } },
+            orderBy: { createdAt: 'desc' },
+            select: { id: true }
+        }),
+        getTerminalAppliedFactletIds(),
+        prisma.source.count({ where: { scrapedAt: null, claimedAt: null } })
+    ]);
+    const unprocessedFactletIds = liveFactlets
+        .map(f => f.id)
+        .filter(fid => !terminalAppliedFactletIds.has(fid));
+    const strategy = unprocessedFactletIds.length >= FACTLET_BACKLOG_DISCOVERY_PAUSE
+        ? 'consume_factlets'
+        : 'discover_sources';
+    return {
+        strategy,
+        factletCutoff,
+        factletStaleDays: staleDays,
+        liveFactletCount: liveFactlets.length,
+        unprocessedFactletCount: unprocessedFactletIds.length,
+        unprocessedFactletIds,
+        terminalAppliedFactletIds,
+        claimableSourceCount: claimableSources,
+        factletBacklogDiscoveryPause: FACTLET_BACKLOG_DISCOVERY_PAUSE
+    };
 }
 
 // Normalize affected-id keys from a Task output blob. Canonical keys are
@@ -3397,6 +3421,34 @@ async function reclaimStaleTasks() {
     return stale.length;
 }
 
+async function cleanupOpenTasksOnStartup() {
+    const now = new Date();
+    const sessions = await prisma.session.updateMany({
+        where: { status: 'active' },
+        data: {
+            status: 'abandoned',
+            finishedAt: now
+        }
+    });
+    const result = await prisma.task.updateMany({
+        where: { status: { in: ['ready', 'claimed'] } },
+        data: {
+            status: 'cancelled',
+            claimedAt: null,
+            claimedBy: null,
+            finishedAt: now,
+            error: 'startup_cleanup_open_task'
+        }
+    });
+    if (result.count > 0) {
+        logInfo(`Startup recycler cancelled ${result.count} open Task(s) from previous runs.`);
+    }
+    if (sessions.count > 0) {
+        logInfo(`Startup recycler abandoned ${sessions.count} active Session(s) from previous runs.`);
+    }
+    return { cancelledTasks: result.count, abandonedSessions: sessions.count };
+}
+
 // Ensure a Planner Session exists for this run. If session_id was passed and is
 // still active, reuse it. Otherwise reuse the most recent active Session whose
 // workflow matches this planner mode, or open a new one. The Planner is now the
@@ -3431,6 +3483,18 @@ async function ensurePlannerSession(mode, providedSessionId) {
 async function pipelinePlanTasks(id, args) {
     const mode = args.mode || 'workflow';     // 'workflow' | 'hot_only' | 'headless'
 
+    // Objective ('marketplace' | 'outreach' | 'hybrid') gates SHARE_BOOKING
+    // and DRAFT_OUTREACH independently. Defaults: headless->marketplace,
+    // anything else->hybrid. See VALID_OBJECTIVES + normalizeObjective above.
+    let objective;
+    try {
+        objective = normalizeObjective(args.objective, mode);
+    } catch (e) {
+        return createErrorResponse(id, e.code || -32602, e.message || String(e));
+    }
+    const wantsMarketplace = (objective === 'marketplace' || objective === 'hybrid');
+    const wantsOutreach    = (objective === 'outreach'    || objective === 'hybrid');
+
     // Planner owns Session lifecycle. Reuse or open as needed.
     let session;
     try {
@@ -3440,11 +3504,36 @@ async function pipelinePlanTasks(id, args) {
     }
     const sessionId = session.id;
 
+    // Persist the resolved objective into Session.metadata so downstream actions
+    // (notably share_booking) can defense-in-depth refuse calls that disagree
+    // with the active objective. Latest plan_tasks wins; legacy sessions with
+    // no recorded objective are treated as permissive by share_booking.
+    try {
+        let meta = {};
+        if (session.metadata) {
+            try { meta = JSON.parse(session.metadata) || {}; } catch (_) { meta = {}; }
+        }
+        if (meta.objective !== objective) {
+            meta.objective = objective;
+            await prisma.session.update({
+                where: { id: sessionId },
+                data:  { metadata: JSON.stringify(meta) }
+            });
+        }
+    } catch (e) {
+        logInfo(`plan_tasks: could not stamp objective on session ${sessionId}: ${e.message}`);
+    }
+
     // Recycle stale claims before planning so limits reflect true ready state.
     const reclaimed = await reclaimStaleTasks();
 
     const counts = {};
     const created = [];
+    const workflowState = (mode === 'workflow' || mode === 'headless')
+        ? await computeWorkflowIntakeState()
+        : null;
+    const shouldPlanDiscovery = !workflowState || workflowState.strategy !== 'consume_factlets';
+    const shouldPlanClientEnrichment = !workflowState || workflowState.strategy !== 'consume_factlets';
 
     // Total Tasks of each type already created in THIS Session (any status).
     // Drives the session-budget gate. Refreshed once at planning start; the
@@ -3501,11 +3590,15 @@ async function pipelinePlanTasks(id, args) {
     if (mode === 'hot_only' || args.objective === 'SHOW_HOT_LEEDZ') {
         const ck = await createBudget('SHOW_HOT_LEEDZ');
         const hotExists = await prisma.booking.count({
-            where: { status: { in: ['leed_ready', 'outreach_ready'] } }
+            where: {
+                status: 'hot',
+                shared: false,
+                startDate: { gte: new Date() }
+            }
         });
         let explanation;
         if (hotExists === 0) {
-            explanation = 'Hot-only mode: no leed_ready / outreach_ready bookings -- nothing to present.';
+            explanation = 'Hot-only mode: no hot bookings -- nothing to present.';
         } else if (ck.eff <= 0 && ck.budRem === 0) {
             explanation = 'Hot-only mode: SHOW_HOT_LEEDZ session budget exhausted.';
         } else if (ck.eff <= 0) {
@@ -3517,7 +3610,7 @@ async function pipelinePlanTasks(id, args) {
         const sum = computeBudgetSummary(sessionCreatedSoFar);
         const closed = await maybeCloseSession();
         return createSuccessResponse(id, JSON.stringify({
-            mode, session_id: sessionId, reclaimed, counts, created,
+            mode, objective, session_id: sessionId, reclaimed, counts, created,
             hotBookingCount: hotExists,
             limits: TASK_TYPE_LIMITS,
             sessionBudgets: TASK_SESSION_BUDGETS,
@@ -3529,140 +3622,348 @@ async function pipelinePlanTasks(id, args) {
         }, null, 2));
     }
 
-    // Headless: schedule SHARE_BOOKING for unshared leed_ready first.
-    if (mode === 'headless') {
-        const ck = await createBudget('SHARE_BOOKING');
-        if (ck.eff > 0) {
-            const candidates = await prisma.booking.findMany({
-                where: { status: 'leed_ready', shared: false },
-                select: { id: true },
-                take: ck.eff
-            });
-            for (const b of candidates) {
-                await createTask('SHARE_BOOKING', { targetType: 'Booking', targetId: b.id });
-            }
-        }
-    }
-
-    // Workflow planning (also runs for headless after share scheduling):
-    // 1. DISCOVER_SOURCES (Session-bounded -- session budget defaults to 1)
+    // Stage-gated workflow planning. See DOCS/WHAT_I_LEARNED.md for the
+    // invariant: "consume evidence -> judge -> if hot interrupt and act ->
+    // else enrich -> else scrape/discover". Each gate suppresses lower stages
+    // for THIS plan_tasks call so the LLM cannot pull stale work past a hot
+    // interrupt or before judging the latest evidence.
     if (mode === 'workflow' || mode === 'headless') {
-        const ckDisc = await createBudget('DISCOVER_SOURCES');
-        if (ckDisc.eff > 0) {
-            await createTask('DISCOVER_SOURCES', { targetType: 'none' });
-        }
+        const suppressed = new Set();   // task types skipped this pass
 
-        // 2. SCRAPE_SOURCE for claimable Sources
-        const ckScrape = await createBudget('SCRAPE_SOURCE');
-        if (ckScrape.eff > 0) {
-            // Avoid double-planning the same Source: skip ones already targeted by ready/claimed Tasks.
-            const planned = await prisma.task.findMany({
-                where: { type: 'SCRAPE_SOURCE', status: { in: ['ready', 'claimed'] }, targetType: 'Source' },
-                select: { targetId: true }
-            });
-            const skipIds = new Set(planned.map(p => p.targetId).filter(Boolean));
-            const sources = await prisma.source.findMany({
-                where: { scrapedAt: null, claimedAt: null },
-                orderBy: { discoveredAt: 'asc' },
-                take: ckScrape.eff + skipIds.size
-            });
-            let made = 0;
-            for (const s of sources) {
-                if (made >= ckScrape.eff) break;
-                if (skipIds.has(s.id)) continue;
-                const row = await createTask('SCRAPE_SOURCE', {
-                    targetType: 'Source',
-                    targetId:   s.id,
-                    input: { url: s.url, channel: s.channel }
-                });
-                if (!row) break;   // budget hit mid-loop
-                made++;
-            }
+        // ---------- Stage 2: JUDGE_AFFECTED for done worker output ----------
+        // If any completed worker Task carries affected ids but has not been
+        // judged yet, judge it first. While judge work is created OR already
+        // open, skip every lower stage: hot interrupt depends on judged state,
+        // and creating more workers / discovery before judging produces noise.
+        const judgeAlreadyOpen = await countReady('JUDGE_AFFECTED');
+        const doneTasks = await prisma.task.findMany({
+            where: {
+                status: 'done',
+                type:   { in: ['SCRAPE_SOURCE', 'ENRICH_CLIENT', 'APPLY_FACTLET'] }
+            },
+            orderBy: { finishedAt: 'desc' },
+            take: 50
+        });
+        const judgeNeededInputs = [];
+        for (const t of doneTasks) {
+            const out = t.output ? safeJsonParse(t.output) : null;
+            if (!out || out.judgedAt) continue;
+            const { clientIds: cIds, bookingIds: bIds } = extractAffectedIds(out);
+            if (cIds.length === 0 && bIds.length === 0) continue;
+            judgeNeededInputs.push({ sourceTaskId: t.id, clientIds: cIds, bookingIds: bIds });
         }
-
-        // 3. APPLY_FACTLET -- newest Factlets that lack an open Task.
-        const ckApply = await createBudget('APPLY_FACTLET');
-        if (ckApply.eff > 0) {
-            const plannedF = await prisma.task.findMany({
-                where: { type: 'APPLY_FACTLET', status: { in: ['ready', 'claimed'] }, targetType: 'Factlet' },
-                select: { targetId: true }
-            });
-            const skipF = new Set(plannedF.map(p => p.targetId).filter(Boolean));
-            const factlets = await prisma.factlet.findMany({
-                orderBy: { createdAt: 'desc' },
-                take: ckApply.eff + skipF.size,
-                select: { id: true }
-            });
-            let made = 0;
-            for (const f of factlets) {
-                if (made >= ckApply.eff) break;
-                if (skipF.has(f.id)) continue;
-                const row = await createTask('APPLY_FACTLET', { targetType: 'Factlet', targetId: f.id });
-                if (!row) break;
-                made++;
-            }
-        }
-
-        // 4. ENRICH_CLIENT for stale/thin Clients
-        const ckEnrich = await createBudget('ENRICH_CLIENT');
-        if (ckEnrich.eff > 0) {
-            const plannedE = await prisma.task.findMany({
-                where: { type: 'ENRICH_CLIENT', status: { in: ['ready', 'claimed'] }, targetType: 'Client' },
-                select: { targetId: true }
-            });
-            const skipE = new Set(plannedE.map(p => p.targetId).filter(Boolean));
-            // Stale = lastEnriched null OR oldest. Thin = no email.
-            const clients = await prisma.client.findMany({
-                orderBy: [{ lastEnriched: 'asc' }],
-                take: ckEnrich.eff + skipE.size,
-                select: { id: true }
-            });
-            let made = 0;
-            for (const c of clients) {
-                if (made >= ckEnrich.eff) break;
-                if (skipE.has(c.id)) continue;
-                const row = await createTask('ENRICH_CLIENT', { targetType: 'Client', targetId: c.id });
-                if (!row) break;
-                made++;
-            }
-        }
-
-        // 5. JUDGE_AFFECTED for done Tasks whose output reports affected ids
-        //    but have not yet been judged. We mark them judged via output.judgedAt.
-        const ckJudge = await createBudget('JUDGE_AFFECTED');
-        if (ckJudge.eff > 0) {
-            const doneTasks = await prisma.task.findMany({
-                where: {
-                    status: 'done',
-                    type:   { in: ['SCRAPE_SOURCE', 'ENRICH_CLIENT', 'APPLY_FACTLET'] }
-                },
-                orderBy: { finishedAt: 'desc' },
-                take: 50
-            });
-            let made = 0;
-            for (const t of doneTasks) {
-                if (made >= ckJudge.eff) break;
-                const out = t.output ? safeJsonParse(t.output) : null;
-                if (!out || out.judgedAt) continue;
-                const { clientIds: cIds, bookingIds: bIds } = extractAffectedIds(out);
-                if (cIds.length === 0 && bIds.length === 0) continue;
+        let judgePlanned = 0;
+        if (judgeNeededInputs.length > 0) {
+            const ckJudge = await createBudget('JUDGE_AFFECTED');
+            const slots = Math.min(ckJudge.eff, judgeNeededInputs.length);
+            for (let i = 0; i < slots; i++) {
                 const row = await createTask('JUDGE_AFFECTED', {
                     targetType: 'none',
-                    input: { sourceTaskId: t.id, clientIds: cIds, bookingIds: bIds }
+                    input: judgeNeededInputs[i]
                 });
                 if (!row) break;
-                made++;
+                judgePlanned++;
+            }
+        }
+        if (judgePlanned > 0 || judgeAlreadyOpen > 0) {
+            // Spec (DOCS/WHAT_I_LEARNED.md, "Exact Code Changes Required" #4
+            // and the funnel-invariant Mental Model): after a higher-priority
+            // gate creates or already has open Tasks, skip every lower
+            // gate for THIS plan_tasks call. Judge sits at the top of the
+            // funnel: hot interrupt depends on judged state, and creating
+            // more worker / discovery Tasks before judging current evidence
+            // produces noise. Strictly block every stage below.
+            suppressed.add('SHOW_HOT_LEEDZ');
+            suppressed.add('SHARE_BOOKING');
+            suppressed.add('DRAFT_OUTREACH');
+            suppressed.add('APPLY_FACTLET');
+            suppressed.add('ENRICH_CLIENT');
+            suppressed.add('SCRAPE_SOURCE');
+            suppressed.add('DISCOVER_SOURCES');
+        }
+
+        // ---------- Stage 3: Hot Interrupt ----------
+        // A hot lead interrupts the workflow. Once judged hot, interactive
+        // workflow presents (SHOW_HOT_LEEDZ); headless creates SHARE_BOOKING
+        // and/or DRAFT_OUTREACH per objective. Hot work suppresses enrich /
+        // scrape / discover for this pass.
+        let hotPlanned = 0;
+        let hotExists = 0;
+        let hotActionOpen = 0;
+        const hotStageReachable = !suppressed.has('SHOW_HOT_LEEDZ')
+            && !suppressed.has('SHARE_BOOKING')
+            && !suppressed.has('DRAFT_OUTREACH');
+        if (hotStageReachable) {
+            hotExists = await prisma.booking.count({
+                where: {
+                    status: 'hot',
+                    shared: false,
+                    startDate: { gte: new Date() }
+                }
+            });
+            hotActionOpen = await prisma.task.count({
+                where: {
+                    status: { in: ['ready', 'claimed'] },
+                    type:   { in: ['SHOW_HOT_LEEDZ', 'SHARE_BOOKING', 'DRAFT_OUTREACH'] }
+                }
+            });
+            if (hotExists > 0) {
+                if (mode === 'workflow') {
+                    // Interactive workflow -> SHOW_HOT_LEEDZ presenter only.
+                    // SHARE_BOOKING / DRAFT_OUTREACH stay user-driven in
+                    // interactive mode (init-wizard sends user through the
+                    // presenter); planner does not auto-schedule them here.
+                    const ckHot = await createBudget('SHOW_HOT_LEEDZ');
+                    if (ckHot.eff > 0) {
+                        const row = await createTask('SHOW_HOT_LEEDZ', { targetType: 'none' });
+                        if (row) hotPlanned++;
+                    }
+                } else {
+                    // Headless: marketplace -> SHARE_BOOKING for hot
+                    // future unshared Bookings; outreach -> DRAFT_OUTREACH
+                    // for qualified Clients. Hybrid does both.
+                    if (wantsMarketplace) {
+                        const ckShare = await createBudget('SHARE_BOOKING');
+                        if (ckShare.eff > 0) {
+                            const plannedB = await prisma.task.findMany({
+                                where: {
+                                    type: 'SHARE_BOOKING',
+                                    targetType: 'Booking',
+                                    OR: [
+                                        { sessionId },
+                                        { status: { in: ['ready', 'claimed'] } }
+                                    ]
+                                },
+                                select: { targetId: true }
+                            });
+                            const skipB = new Set(plannedB.map(p => p.targetId).filter(Boolean));
+                            const candidates = await prisma.booking.findMany({
+                                where: {
+                                    status: 'hot',
+                                    shared: false,
+                                    startDate: { gte: new Date() }
+                                },
+                                select: { id: true },
+                                take: ckShare.eff + skipB.size
+                            });
+                            let made = 0;
+                            for (const b of candidates) {
+                                if (made >= ckShare.eff) break;
+                                if (skipB.has(b.id)) continue;
+                                const row = await createTask('SHARE_BOOKING', { targetType: 'Booking', targetId: b.id });
+                                if (!row) break;
+                                made++;
+                            }
+                            hotPlanned += made;
+                        }
+                    }
+                    if (wantsOutreach) {
+                        const ckDraft = await createBudget('DRAFT_OUTREACH');
+                        if (ckDraft.eff > 0) {
+                            const plannedD = await prisma.task.findMany({
+                                where: {
+                                    type: 'DRAFT_OUTREACH',
+                                    targetType: 'Booking',
+                                    OR: [
+                                        { sessionId },
+                                        { status: { in: ['ready', 'claimed'] } }
+                                    ]
+                                },
+                                select: { targetId: true }
+                            });
+                            const skipD = new Set(plannedD.map(p => p.targetId).filter(Boolean));
+                            // Headless outreach drafts from HOT leedz (Bookings), soonest
+                            // event first. The drafter decides JIT, per leed, whether it is
+                            // outreach-ready and writes the email. See DOCS/CLASSIFICATION.md.
+                            const candidates = await prisma.booking.findMany({
+                                where: {
+                                    status: 'hot',
+                                    shared: false,
+                                    startDate: { gte: new Date() }
+                                },
+                                orderBy: [{ startDate: 'asc' }],
+                                select: { id: true },
+                                take: ckDraft.eff + skipD.size
+                            });
+                            let made = 0;
+                            for (const b of candidates) {
+                                if (made >= ckDraft.eff) break;
+                                if (skipD.has(b.id)) continue;
+                                const row = await createTask('DRAFT_OUTREACH', {
+                                    targetType: 'Booking',
+                                    targetId:   b.id,
+                                    input: { targetType: 'Booking', targetId: b.id }
+                                });
+                                if (!row) break;
+                                made++;
+                            }
+                            hotPlanned += made;
+                        }
+                    }
+                }
+            }
+            // Spec ("Exact Code Changes Required" #4 + funnel invariant):
+            // once hot work was planned, is already open, OR hot Bookings
+            // exist, skip every lower stage. Apply must also pause -- it
+            // creates more judge-needed output that would compete with the
+            // hot action we just scheduled.
+            if (hotPlanned > 0 || hotActionOpen > 0 || hotExists > 0) {
+                suppressed.add('APPLY_FACTLET');
+                suppressed.add('ENRICH_CLIENT');
+                suppressed.add('SCRAPE_SOURCE');
+                suppressed.add('DISCOVER_SOURCES');
             }
         }
 
-        // 6. SHOW_HOT_LEEDZ if judged hot items exist
-        const hotExists = await prisma.booking.count({
-            where: { status: { in: ['leed_ready', 'outreach_ready'] } }
-        });
-        if (hotExists > 0) {
-            const ckHot = await createBudget('SHOW_HOT_LEEDZ');
-            if (ckHot.eff > 0) {
-                await createTask('SHOW_HOT_LEEDZ', { targetType: 'none' });
+        // ---------- Stage 4: APPLY_FACTLET ----------
+        // Consume known evidence. Spec ("Exact Code Changes Required" #4 +
+        // funnel invariant): when apply was created OR already open, skip
+        // every lower stage including ENRICH_CLIENT -- factlets are known
+        // evidence and must be consumed before spending search effort on
+        // Client improvement.
+        // PER-TARGET DEDUP: same Factlet gets at most one APPLY_FACTLET in
+        // this session AND no concurrent APPLY_FACTLET for the same Factlet
+        // may exist anywhere.
+        if (!suppressed.has('APPLY_FACTLET')) {
+            const applyAlreadyOpen = await countReady('APPLY_FACTLET');
+            const ckApply = await createBudget('APPLY_FACTLET');
+            let applyPlanned = 0;
+            if (ckApply.eff > 0) {
+                const plannedF = await prisma.task.findMany({
+                    where: {
+                        type: 'APPLY_FACTLET',
+                        targetType: 'Factlet',
+                        OR: [
+                            { sessionId },
+                            { status: { in: ['ready', 'claimed'] } }
+                        ]
+                    },
+                    select: { targetId: true }
+                });
+                const skipF = new Set(plannedF.map(p => p.targetId).filter(Boolean));
+                const factletIds = workflowState
+                    ? workflowState.unprocessedFactletIds
+                    : (await prisma.factlet.findMany({
+                        orderBy: { createdAt: 'desc' },
+                        take: ckApply.eff + skipF.size,
+                        select: { id: true }
+                    })).map(f => f.id);
+                for (const factletId of factletIds) {
+                    if (applyPlanned >= ckApply.eff) break;
+                    if (skipF.has(factletId)) continue;
+                    const row = await createTask('APPLY_FACTLET', { targetType: 'Factlet', targetId: factletId });
+                    if (!row) break;
+                    applyPlanned++;
+                }
+            }
+            if (applyPlanned > 0 || applyAlreadyOpen > 0) {
+                suppressed.add('ENRICH_CLIENT');
+                suppressed.add('SCRAPE_SOURCE');
+                suppressed.add('DISCOVER_SOURCES');
+            }
+            // Backlog: consume_factlets strategy also pauses ENRICH this pass.
+            if (workflowState && workflowState.strategy === 'consume_factlets') {
+                suppressed.add('ENRICH_CLIENT');
+                suppressed.add('SCRAPE_SOURCE');
+                suppressed.add('DISCOVER_SOURCES');
+            }
+        }
+
+        // ---------- Stage 5: ENRICH_CLIENT ----------
+        // Improve one Client after current evidence is consumed and judged.
+        // Spec: "Do not create scrape/discovery in the same pass if
+        // enrichment Tasks were created or are already open."
+        // PER-TARGET DEDUP: same Client gets at most one ENRICH_CLIENT in
+        // this session AND no concurrent ENRICH_CLIENT for the same Client
+        // may exist anywhere.
+        if (!suppressed.has('ENRICH_CLIENT') && shouldPlanClientEnrichment) {
+            const ckEnrich = await createBudget('ENRICH_CLIENT');
+            let enrichPlanned = 0;
+            const enrichOpen = await countReady('ENRICH_CLIENT');
+            if (ckEnrich.eff > 0) {
+                const plannedE = await prisma.task.findMany({
+                    where: {
+                        type: 'ENRICH_CLIENT',
+                        targetType: 'Client',
+                        OR: [
+                            { sessionId },
+                            { status: { in: ['ready', 'claimed'] } }
+                        ]
+                    },
+                    select: { targetId: true }
+                });
+                const skipE = new Set(plannedE.map(p => p.targetId).filter(Boolean));
+                const clients = await prisma.client.findMany({
+                    orderBy: [{ lastEnriched: 'asc' }],
+                    take: ckEnrich.eff + skipE.size,
+                    select: { id: true }
+                });
+                for (const c of clients) {
+                    if (enrichPlanned >= ckEnrich.eff) break;
+                    if (skipE.has(c.id)) continue;
+                    const row = await createTask('ENRICH_CLIENT', { targetType: 'Client', targetId: c.id });
+                    if (!row) break;
+                    enrichPlanned++;
+                }
+            }
+            if (enrichPlanned > 0 || enrichOpen > 0) {
+                suppressed.add('SCRAPE_SOURCE');
+                suppressed.add('DISCOVER_SOURCES');
+            }
+        }
+
+        // ---------- Stage 6: SCRAPE_SOURCE ----------
+        // Scrape existing Sources only when no hot / judge / apply / enrich
+        // backlog is gating us. PER-TARGET DEDUP same as other workers.
+        if (!suppressed.has('SCRAPE_SOURCE') && shouldPlanDiscovery) {
+            const ckScrape = await createBudget('SCRAPE_SOURCE');
+            let scrapePlanned = 0;
+            const scrapeOpen = await countReady('SCRAPE_SOURCE');
+            if (ckScrape.eff > 0) {
+                const planned = await prisma.task.findMany({
+                    where: {
+                        type: 'SCRAPE_SOURCE',
+                        targetType: 'Source',
+                        OR: [
+                            { sessionId },
+                            { status: { in: ['ready', 'claimed'] } }
+                        ]
+                    },
+                    select: { targetId: true }
+                });
+                const skipIds = new Set(planned.map(p => p.targetId).filter(Boolean));
+                const sources = await prisma.source.findMany({
+                    where: { scrapedAt: null, claimedAt: null },
+                    orderBy: { discoveredAt: 'asc' },
+                    take: ckScrape.eff + skipIds.size
+                });
+                for (const s of sources) {
+                    if (scrapePlanned >= ckScrape.eff) break;
+                    if (skipIds.has(s.id)) continue;
+                    const row = await createTask('SCRAPE_SOURCE', {
+                        targetType: 'Source',
+                        targetId:   s.id,
+                        input: { url: s.url, channel: s.channel }
+                    });
+                    if (!row) break;
+                    scrapePlanned++;
+                }
+            }
+            // Claimable Sources still pending -> hold off on DISCOVER_SOURCES.
+            if (scrapePlanned > 0 || scrapeOpen > 0
+                || (workflowState && workflowState.claimableSourceCount > 0)) {
+                suppressed.add('DISCOVER_SOURCES');
+            }
+        }
+
+        // ---------- Stage 7: DISCOVER_SOURCES ----------
+        // Discovery is LAST because it creates more input. Only fires when the
+        // funnel is empty: no hot work, no judge work, no apply / enrich /
+        // scrape backlog, and no claimable Sources waiting.
+        if (!suppressed.has('DISCOVER_SOURCES') && shouldPlanDiscovery) {
+            const ckDisc = await createBudget('DISCOVER_SOURCES');
+            if (ckDisc.eff > 0) {
+                await createTask('DISCOVER_SOURCES', { targetType: 'none' });
             }
         }
     }
@@ -3674,6 +3975,11 @@ async function pipelinePlanTasks(id, args) {
         `Planned ${created.length} task(s) in session ${sessionId}`,
         `${reclaimed} stale claim(s) recycled`
     ];
+    if (workflowState) {
+        explanationParts.push(
+            `strategy=${workflowState.strategy}; unprocessedFactlets=${workflowState.unprocessedFactletCount}; claimableSources=${workflowState.claimableSourceCount}`
+        );
+    }
     if (sum.budgetExhausted.length > 0) {
         explanationParts.push(`budget exhausted for: ${sum.budgetExhausted.join(', ')}`);
     }
@@ -3683,10 +3989,19 @@ async function pipelinePlanTasks(id, args) {
 
     return createSuccessResponse(id, JSON.stringify({
         mode,
+        objective,
         session_id:     sessionId,
         reclaimed,
         counts,
         created,
+        workflowStrategy: workflowState ? {
+            strategy: workflowState.strategy,
+            unprocessedFactletCount: workflowState.unprocessedFactletCount,
+            liveFactletCount: workflowState.liveFactletCount,
+            claimableSourceCount: workflowState.claimableSourceCount,
+            factletStaleDays: workflowState.factletStaleDays,
+            factletBacklogDiscoveryPause: workflowState.factletBacklogDiscoveryPause
+        } : null,
         limits:         TASK_TYPE_LIMITS,
         sessionBudgets: TASK_SESSION_BUDGETS,
         budgetUsage:    sum.budgetUsage,
@@ -3713,11 +4028,24 @@ async function pipelinePlanTasks(id, args) {
     async function maybeCloseSession() {
         // Deterministic close: this plan call created zero new Tasks AND no
         // open (ready/claimed) Task remains for this Session.
-        if (created.length > 0) return { sessionClosed: false, closeReason: null };
+        //
+        // closeReason is ALWAYS a non-empty string:
+        //   - "work_remaining"                              -- session still active
+        //   - "budget_exhausted: TYPE_A, TYPE_B"            -- closed; budgets capped these types
+        //   - "no_more_work"                                -- closed; nothing to plan, no budget exhausted
+        if (created.length > 0) {
+            return { sessionClosed: false, closeReason: 'work_remaining' };
+        }
         const openInSession = await prisma.task.count({
             where: { sessionId, status: { in: ['ready', 'claimed'] } }
         });
-        if (openInSession > 0) return { sessionClosed: false, closeReason: null };
+        if (openInSession > 0) {
+            return { sessionClosed: false, closeReason: 'work_remaining' };
+        }
+        const sumNow = computeBudgetSummary();
+        const reason = sumNow.budgetExhausted.length > 0
+            ? `budget_exhausted: ${sumNow.budgetExhausted.join(', ')}`
+            : 'no_more_work';
         await prisma.session.update({
             where: { id: sessionId },
             data:  { status: 'complete', finishedAt: new Date() }
@@ -3727,15 +4055,13 @@ async function pipelinePlanTasks(id, args) {
                 sessionId,
                 action:  'session_closed',
                 payload: JSON.stringify({
-                    by: 'planner',
-                    budgetUsage: computeBudgetSummary().budgetUsage
+                    by:               'planner',
+                    closeReason:      reason,
+                    budgetUsage:      sumNow.budgetUsage,
+                    budgetExhausted:  sumNow.budgetExhausted
                 })
             }
         }).catch(() => {});
-        const reason = (TASK_TYPES.size > 0 &&
-                        computeBudgetSummary().budgetExhausted.length > 0)
-            ? 'budgets_exhausted_no_open_tasks'
-            : 'no_new_tasks_no_open_tasks';
         return { sessionClosed: true, closeReason: reason };
     }
 }
@@ -3750,12 +4076,17 @@ async function pipelineClaimTask(id, args) {
 
     // Atomic claim: SELECT + UPDATE in a transaction, retry on lost race.
     for (let attempt = 0; attempt < 5; attempt++) {
-        const where = { status: 'ready' };
-        if (types && types.length > 0) where.type = { in: types };
-        const candidate = await prisma.task.findFirst({
-            where,
-            orderBy: [{ createdAt: 'asc' }]
-        });
+        const typeOrder = (types && types.length > 0) ? types : TASK_CLAIM_PRIORITY;
+        let candidate = null;
+        for (const type of typeOrder) {
+            const where = { status: 'ready', type };
+            if (sessionId) where.sessionId = sessionId;
+            candidate = await prisma.task.findFirst({
+                where,
+                orderBy: [{ createdAt: 'asc' }]
+            });
+            if (candidate) break;
+        }
         if (!candidate) {
             return createSuccessResponse(id, JSON.stringify({ status: 'NO_TASK' }, null, 2));
         }
@@ -3804,6 +4135,31 @@ async function pipelineCompleteTask(id, args) {
             finishedAt: new Date()
         }
     });
+    // Stamp the source worker Task as judged so pipelinePlanTasks does not
+    // re-spawn JUDGE_AFFECTED for it on subsequent passes. Fires only after a
+    // successful JUDGE_AFFECTED that carries input.sourceTaskId. Missing /
+    // invalid source output is treated as {} so the marker still lands.
+    if (updated.type === 'JUDGE_AFFECTED' && updated.status === 'done') {
+        const inp = updated.input ? safeJsonParse(updated.input) : null;
+        const srcId = inp && inp.sourceTaskId;
+        if (srcId) {
+            try {
+                const srcRow = await prisma.task.findUnique({ where: { id: srcId } });
+                if (srcRow) {
+                    let srcOut = srcRow.output ? safeJsonParse(srcRow.output) : null;
+                    if (!srcOut || typeof srcOut !== 'object') srcOut = {};
+                    srcOut.judgedAt       = new Date().toISOString();
+                    srcOut.judgedByTaskId = updated.id;
+                    await prisma.task.update({
+                        where: { id: srcId },
+                        data:  { output: JSON.stringify(srcOut) }
+                    });
+                }
+            } catch (e) {
+                logInfo(`complete_task judged-stamp failed for task ${updated.id} -> source ${srcId}: ${e.message}`);
+            }
+        }
+    }
     // Audit trail: log task completion into the linked Session's event log so
     // report_session / audit_session can reconstruct the run from Tasks, not
     // just legacy save events.
@@ -3877,6 +4233,7 @@ async function pipelineRecycler(id, args) {
     const now            = new Date();
     const claimCutoff    = new Date(now.getTime() - claimTimeoutMinutes * 60 * 1000);
     const taskCutoff     = new Date(now.getTime() - taskRetentionDays   * 24 * 60 * 60 * 1000);
+    const factletTaskCutoff = new Date(now.getTime() - Math.max(taskRetentionDays, factletStaleDays) * 24 * 60 * 60 * 1000);
     const factletCutoff  = new Date(now.getTime() - factletStaleDays    * 24 * 60 * 60 * 1000);
     const SAMPLE         = 10;
     const warnings       = [];
@@ -3900,8 +4257,28 @@ async function pipelineRecycler(id, args) {
         where: {
             status: { in: ['done', 'failed', 'cancelled'] },
             OR: [
-                { finishedAt: { lt: taskCutoff } },
-                { AND: [{ finishedAt: null }, { updatedAt: { lt: taskCutoff } }] }
+                {
+                    AND: [
+                        { type: { not: 'APPLY_FACTLET' } },
+                        {
+                            OR: [
+                                { finishedAt: { lt: taskCutoff } },
+                                { AND: [{ finishedAt: null }, { updatedAt: { lt: taskCutoff } }] }
+                            ]
+                        }
+                    ]
+                },
+                {
+                    AND: [
+                        { type: 'APPLY_FACTLET' },
+                        {
+                            OR: [
+                                { finishedAt: { lt: factletTaskCutoff } },
+                                { AND: [{ finishedAt: null }, { updatedAt: { lt: factletTaskCutoff } }] }
+                            ]
+                        }
+                    ]
+                }
             ]
         },
         select: { id: true }
@@ -3929,7 +4306,7 @@ async function pipelineRecycler(id, args) {
     return createSuccessResponse(id, JSON.stringify({
         dryRun,
         now: now.toISOString(),
-        thresholds: { factletStaleDays, taskRetentionDays, claimTimeoutMinutes },
+        thresholds: { factletStaleDays, taskRetentionDays, applyFactletTaskRetentionDays: Math.max(taskRetentionDays, factletStaleDays), claimTimeoutMinutes },
         timedOutTasksRequeued: staleClaimIds.length,
         finishedTasksDeleted:  finishedIds.length,
         staleFactletsDeleted:  staleFactletIds.length,
@@ -3986,6 +4363,8 @@ function buildSummaryMarkdown(s) {
         headline = `Session FAILED -- no save attempts (agent never called pipeline.save)`;
     } else if (s.status === 'failed_all_rejected') {
         headline = `Session FAILED -- ${s.save_attempts} attempts, all rejected by server`;
+    } else if (s.status === 'completed_no_new_evidence') {
+        headline = `Session complete -- ${s.task_completions || 0} Task(s), no new saves`;
     } else if (s.actually_saved < (s.requested ?? Infinity)) {
         headline = `Session under target -- saved ${s.actually_saved} of ${requestedStr} requested`;
     } else {
@@ -3999,6 +4378,7 @@ function buildSummaryMarkdown(s) {
     lines.push(`- Save attempts: ${s.save_attempts ?? 0}`);
     lines.push(`- Actually saved: ${s.actually_saved}`);
     lines.push(`- Failed: ${s.failed}`);
+    if (s.task_total !== undefined) lines.push(`- Tasks: ${s.task_completions || 0} completed of ${s.task_total}`);
     lines.push(`- Status: ${s.status}`);
     if (s.reason) lines.push(`- Reason: ${s.reason}`);
     lines.push(`- Duration: ${durationSec}s`);
@@ -4025,7 +4405,7 @@ function buildSummaryMarkdown(s) {
         }
     }
 
-    if (s.actually_saved < (s.requested ?? Infinity)) {
+    if (s.status === 'under_target' && s.actually_saved < (s.requested ?? Infinity)) {
         lines.push('');
         lines.push(`_Under target by ${s.requested - s.actually_saved}. Re-run \`start_session\` to continue, or accept the partial result._`);
     }
@@ -4063,6 +4443,9 @@ async function enforceSessionWatchdog(id) {
     for (const sess of activeSessions) {
         const ageSec = Math.round((Date.now() - sess.startedAt.getTime()) / 1000);
         const attempts = sess.events.filter(e => e.action === 'save_attempt').length;
+        const taskEvents = sess.events.filter(e => e.action === 'task_completed').length;
+        const taskRows = await prisma.task.count({ where: { sessionId: sess.id } });
+        const hasTaskProgress = taskEvents > 0 || taskRows > 0;
 
         if (attempts > 0 && ageSec >= ERROR_THRESHOLD_SEC) {
             await prisma.session.update({
@@ -4084,7 +4467,7 @@ async function enforceSessionWatchdog(id) {
             continue;
         }
 
-        if (attempts === 0 && ageSec >= TERMINATE_AT_SEC) {
+        if (attempts === 0 && !hasTaskProgress && ageSec >= TERMINATE_AT_SEC) {
             const isStale = ageSec >= ERROR_THRESHOLD_SEC;
             await prisma.session.update({
                 where: { id: sess.id },
@@ -4291,9 +4674,13 @@ async function pipelineReportSession(id, sessionId, close) {
     // The agent is forbidden from overwriting this.
     let honestStatus;
     let reason = null;
-    if (attempts.length === 0 && marks.length === 0) {
+    const terminalTaskCount = sessionTasks.filter(t => ['done', 'failed', 'cancelled'].includes(t.status)).length;
+    if (attempts.length === 0 && marks.length === 0 && terminalTaskCount === 0) {
         honestStatus = 'failed_no_data';
         reason = 'no_save_attempts and no_sources_marked -- agent ran the workflow but did nothing';
+    } else if (attempts.length === 0 && marks.length === 0 && terminalTaskCount > 0) {
+        honestStatus = 'completed_no_new_evidence';
+        reason = `${terminalTaskCount} Task(s) reached terminal status with 0 saves -- valid Task workflow result when evidence is duplicate, irrelevant, or judge-only`;
     } else if (attempts.length === 0 && marks.length > 0) {
         honestStatus = 'scraped_no_clients';
         const cf = marks.reduce((s, m) => { try { return s + (JSON.parse(m.payload).clientsFound || 0); } catch { return s; } }, 0);
@@ -4373,7 +4760,9 @@ async function findClients(id, args) {
     const useSummary = args.summary !== false;
     let where = {};
 
-    if (filters.search) {
+    if (filters.id) {
+        where.id = filters.id;
+    } else if (filters.search) {
         where.OR = [
             { name: { contains: filters.search } },
             { email: { contains: filters.search } },
@@ -4419,8 +4808,14 @@ async function findBookings(id, args) {
     const limit = args.limit || 20;
     const where = {};
 
+    if (filters.id)     where.id     = filters.id;
     if (filters.status) where.status = filters.status;
     if (filters.trade)  where.trade  = filters.trade;
+    if (filters.shared !== undefined) where.shared = !!filters.shared;
+    if (filters.future === true) where.startDate = { gte: new Date() };
+    if (filters.startDateGte) {
+        where.startDate = Object.assign(where.startDate || {}, { gte: new Date(filters.startDateGte) });
+    }
 
     if (filters.search) {
         where.OR = [
@@ -4446,6 +4841,11 @@ async function findBookings(id, args) {
 
 async function findFactlets(id, args) {
     const filters = args.filters || {};
+
+    if (filters.id) {
+        const factlet = await prisma.factlet.findUnique({ where: { id: filters.id } });
+        return createSuccessResponse(id, JSON.stringify(factlet ? [factlet] : [], null, 2));
+    }
 
     // If clientId is provided, return live Factlets relevant to that client via
     // cheap content/source overlap on name / company / website host. No join
@@ -4698,7 +5098,7 @@ async function ensureTaskTable() {
     }
 }
 
-function startMcpServer() {
+async function startMcpServer() {
     console.error(`[MCP] Starting Pre-Crime MCP server (3 tools)...`);
     console.error(`[MCP] Database: ${dbPath}`);
 
@@ -4706,8 +5106,9 @@ function startMcpServer() {
     logInfo(`Database: ${dbPath}`);
 
     // Run startup migrations before accepting any requests
-    ensureSourceTable().catch(e => logError(`Startup migration error: ${e.message}`));
-    ensureTaskTable().catch(e => logError(`Startup migration error: ${e.message}`));
+    await ensureSourceTable().catch(e => logError(`Startup migration error: ${e.message}`));
+    await ensureTaskTable().catch(e => logError(`Startup migration error: ${e.message}`));
+    await cleanupOpenTasksOnStartup().catch(e => logError(`Startup recycler error: ${e.message}`));
 
     const rl = readline.createInterface({
         input: process.stdin,
@@ -4727,4 +5128,7 @@ function startMcpServer() {
     logInfo('MCP server ready');
 }
 
-startMcpServer();
+startMcpServer().catch(err => {
+    console.error(`[MCP] FATAL startup error: ${err.message}`);
+    process.exit(1);
+});

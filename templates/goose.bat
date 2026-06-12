@@ -2,9 +2,19 @@
 setlocal
 cd /d "%~dp0"
 
-:: --- Require precrime_config.json (Subproject 10) ---
-:: Refuse to start when missing. bootstrap_config.js emits `set` lines for
-:: PRECRIME_* runtime vars and (if filled) OPENAI_API_KEY/ANTHROPIC_API_KEY/TAVILY_API_KEY.
+:: ============================================================================
+:: PRECRIME launcher (Goose). Required order:
+::   1. Validate precrime_config.json exists and parses.
+::   2. Lift PRECRIME_* + API keys into env via bootstrap_config.js.
+::   3. Parse args -> mode + DB name. Verify DB file exists.
+::   4. Verify the chosen LLM provider has its key. Verify Tavily key.
+::   5. Run setup.bat (npm install + prisma generate). Idempotent.
+::   6. Run sync-config.js to mirror VALUE_PROP.md into Config (errors surfaced).
+::   7. Render goose user config + patch GOOSE.md project root.
+::   8. Launch goose.
+:: ============================================================================
+
+:: --- 1. precrime_config.json gate ---
 if not exist "%~dp0precrime_config.json" (
   echo.
   echo  precrime_config.json not found at: %~dp0precrime_config.json
@@ -13,6 +23,12 @@ if not exist "%~dp0precrime_config.json" (
   pause
   exit /b 1
 )
+
+:: --- 2. bootstrap env from precrime_config.json ---
+:: Emits: PRECRIME_DEPLOYMENT_NAME, PRECRIME_DATABASE_FILE, PRECRIME_DEFAULT_MODE,
+::        PRECRIME_LLM_PROVIDER, PRECRIME_LLM_MODEL, PRECRIME_LLM_BASE_URL,
+::        OPENAI_API_KEY, ANTHROPIC_API_KEY, OPENROUTER_API_KEY, TAVILY_API_KEY
+::        (each only when non-empty in the config).
 for /f "usebackq delims=" %%v in (`node "%~dp0scripts\bootstrap_config.js"`) do %%v
 if errorlevel 1 (
   echo.
@@ -21,11 +37,19 @@ if errorlevel 1 (
   exit /b 1
 )
 
-:: Mode: --headless flag triggers autonomous marketplace mode (no user interaction).
-:: Usage:  goose.bat                       -> interactive
-::         goose.bat --headless            -> headless marketplace
-::         goose.bat --headless mydb       -> headless with custom DB
+:: --- 3. Args -> mode + objective + DB ---
+:: Usage:  goose.bat                                 -> interactive (hybrid), default DB
+::         goose.bat --headless                      -> headless (marketplace), default DB
+::         goose.bat --headless --outreach           -> headless outreach (Gmail required)
+::         goose.bat --headless --hybrid mydb        -> headless hybrid with custom DB
+::         goose.bat --interactive --marketplace     -> interactive marketplace-only
+::         goose.bat mydb                            -> interactive (hybrid) with custom DB
+::
+:: Mode    : --headless | --interactive
+:: Objective : --marketplace | --outreach | --hybrid
+:: Defaults: headless => marketplace; interactive => hybrid.
 set "PRECRIME_MODE=interactive"
+set "PRECRIME_OBJECTIVE="
 set "DBNAME=myproject.sqlite"
 
 :parse_args
@@ -35,16 +59,43 @@ if /i "%~1"=="--headless" (
   shift
   goto :parse_args
 )
+if /i "%~1"=="--interactive" (
+  set "PRECRIME_MODE=interactive"
+  shift
+  goto :parse_args
+)
+if /i "%~1"=="--marketplace" (
+  set "PRECRIME_OBJECTIVE=marketplace"
+  shift
+  goto :parse_args
+)
+if /i "%~1"=="--outreach" (
+  set "PRECRIME_OBJECTIVE=outreach"
+  shift
+  goto :parse_args
+)
+if /i "%~1"=="--hybrid" (
+  set "PRECRIME_OBJECTIVE=hybrid"
+  shift
+  goto :parse_args
+)
 set "DBNAME=%~1"
 shift
 goto :parse_args
 :args_done
 
-if not "%DBNAME:~-7%"==".sqlite" set "DBNAME=%DBNAME%.sqlite"
+:: Apply objective defaults (headless => marketplace, interactive => hybrid).
+if "%PRECRIME_OBJECTIVE%"=="" (
+  if /i "%PRECRIME_MODE%"=="headless" (
+    set "PRECRIME_OBJECTIVE=marketplace"
+  ) else (
+    set "PRECRIME_OBJECTIVE=hybrid"
+  )
+)
 
+if not "%DBNAME:~-7%"==".sqlite" set "DBNAME=%DBNAME%.sqlite"
 set "DBPATH=%~dp0data\%DBNAME%"
 
-:: Verify the DB file exists
 if not exist "%DBPATH%" (
   echo.
   echo  Database not found: data\%DBNAME%
@@ -54,35 +105,101 @@ if not exist "%DBPATH%" (
   exit /b 1
 )
 
-:: Set DATABASE_URL for child processes -- goose-spawned MCP servers inherit this.
+:: Set DATABASE_URL absolute (Prisma resolves relative paths from CWD).
+:: Inherited by goose-spawned MCP server and by sync-config.js below.
 set "DATABASE_URL=file:%DBPATH%"
 
-:: Ensure goose is on PATH (default install location from download_cli.ps1)
+:: Ensure goose is on PATH (default install location from download_cli.ps1).
 set "PATH=%USERPROFILE%\.local\bin;%PATH%"
 
-:: API key presence check. Keys come from precrime_config.json via bootstrap_config.js.
-if "%OPENROUTER_API_KEY%"=="" if "%OPENAI_API_KEY%"=="" if "%ANTHROPIC_API_KEY%"=="" (
+:: --- 4. API key validation tied to the chosen LLM provider ---
+:: Provider comes from precrime_config.json llm.provider via PRECRIME_LLM_PROVIDER.
+:: Each provider needs its own key emitted into env by bootstrap_config.js.
+set "LLM_PROVIDER=%PRECRIME_LLM_PROVIDER%"
+if "%LLM_PROVIDER%"=="" set "LLM_PROVIDER=openai"
+
+if /i "%LLM_PROVIDER%"=="openai" (
+  if "%OPENAI_API_KEY%"=="" (
+    echo.
+    echo  llm.provider=openai but apiKeys.openai is empty in precrime_config.json.
+    echo  Edit: %~dp0precrime_config.json
+    echo.
+    pause & exit /b 1
+  )
+) else if /i "%LLM_PROVIDER%"=="anthropic" (
+  if "%ANTHROPIC_API_KEY%"=="" (
+    echo.
+    echo  llm.provider=anthropic but apiKeys.anthropic is empty in precrime_config.json.
+    echo  Edit: %~dp0precrime_config.json
+    echo.
+    pause & exit /b 1
+  )
+) else if /i "%LLM_PROVIDER%"=="openrouter" (
+  if "%OPENROUTER_API_KEY%"=="" (
+    echo.
+    echo  llm.provider=openrouter but apiKeys.openrouter is empty in precrime_config.json.
+    echo  Edit: %~dp0precrime_config.json
+    echo.
+    pause & exit /b 1
+  )
+) else (
   echo.
-  echo  No LLM API key in precrime_config.json apiKeys block.
-  echo  Edit: %~dp0precrime_config.json
+  echo  Unknown llm.provider="%LLM_PROVIDER%" in precrime_config.json.
+  echo  Expected one of: openai, anthropic, openrouter.
   echo.
   pause & exit /b 1
 )
+
 if "%TAVILY_API_KEY%"=="" (
   echo.
-  echo  TAVILY_API_KEY missing in precrime_config.json apiKeys.tavily.
-  echo  Edit: %~dp0precrime_config.json
+  echo  TAVILY_API_KEY missing. Set apiKeys.tavily in precrime_config.json.
+  echo  Tavily is required for url-loop / source discovery scraping.
   echo.
   pause & exit /b 1
 )
+
+:: GOOSE_MODEL precedence: pre-set env wins > PRECRIME_LLM_MODEL > hardcoded default.
 if "%GOOSE_MODEL%"=="" if not "%PRECRIME_LLM_MODEL%"=="" set "GOOSE_MODEL=%PRECRIME_LLM_MODEL%"
 if "%GOOSE_MODEL%"=="" set "GOOSE_MODEL=google/gemini-3-flash-preview"
 
-:: --- Write goose user config from template ---
-:: Goose reads %APPDATA%\Block\goose\config\config.yaml, NOT this folder's .mcp.json.
-:: Without this step, a stale config can pin extensions to a different project. We
-:: regenerate it on every launch so the project always owns its config.
-:: Edit goose_config.template.yaml (NOT the file in %APPDATA%) to change defaults.
+:: Preflight: confirm goose binary is on PATH.
+where goose >nul 2>&1
+if errorlevel 1 (
+  echo.
+  echo  goose not found on PATH.
+  echo  Install: iwr -useb https://raw.githubusercontent.com/aaif-goose/goose/main/download_cli.ps1 ^| iex
+  echo.
+  pause
+  exit /b 1
+)
+
+echo.
+echo  Pre-Crime (Goose)  -  Provider: %LLM_PROVIDER%  Model: %GOOSE_MODEL%
+echo  Database: data\%DBNAME%
+echo.
+
+:: --- 5. Setup ---
+call setup.bat
+if errorlevel 1 (
+  echo.
+  echo Setup failed. Fix the error above and try again.
+  pause
+  exit /b 1
+)
+
+:: --- 6. Sync VALUE_PROP.md into Config (errors surfaced) ---
+echo  Syncing VALUE_PROP.md into Config...
+node "%~dp0server\sync-config.js"
+if errorlevel 1 (
+  echo.
+  echo  WARNING: sync-config.js failed. The wizard may prompt for VALUE_PROP fields.
+  echo  Fix DOCS\VALUE_PROP.md or check DATABASE_URL=%DATABASE_URL%.
+  echo.
+)
+
+:: --- 7. Render goose user config + GOOSE.md from templates ---
+:: Goose reads %APPDATA%\Block\goose\config\config.yaml. Regenerated every launch
+:: so the project always owns its config (stale config can pin to a different project).
 set "GOOSE_CFG_DIR=%APPDATA%\Block\goose\config"
 set "GOOSE_CFG=%GOOSE_CFG_DIR%\config.yaml"
 set "GOOSE_TPL=%~dp0goose_config.template.yaml"
@@ -101,7 +218,6 @@ if errorlevel 1 (
   pause & exit /b 1
 )
 
-:: Patch GOOSE.md with actual project root (build.bat stamps __PROJECT_ROOT__ as placeholder)
 set "GOOSE_MD=%~dp0GOOSE.md"
 powershell -NoProfile -ExecutionPolicy Bypass -Command "$f = Get-Content -Raw -LiteralPath $env:GOOSE_MD; $out = $f.Replace('__PROJECT_ROOT__', $env:PROJECT_ROOT); [System.IO.File]::WriteAllText($env:GOOSE_MD, $out, [System.Text.UTF8Encoding]::new($false))"
 if errorlevel 1 (
@@ -109,41 +225,15 @@ if errorlevel 1 (
   pause & exit /b 1
 )
 
-:: GOOSE.md is the single entry point. init-wizard.md handles both interactive
-:: and headless modes (mode passed as arg; default interactive).
-
-:: Preflight: confirm goose is actually on PATH
-where goose >nul 2>&1
-if errorlevel 1 (
-  echo.
-  echo  goose not found on PATH.
-  echo  Install: iwr -useb https://raw.githubusercontent.com/aaif-goose/goose/main/download_cli.ps1 ^| iex
-  echo.
-  pause
-  exit /b 1
-)
-
-echo.
-echo  Pre-Crime (Goose)
-echo  Database: data\%DBNAME%
-echo.
-
-:: Setup: install deps + generate Prisma client. Idempotent -- fast if already done.
-call setup.bat
-if errorlevel 1 (
-  echo.
-  echo Setup failed. Fix the error above and try again.
-  pause
-  exit /b 1
-)
-
-:: Sync VALUE_PROP.md masthead into DB Config if available.
-node "%~dp0server\sync-config.js" 2>nul
-
-:: Launch goose session.
+:: --- 8. Launch goose ---
+:: Trigger text encodes BOTH mode and objective so init-wizard.md can detect
+:: them without depending on env-variable inheritance into the goose process.
+:: PRECRIME_OBJECTIVE is also exported (env) for any tool that prefers env over
+:: prompt parsing.
 if "%PRECRIME_MODE%"=="headless" (
-  set "GOOSE_TRIGGER=headless precrime (database: %DBNAME%)"
+  set "GOOSE_TRIGGER=headless precrime objective=%PRECRIME_OBJECTIVE% (database: %DBNAME%)"
 ) else (
-  set "GOOSE_TRIGGER=run precrime (database: %DBNAME%)"
+  set "GOOSE_TRIGGER=run precrime objective=%PRECRIME_OBJECTIVE% (database: %DBNAME%)"
 )
+echo  Mode: %PRECRIME_MODE%   Objective: %PRECRIME_OBJECTIVE%
 "%USERPROFILE%\.local\bin\goose.exe" run --system "First call developer__shell: type %~dp0GOOSE.md. Then follow it tersely." -t "%GOOSE_TRIGGER%" -s

@@ -18,7 +18,7 @@ When the user says "start", "run precrime", "let's go", "headless", "wizard", et
 
 This deployment is **Planner / Worker / Judge / Presenter** -- not a global LLM workflow.
 
-- **Planner** (server) enqueues `Task` rows via `precrime__pipeline({ action:"plan_tasks", mode:"workflow" | "headless" | "hot_only" })`. Per-type limits come from `precrime_config.json` (`tasks.limits`).
+- **Planner** (server) enqueues `Task` rows via `precrime__pipeline({ action:"plan_tasks", mode:"workflow" | "headless" | "hot_only" })`. Per-type limits come from `precrime_config.json` (`tasks.limits`). Workflow bias is procedural: when unprocessed live Factlets reach `tasks.workflowStrategy.factletBacklogDiscoveryPause`, the Planner pauses new discovery and drains APPLY_FACTLET / JUDGE_AFFECTED work first.
 - **Workers** (LLM skills) execute exactly one claimed `Task` and stop:
   - `SCRAPE_SOURCE` -> `skills/url-loop.md`
   - `ENRICH_CLIENT` -> `skills/enrichment-agent.md`
@@ -46,7 +46,7 @@ There are exactly two user-editable config surfaces:
 | File | Purpose |
 |------|---------|
 | `DOCS/VALUE_PROP.md` | Product / sales truth: seller identity, seller email, trade, geography, pitch, buyers, relevance signals, pricing, outreach examples. |
-| `precrime_config.json` | Runtime / API config: apiKeys, llm provider/model/baseUrl, database file path, defaultMode, timezone, `tasks.limits`, `recycler` thresholds, auth tokens. **Never** put VALUE_PROP fields here. |
+| `precrime_config.json` | Runtime / API config: apiKeys, llm provider/model/baseUrl, database file path, defaultMode, `tasks.limits`, `tasks.sessionBudgets`, `tasks.workflowStrategy`, `recycler` thresholds, auth tokens. **Never** put VALUE_PROP fields here. **No timezone field** -- share time derives IANA timezone from `Booking.zip`. |
 
 No `.env` file is part of the build. Launchers (`precrime.bat`, `goose.bat`, `hermes.bat`) read `precrime_config.json` via `scripts/bootstrap_config.js` and set the API keys and runtime knobs into the process environment for child processes to inherit.
 
@@ -62,8 +62,7 @@ No `.env` file is part of the build. Launchers (`precrime.bat`, `goose.bat`, `he
 | `skills/enrichment-agent.md` | One-Task `ENRICH_CLIENT` worker. |
 | `skills/apply-factlet.md` | One-Task `APPLY_FACTLET` worker. |
 | `skills/show-hot-leedz.md` | One-Task `SHOW_HOT_LEEDZ` presenter. Routes share via `share_booking`, email via `share-skill.md` Step 3. |
-| `skills/share-skill.md` | Share routing (`leedz_api` -> `share_booking`, `email_share` / `email_user` -> `gmail__gmail_send`). |
-| `skills/leed-drafter.md` | Reference doc for the addLeed payload shape that `share_booking` builds server-side. |
+| `skills/share-skill.md` | Single marketplace sharing skill: drafts vendor-facing `titleDraft` / `dtDraft` / `rqDraft`, previews the server-built `share_booking` payload, and routes `leedz_api` / email share paths. |
 | `skills/outreach-drafter.md` | Outreach email composition (called by `show-hot-leedz.md` for `outreach_ready` Bookings). |
 | `skills/client-finder.md` | Direct-email verification helper, called by `enrichment-agent.md`. |
 | `skills/shared/booking-detect.md` | Booking detection helper. |
@@ -95,7 +94,7 @@ Seed files (read once at startup by `pipeline.import_sources`, not at runtime):
 
 - Workers complete exactly one Task and stop. They never call `pipeline.plan_tasks`, `pipeline.rescore`, or `pipeline.judge_affected` directly.
 - `Booking.status` is owned by Judge. Workers pass `judge:false` to `pipeline.save`.
-- `leedz__createLeed` is LEGACY. Never call directly. Only `share_booking(mode:"post")` posts to Leedz.
+- The Leedz MCP proxy is not exposed to the agent. Only `share_booking(mode:"post")` posts to Leedz.
 - The LLM never computes `st` / `et`. The LLM never reformats dates into epochs. `resolve_dates` and `share_booking` reject LLM-supplied `st`/`et` by name.
 - Em-dashes, en-dashes, double-hyphens banned in user-facing copy -- they corrupt in email clients.
 - Never invent facts. Thin dossier produces thin draft.

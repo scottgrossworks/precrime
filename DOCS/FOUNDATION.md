@@ -71,7 +71,7 @@ Every skill file is an implementation of one of these functions.
 | Audit session (no close) | `precrime__pipeline({ action: "audit_session" })` |
 | Scrape URL (headless) | `tavily__tavily_extract({ url })` |
 | Send email | `gmail__gmail_send({ to, subject, body })` |
-| Post marketplace leed | `precrime__pipeline({ action: "share_booking", bookingId, mode })` (LEGACY note: `leedz__createLeed` is no longer the normal path -- the server builds the payload and computes `st`/`et`) |
+| Post marketplace leed | `precrime__pipeline({ action: "share_booking", bookingId, mode })` -- the server builds the payload and computes `st`/`et`; external Leedz tools are not exposed to the agent |
 
 Scoring runs automatically on every `pipeline.save`. No separate score call needed.
 See `DOCS/SCORING.json` for the full algorithm and gates.

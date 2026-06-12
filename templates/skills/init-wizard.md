@@ -74,50 +74,97 @@ status = precrime__pipeline({ action: "status" })   // already have this
 cfg    = status.config
 ```
 
-**A. Config already has a valid trade.** If `cfg.defaultTrade` is set AND `trades` contains it (case-insensitive exact match) -> proceed to Step 2.
+**A. Explicit VALUE_PROP trade wins.** Read `DOCS/VALUE_PROP.md` first and parse the `**Trade:**` line. If it exactly matches one canonical trade (case-insensitive), call:
 
-**B. Infer from VALUE_PROP.** Read `DOCS/VALUE_PROP.md`. Lowercase the product name + description. For each trade in `trades`, check whether the trade name (or its singular form) appears as a substring.
+```
+precrime__pipeline({ action: "configure", patch: { defaultTrade: "<trade-from-VALUE_PROP>" } })
+```
+
+Then proceed to Step 2. Do this even when Config already has a different valid trade. Config is only a mirror; stale Config must never outrank `VALUE_PROP`.
+
+**B. Config already has a valid trade.** If `cfg.defaultTrade` is set AND `trades` contains it (case-insensitive exact match) -> proceed to Step 2.
+
+**C. Infer from VALUE_PROP.** Lowercase only the product name, `**Trade:**` value, and `**Seller:**` line. For each trade in `trades`, check whether the trade name (or its singular form) appears as a substring. Do not scan relevance examples or body text; they may mention adjacent trades.
 
 - Exactly one match -> set it: `precrime__pipeline({ action: "configure", patch: { defaultTrade: "<trade>" } })`. Tell the user: `Trade inferred: <trade>`. Proceed.
-- Zero matches OR multiple matches -> ambiguous. Go to C.
+- Zero matches OR multiple matches -> ambiguous. Go to D.
 
-**C. Prompt (interactive only).** Show the user the candidate list (matches if any, else the full `trades` list trimmed to 20). Ask: `Which Leedz trade describes <product name>?` Wait for answer, validate the answer is in `trades`, then `configure` it.
+**D. Prompt (interactive only).** Show the user the candidate list (matches if any, else the full `trades` list trimmed to 20). Ask: `Which Leedz trade describes <product name>?` Wait for answer, validate the answer is in `trades`, then `configure` it.
 
-**Headless mode:** if A and B both fail, STOP with `TRADE_UNRESOLVED: defaultTrade not set and inference ambiguous. Edit DOCS/VALUE_PROP.md to clarify, or set Config.defaultTrade.` No prompt.
+**Headless mode:** if A, B, and C all fail, STOP with `TRADE_UNRESOLVED: defaultTrade not set and inference ambiguous. Edit DOCS/VALUE_PROP.md to clarify, or set Config.defaultTrade.` No prompt.
 
 After this step, `cfg.defaultTrade` is set and validated. Demand-signal detection and marketplace post both depend on it.
 
 ## Step 2: Greeting
 
-From status:
-- clients > 0 -> `Pre-Crime online -- X clients, Y ready, Z in queue.`
+From status, read the booking counts keyed `cold` / `brewing` / `hot` / `shared`:
+- clients > 0 -> `Pre-Crime online -- X clients, Y hot, Z in queue.`
 - clients = 0 -> `Pre-Crime online -- empty database.`
 
-## Step 3: Mode detection
+## Step 3: Mode + objective detection
 
-**If headless** (user message contained `headless`):
-- Set mode = headless.
-- Skip to Step 4. No questions.
+Pre-Crime has TWO axes -- detect each from the launcher prompt and env:
 
-**If interactive:** ask exactly this two-choice menu and nothing else:
+**Mode** (`headless` | `interactive`):
+- If the startup prompt contains the token `headless` OR `PRECRIME_RUN_MODE` env equals `headless` -> mode = `headless`.
+- Otherwise -> mode = `interactive`.
+
+**Objective** (`marketplace` | `outreach` | `hybrid`):
+1. If the prompt contains `objective=<value>` with value in `{marketplace, outreach, hybrid}`, use that value.
+2. Otherwise if the prompt contains `--marketplace`, `--outreach`, or `--hybrid`, use the matching value.
+3. Otherwise if `PRECRIME_OBJECTIVE` env is set to one of those values, use that.
+4. Otherwise apply the default: `headless` -> `marketplace`; `interactive` -> `hybrid`.
+
+If the prompt names something OTHER than these three values, STOP with `INVALID_OBJECTIVE: <value>. Expected one of: marketplace, outreach, hybrid.`
+
+### Headless Gmail gate (BLOCKING)
+
+If mode = `headless` AND objective is `outreach` or `hybrid`:
+- Verify the Gmail MCP is registered by attempting a probe (e.g. check that the `gmail__gmail_send` tool name is in your available tool surface). Do NOT actually send mail here; just verify the tool exists.
+- If unavailable, STOP immediately with: `OUTREACH_REQUIRES_GMAIL: objective=<objective> needs gmail__gmail_send. Register the Gmail MCP server or re-run with --marketplace.` No fallback, no downgrade.
+
+### Interactive menu
+
+If mode = `interactive`, present exactly this two-choice menu and nothing else (objective is already latched; do NOT re-ask for marketplace/outreach/hybrid):
+
 ```
 What now?
-  (1) SHOW_HOT_LEEDZ -- show already-judged leed_ready / outreach_ready bookings so you can share / email / skip per item.
+  (1) SHOW_HOT_LEEDZ -- show already-judged hot bookings so you can share / email / skip per item.
   (2) RUN_WORKFLOW   -- full discovery + scrape + enrich + judge loop.
 ```
-- Wait for answer. Do not present marketplace / outreach / hybrid sub-modes. Do not present any other menu.
+
 - Answer "1" / "SHOW_HOT_LEEDZ" -> choice = `SHOW_HOT_LEEDZ`.
 - Answer "2" / "RUN_WORKFLOW"   -> choice = `RUN_WORKFLOW`.
 
+In headless mode, skip the menu entirely.
+
 ## Step 4: Route
 
-- Mode = headless                   -> follow `__PROJECT_ROOT__/skills/headless_flow.md`.
+Pass `objective` to every `plan_tasks` call.
+
+- Mode = headless -> follow `__PROJECT_ROOT__/skills/headless_flow.md` with `objective=<resolved value>`.
 - Mode = interactive, choice = `SHOW_HOT_LEEDZ`:
-  1. `precrime__pipeline({ action: "plan_tasks", mode: "hot_only" })`
-  2. Follow `__PROJECT_ROOT__/skills/show-hot-leedz.md`. Stop after one Task.
+  1. `precrime__pipeline({ action: "plan_tasks", mode: "hot_only", objective: "<resolved>" })`
+  2. `precrime__pipeline({ action: "claim_task", role: "interactive-orchestrator", types: ["SHOW_HOT_LEEDZ"] })`
+  3. If `CLAIMED`, pass the returned Task packet to `__PROJECT_ROOT__/skills/show-hot-leedz.md`. The presenter must complete that exact `task.id`. Stop after one Task.
 - Mode = interactive, choice = `RUN_WORKFLOW`:
-  1. `precrime__pipeline({ action: "plan_tasks", mode: "workflow" })`
-  2. Hand off to the worker skills (url-loop / enrichment-agent / apply-factlet) until queues are exhausted, then run `show-hot-leedz.md` against whatever the loop promoted.
+  1. `precrime__pipeline({ action: "plan_tasks", mode: "workflow", objective: "<resolved>" })`
+  2. Respect the returned `workflowStrategy`: `consume_factlets` means prioritize apply-factlet / judge work and do not chase new discovery until the backlog drops; `discover_sources` means factlets are sparse enough to gather more evidence.
+  3. **Explicit heartbeat loop.** The Planner owns ordering; you are the executor. Repeat the cycle below until exit:
+     1. `precrime__pipeline({ action: "claim_task", role: "interactive-orchestrator" })`.
+     2. `NO_TASK` -> go to step 4 (replan).
+     3. `CLAIMED` -> dispatch by `task.type` to exactly one handler:
+        - `APPLY_FACTLET`  -> pass the claimed Task packet to `__PROJECT_ROOT__/skills/apply-factlet.md`
+        - `ENRICH_CLIENT`  -> pass the claimed Task packet to `__PROJECT_ROOT__/skills/enrichment-agent.md`
+        - `SCRAPE_SOURCE`  -> pass the claimed Task packet to `__PROJECT_ROOT__/skills/url-loop.md`
+        - `DRAFT_OUTREACH` -> pass the claimed Task packet to `__PROJECT_ROOT__/skills/outreach-drafter.md`
+        - `SHOW_HOT_LEEDZ` -> pass the claimed Task packet to `__PROJECT_ROOT__/skills/show-hot-leedz.md`
+        - `JUDGE_AFFECTED` -> call `pipeline.judge_affected({ clientIds, bookingIds, session_id })` inline, then `complete_task`.
+        - `SHARE_BOOKING`  -> call `pipeline.share_booking({ bookingId, mode:"post" })` inline (only if objective allows marketplace), then `complete_task`.
+        - `DISCOVER_SOURCES` -> run one bounded discovery search inline, `pipeline.add_sources`, then `complete_task`.
+        Worker skills receive the already-claimed Task packet and call `complete_task` themselves. They MUST NOT call `claim_task`. Inline handlers MUST call `complete_task` after the action returns.
+     4. After `NO_TASK` from claim, `precrime__pipeline({ action: "plan_tasks", mode: "workflow", objective: "<resolved>" })` again. Exit when this replan creates ZERO Tasks AND the previous drain claimed ZERO Tasks. Otherwise resume the cycle.
+  4. Do NOT preload every worker skill on every heartbeat -- load only the skill that matches the claimed `task.type`. Do NOT decide workflow order yourself; the Planner already chose.
 
 ## Rules
 

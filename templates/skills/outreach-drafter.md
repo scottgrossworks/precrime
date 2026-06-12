@@ -1,21 +1,42 @@
 ---
 name: outreach-drafter
-description: Compose outreach email from client + dossier + factlets + VALUE_PROP config.
+description: One-Task DRAFT_OUTREACH worker. Load the target Booking and its Client, judge outreach-readiness JIT, compose an outreach email from the dossier + booking + VALUE_PROP, save the draft, complete the Task. Never sends in headless.
 triggers:
   - draft outreach
   - compose email
   - write draft
+  - DRAFT_OUTREACH worker
 ---
 
 # Outreach Drafter
 
-Compose a cold outreach email for a specific client.
+One-Task worker for `DRAFT_OUTREACH`. Consumes ONE already-claimed Task whose target is a BOOKING, loads the Booking and its Client, judges JIT whether the leed is outreach-ready, and if so saves the draft text via `pipeline.save({ judge:false })`. Completes the Task either way. Never calls `claim_task`, `plan_tasks`, `rescore`, or `judge_affected`. Never computes scores or `Booking.status` (classification is server-side). Never auto-sends in headless -- the orchestrator (`headless_flow.md`) decides the send/draft path.
+
+---
+
+## Step 0 -- Accept Claimed Task
+
+The orchestrator has already called `claim_task` and handed you the Task packet.
+
+Set:
+
+- `taskId = task.id`
+- `targetType = task.targetType`
+- `bookingId = task.targetId`
+
+Expected Task: `{ type:"DRAFT_OUTREACH", targetType:"Booking", targetId }` where `targetId` is the Booking id. If the Task is missing or not this type, stop and report `wrong_task_type`; do not claim another Task.
+
+## Step 0.5 -- Gmail gate (BLOCKING for outreach)
+
+Verify the Gmail MCP is registered (the tool name `gmail__gmail_send` must appear in your available tools). If not, complete the Task `failed` with `error: "OUTREACH_REQUIRES_GMAIL"` and stop. Do not compose without a delivery path.
 
 ---
 
 ## Input
 
-- Client record (name, company, email, dossier)
+- The claimed Task's target is a BOOKING. Load the Booking, then its Client (this is the leed):
+  - Booking: `precrime__find({ action: "bookings", filters: { id: bookingId } })` (or `precrime__pipeline`). Read its `clientId`.
+  - Client: `precrime__find({ action: "clients", filters: { id: booking.clientId }, summary: false, limit: 1 })`. The draft is composed from `Client.dossier` + the Booking.
 - **Mandatory identity fields (Config-mirrored, NOT paraphrased from memory):**
   - `signature` -- pulled via `precrime__pipeline({ action: "get_config", key: "signature" })`
   - `companyName` / `companyEmail` / `defaultTrade` / `leedzEmail` -- pulled via `get_config` when needed for the close
@@ -23,7 +44,22 @@ Compose a cold outreach email for a specific client.
 
 ---
 
+## Outreach-Ready Gate (JIT, per leed)
+
+Before composing, judge this leed just in time. Classification is server-side and you never set status, but you still decide here whether THIS leed is worth an email. It is outreach-ready only if ALL hold:
+
+- the Client is real,
+- there is a real direct email (not a generic / shared inbox),
+- the Client is a decision-maker who can actually hire for the VALUE_PROP,
+- there is product-market fit between the VALUE_PROP and the dossier + booking.
+
+If it is NOT outreach-ready, do NOT draft. Complete the Task `done` with a short reason in `summary` (e.g. `skip: generic email`, `skip: no decision-maker`, `skip: no product-market fit`) and stop. Skipping is a normal outcome, not a failure.
+
+---
+
 ## Draft Structure
+
+Goal: start a real conversation that leads to the user booking THIS event -- either to get missing details, or to sell the user as the right vendor for it. Lead with why the VALUE_PROP fits this specific event, reference real facts from the dossier + booking, make one clear ask, and stay warm, brief, and first person. Never imply the client made a bad past choice.
 
 Three paragraphs. Each one earns its place. They should read as natural prose, not as labeled sections.
 
@@ -86,25 +122,58 @@ Append `sig.value` to the draft VERBATIM -- no rewording, no reformatting, no ad
 
 ## Procedure
 
-1. Fetch the signature first: `sig = precrime__pipeline({ action: "get_config", key: "signature" })`. If `sig.present === false`, stop and log `MISSING_SIGNATURE`.
-2. Read the client's dossier. Identify the strongest hook (most specific, most recent).
-3. Read VALUE_PROP.md outreach examples for style/tone reference. Do NOT paraphrase the signature or seller identity from it -- those come from `get_config`.
-4. Compose the three paragraphs. Read the draft aloud in your head. Does it flow?
-5. Append `sig.value` verbatim as the closing signature block.
-6. Self-check: banned patterns? Rate included? Signature appended verbatim? Close is client-specific?
-7. Save with `judge: false` (workers do not invoke Judge inline):
+1. Load the Booking by `bookingId`, then load its Client by `booking.clientId`. Set `clientId = booking.clientId`.
+2. Run the Outreach-Ready Gate. If not outreach-ready, complete `done` with a short `skip:` reason in `summary` and stop -- do not compose.
+3. Fetch the signature: `sig = precrime__pipeline({ action: "get_config", key: "signature" })`. If `sig.present === false`, stop and log `MISSING_SIGNATURE`.
+4. Read the Client's dossier + the Booking. Identify the strongest hook (most specific, most recent). Refer to any dates in plain words; never emit epochs.
+5. Read VALUE_PROP.md outreach examples for style/tone reference. Do NOT paraphrase the signature or seller identity from it -- those come from `get_config`.
+6. Compose the three paragraphs. Read the draft aloud in your head. Does it flow?
+7. Append `sig.value` verbatim as the closing signature block.
+8. Self-check: banned patterns? Rate included? Signature appended verbatim? One clear ask? Close is event-specific? No epochs in prose?
+9. Save with `judge: false` (workers do not invoke Judge inline; classification is server-side):
    ```
    precrime__pipeline({ action: "save", id: clientId, judge: false, patch: {
      draft: "[the email text with verbatim signature appended]",
      draftStatus: "ready"
    }})
    ```
+10. Complete the Task:
+   ```
+   precrime__pipeline({
+     action: "complete_task",
+     taskId: taskId,
+     status: "done",
+     output: {
+       clientIds:  [clientId],
+       bookingIds: [bookingId],
+       summary:    "drafted outreach for <clientId> / booking <bookingId>",
+       needsJudge: false
+     }
+   })
+   ```
+
+On failure (MISSING_SIGNATURE, MISSING_RATE, thin dossier, gmail unavailable):
+
+```
+precrime__pipeline({
+  action: "complete_task",
+  taskId: taskId,
+  status: "failed",
+  error:  "<short reason e.g. MISSING_SIGNATURE>",
+  output: { clientIds: [clientId], bookingIds: [bookingId], summary: "drafter failed: <reason>", needsJudge: false }
+})
+```
+
+Then stop. Do NOT claim another Task -- one worker, one Task.
 
 ---
 
 ## Rules
 
-1. Never invent facts. If the dossier is thin, the draft is thin.
-2. Never reference facts not in the dossier or factlets.
-3. Drafts land at `draftStatus: "ready"` for human review. Never auto-send.
-4. If RATE or SIGNATURE is missing from VALUE_PROP config, do not compose.
+1. Never invent facts, dates, names, or numbers. If the dossier is thin, the draft is thin.
+2. Never reference facts not in the Client's dossier or the Booking.
+3. Refer to dates in plain words. Never emit epochs in the draft.
+4. If the leed is not outreach-ready, skip it: complete `done` with a short `skip:` reason. Do not draft.
+5. Drafts land at `draftStatus: "ready"` for human review. Never auto-send in headless. Interactive `show-hot-leedz.md` is where send approval happens.
+6. If RATE or SIGNATURE is missing from VALUE_PROP config, do not compose -- complete `failed` with the structured reason.
+7. Do not call `pipeline.plan_tasks`, `pipeline.rescore`, or `pipeline.judge_affected`. Never compute scores or `Booking.status`; classification is server-side.

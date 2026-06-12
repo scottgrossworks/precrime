@@ -22,6 +22,12 @@
  *   This preserves old/extra columns and removed tables such as ClientFactlet.
  * - Old ClientFactlet links, when present, are folded into Client.dossier before
  *   ClientFactlet is removed from the active schema.
+ *
+ * 2026-06-11 (classification model): the canonical Booking drops bookingScore /
+ * factletScore / contactQuality (still preserved in _legacy_Booking), Config gains
+ * llmModel, and every legacy Booking.status is remapped onto cold|brewing|hot
+ * (mapBookingStatus). No row is deleted; run pipeline.rescore after migrating to
+ * re-classify brewing -> hot. See DOCS/CLASSIFICATION.md.
  */
 
 'use strict';
@@ -37,7 +43,7 @@ try {
   Database = require(BETTER_SQLITE3);
 } catch (err) {
   console.error('FATAL: cannot load better-sqlite3 from: ' + BETTER_SQLITE3);
-  console.error('Run: cd C:\\Users\\Admin\\Desktop\\WKG\\PRECRIME\\server && npm install');
+  console.error('Run: cd ' + path.join(PRECRIME_ROOT, 'server') + ' && npm install');
   console.error('Underlying error: ' + err.message);
   process.exit(2);
 }
@@ -136,9 +142,6 @@ const CURRENT_SCHEMA = {
       ['sharedAt', 'BIGINT', null],
       ['leedPrice', 'INTEGER', null],
       ['leedId', 'TEXT', null],
-      ['bookingScore', 'INTEGER', null],
-      ['factletScore', 'INTEGER', null],
-      ['contactQuality', 'TEXT', null],
       ['createdAt', 'DATETIME', 'NOT NULL DEFAULT CURRENT_TIMESTAMP'],
       ['updatedAt', 'DATETIME', 'NOT NULL DEFAULT CURRENT_TIMESTAMP'],
     ],
@@ -241,6 +244,7 @@ const CURRENT_SCHEMA = {
       ['signature', 'TEXT', null],
       ['llmApiKey', 'TEXT', null],
       ['llmProvider', 'TEXT', null],
+      ['llmModel', 'TEXT', null],
       ['llmBaseUrl', 'TEXT', null],
       ['llmAnthropicVersion', 'TEXT', null],
       ['llmMaxTokens', 'INTEGER', 'DEFAULT 1024'],
@@ -301,6 +305,8 @@ function main() {
 
   console.log('\nMigration complete.');
   console.log('Output: ' + (inPlace ? sourcePath : tempPath));
+  console.log('\nNEXT: start the server, then run pipeline.rescore (scope="all") to');
+  console.log('re-classify every Booking to cold / brewing / hot under the new model.');
   console.log('\nCanonical rows:');
   for (const [table, counts] of Object.entries(report.canonicalRows)) {
     console.log(`  ${table}: ${counts.inserted}/${counts.source}`);
@@ -402,8 +408,12 @@ function applyDefaults(table, row, sourceRow) {
   }
   if (table === 'Booking') {
     if (!row.clientId) row.clientId = 'legacy_orphan_client';
-    if (!row.status) row.status = 'brewing';
     row.shared = boolish(row.shared);
+    // Map any legacy status (leed_ready / outreach_ready / taken / expired / new /
+    // needs_enrichment / ...) onto the cold|brewing|hot model. We never invent
+    // 'hot' here -- that requires the LLM judge. Run pipeline.rescore after the
+    // migration to re-classify brewing -> hot. See DOCS/CLASSIFICATION.md.
+    row.status = mapBookingStatus(row.status, row.shared);
   }
   if (table === 'Factlet') {
     if (!row.content) row.content = sourceRow.content || sourceRow.title || JSON.stringify(sourceRow);
@@ -663,6 +673,16 @@ function normalizeValue(value) {
 function boolish(value) {
   if (value === true || value === 1 || value === '1' || String(value).toLowerCase() === 'true') return 1;
   return 0;
+}
+
+// Legacy Booking.status -> cold | brewing | hot. Idempotent (already-new values
+// pass through). Acted-on / terminal -> cold; everything else -> brewing so the
+// new Judge re-classifies it. Never produces 'hot' (that needs the LLM judge).
+function mapBookingStatus(oldStatus, shared) {
+  const s = String(oldStatus || '').toLowerCase();
+  if (s === 'cold' || s === 'brewing' || s === 'hot') return s;
+  if (shared || s === 'shared' || s === 'taken' || s === 'expired') return 'cold';
+  return 'brewing';
 }
 
 function dedupeLines(lines, existing) {

@@ -1,60 +1,29 @@
 {
-  "version": "3.0.0",
-  "purpose": "Canonical PRECRIME scoring and leed_ready policy. MCP is the only component allowed to promote bookings to leed_ready.",
-  "leedReadyDefinition": "A booking is leed_ready only when it is a verified, sellable booking leed for the Leedz marketplace, not merely API-acceptable.",
+  "version": "4.0.0",
+  "purpose": "PRECRIME classification policy. Promotion is procedural hot-eligibility gates (server/mcp/classification.js) plus an LLM product-market-fit judge (mcp_server.js judgeLeed, prompt in DOCS/PROMPTS.json). No numeric score, no gates. See DOCS/CLASSIFICATION.md.",
   "defaults": {
     "pr": 0,
     "sh": "*"
   },
-  "addLeedBusinessRequired": {
-    "absolute": ["tn", "ti", "lc", "zp", "st", "et", "cn", "em", "dt"],
-    "defaulted": ["pr", "sh"],
-    "recommended": ["ph", "rq"]
+  "classification": {
+    "_comment": "Procedural hot-eligibility knobs read by classification.js. requiredFields is the addLeed contract a marketplace share must be able to compose; the addLeed API itself is the final judge of location precision and acceptance.",
+    "futureMinHours": 12,
+    "requiredFields": ["tn", "ti", "lc", "zp", "st", "em", "dt"]
   },
-  "verification": {
-    "required": true,
-    "sourceUrlRequired": true,
-    "liveUrlRequired": true,
-    "allowedHttpStatus": [200],
-    "mustContain": ["event_name_or_title", "event_date_or_year", "location_or_venue"],
-    "rejectIf": [
-      "404",
-      "redirect_to_homepage",
-      "login_wall",
-      "source_does_not_mention_event",
-      "source_does_not_mention_current_or_future_date",
-      "date_inferred_from_prior_year",
-      "event_name_synthesized_from_multiple_sources",
-      "location_synthesized_from_multiple_sources"
-    ],
-    "freshnessDays": 180
+  "demandSignal": {
+    "_comment": "hotDaysOut bounds the hot-leedz window for soonest-event ordering.",
+    "hotDaysOut": 14
   },
   "factlet": {
     "threshold": 3,
     "pointsPerFreshFactlet": 2,
+    "pointsPerDemandFactlet": 6,
     "defaultStaleDays": 180,
     "freshRelevantRequiredForLeedReady": 1,
     "useOnlyRelevant": true,
     "mustSupportBooking": true,
     "bookingSpecificEvidencePreferred": true,
     "clientLevelFactletsCannotAloneVerifyEvent": true
-  },
-  "demandSignal": {
-    "_comment": "Demand signal = evidence the buyer's hair is on fire. Explicit: regex match on demand verbs in booking title/description/notes/sourceUrl. Inferred: fresh relevant factlets count >= factletsForInferred (the Prom Pattern five-slot stack lands here via factlets). Recomputed every score; never stored. See FOUNDATION.md.",
-    "factletsForInferred": 3,
-    "hotDaysOut": 14,
-    "explicitPatterns": [
-      "\\b(looking|searching) for (a |an |some )?\\w+",
-      "\\b(need|needing|require|requires|requiring) (a |an |some )?\\w+",
-      "\\b(hire|hiring|book|booking) (a |an )?\\w+",
-      "\\bseek(ing)? (a |an )?\\w+",
-      "\\bwant(ing)? to (hire|book|find)",
-      "\\brequest for proposal\\b",
-      "\\brfp\\b",
-      "\\binquir(y|ies) (about|for|regarding)",
-      "\\bquote (for|on|request)",
-      "\\bavailability (for|on)"
-    ]
   },
   "client": {
     "draftThreshold": 5,
@@ -65,103 +34,6 @@
     }
   },
   "booking": {
-    "scoreWeights": {
-      "trade": 20,
-      "date": 20,
-      "location": 20,
-      "contact": 20,
-      "description": 10,
-      "time": 10,
-      "phoneBonus": 5,
-      "requirementsBonus": 5
-    },
-    "minimumForLeedReady": 90,
-    "minimumForOutreachReady": 60,
-    "gates": {
-      "leedReady": {
-        "_comment": "Real demand. demandSignal === true means explicit verb match OR factlets stack to inferred threshold. Without it, even a 100-score booking is outreach_ready, not leed_ready.",
-        "all": [
-          { "field": "score", "op": ">=", "value": 90 },
-          { "field": "tn", "op": "present" },
-          { "field": "ti", "op": "present" },
-          { "field": "lc", "op": "present" },
-          { "field": "zp", "op": "matches", "value": "^\\d{5}$" },
-          { "field": "st", "op": "present" },
-          { "field": "et", "op": "present" },
-          { "field": "et", "op": "afterField", "value": "st" },
-          { "field": "cn", "op": "present" },
-          { "field": "em", "op": "directEmail" },
-          { "field": "dt", "op": "present" },
-          { "field": "pr", "op": "===", "value": 0 },
-          { "field": "sh", "op": "===", "value": "*" },
-          { "field": "sourceUrl", "op": "present" },
-          { "field": "demandSignal", "op": "===", "value": true }
-        ]
-      },
-      "outreachReady": {
-        "_comment": "Complete enough to cold-pitch. Name + direct email + venue + date window + time. No demand signal required. Marketplace post still requires leedReady.",
-        "all": [
-          { "field": "score", "op": ">=", "value": 60 },
-          { "field": "tn", "op": "present" },
-          { "field": "lc", "op": "present" },
-          { "field": "st", "op": "present" },
-          { "field": "et", "op": "present" },
-          { "field": "et", "op": "afterField", "value": "st" },
-          { "field": "cn", "op": "present" },
-          { "field": "em", "op": "directEmail" },
-          { "field": "hasTime", "op": "===", "value": true }
-        ]
-      },
-      "draftReady": {
-        "all": [
-          { "field": "contactGate", "op": "===", "value": true },
-          { "field": "dossierScore", "op": ">=", "value": 5 }
-        ]
-      }
-    },
-    "trade": {
-      "present": 20,
-      "missing": 0
-    },
-    "date": {
-      "singleDay": 20,
-      "tightWindowMaxDays": 7,
-      "tightWindow": 20,
-      "roughWindowMaxDays": 30,
-      "roughWindow": 10,
-      "ongoing": 5,
-      "missing": 0
-    },
-    "location": {
-      "patterns": {
-        "street": "\\d+\\s+(?:[A-Za-z0-9'.-]+\\s+){1,5}(st|street|ave|avenue|blvd|boulevard|dr|drive|rd|road|way|ln|lane|ct|court|pl|place|pkwy|parkway|hwy|highway)\\b",
-        "venue": "\\b(hall|arena|stadium|ballroom|theater|theatre|auditorium|pavilion|lawn|plaza|center|centre|gym|library|room|building|bldg|club|hotel|resort|gallery|galleries|museum|garden|gardens)\\b",
-        "campusVague": "\\b(campus|university|college|complex|fairgrounds|convention center|park)\\b"
-      },
-      "tiers": {
-        "streetAndVenue": 20,
-        "cleanStreet": 15,
-        "namedVenue": 15,
-        "streetInVague": 10,
-        "vagueOnly": 10,
-        "bareCity": 5,
-        "partial": 5,
-        "none": 0
-      }
-    },
-    "contact": {
-      "nameAndNamedEmail": 20,
-      "namedEmailOnly": 15,
-      "nameOnly": 10,
-      "none": 0
-    },
-    "description": {
-      "minWords": 10,
-      "points": 10
-    },
-    "time": {
-      "points": 10
-    },
     "genericEmailPrefixes": [
       "info",
       "contact",
@@ -198,14 +70,12 @@
     ]
   },
   "statusRules": {
-    "leed_ready": "leedReady gate passes (all fields + demandSignal === true). Marketplace post allowed.",
-    "outreach_ready": "outreachReady gate passes but leedReady does not (no demand signal). Cold pitch allowed, marketplace post denied.",
-    "brewing": "Neither gate passes. Booking still being enriched. Empty slots are next enrichment targets."
+    "cold": "Start and end state: just created, dossier has 0 factlets, acted upon (outreach drafted or leed shared), or the event date has passed. Recyclable.",
+    "brewing": "Under enrichment, or a hot prerequisite is still missing (no real direct contact, or no located + dated + timed booking). No LLM is spent here.",
+    "hot": "All procedural prerequisites met AND the LLM judged genuine product-market fit. Actionable now: share (marketplace) or outreach email."
   },
   "promotionAuthority": {
-    "onlyMcpMaySetLeedReady": true,
-    "agentsMayNotSetLeedReadyDirectly": true,
-    "rescoreDemotesInvalidReadyBookings": true,
-    "shareSkillMustRevalidateBeforePosting": true
+    "onlyMcpMaySetStatus": true,
+    "statusSetByJudgeOnly": true
   }
 }

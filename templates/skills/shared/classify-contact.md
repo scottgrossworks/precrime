@@ -17,19 +17,19 @@ INPUT: a person or organization found during scraping
 
 2. Has ALL three booking fields (trade + date + location/zip)?
 
-   YES -> LEAD HOT
-     precrime__pipeline({ action: "save", session_id: sid, patch: {
+   YES -> LEAD WITH BOOKING
+     precrime__pipeline({ action: "save", judge: false, session_id: sid, patch: {
        name, company, email, website, phone,
        source, segment, draftStatus: "brewing"
      }})
      Then with the returned clientId:
-     precrime__pipeline({ action: "save", session_id: sid, id: clientId, patch: {
+     precrime__pipeline({ action: "save", judge: false, session_id: sid, id: clientId, patch: {
        bookings: [{ trade, startDate, location, zip, source, sourceUrl }]
      }})
-     The server scores the booking against DOCS/SCORING.json. Do not set status manually.
+     The Judge classifies the booking server-side. Do not set status or scores manually.
 
    NO -> LEAD THIN
-     precrime__pipeline({ action: "save", session_id: sid, patch: {
+     precrime__pipeline({ action: "save", judge: false, session_id: sid, patch: {
        name, company, email, website, phone,
        source, segment, draftStatus: "brewing"
      }})
@@ -41,8 +41,8 @@ The server dedups by company automatically: if the company already exists, the s
 
 ## What counts as a valid contact
 
-- Has at least a person name OR a company name (company-only is allowed but scores low until enrichment finds a real name)
-- Bonus: has a non-generic email (dramatically increases value -- required for contactGate=true)
+- Has at least a person name OR a company name (company-only is allowed but is weak until enrichment finds a real name)
+- Bonus: has a non-generic, named direct email (dramatically increases value; a named decision-maker contact is what outreach needs). This is reasoning to guide enrichment, not a field you persist.
 - Bonus: has a website (enables enrichment to find person names and emails)
 
 ## What to skip
@@ -52,6 +52,6 @@ The server dedups by company automatically: if the company already exists, the s
 - Entries in the SAME trade as the seller -- those are competitors, not clients (e.g. another photo booth company at the same expo). Cross-trade exhibitors at any event are valid client targets and DO proceed to PATH B/C, even if their industry has nothing to do with the seller's. The whole point of harvesting an expo is the OTHER booths.
 - Entries that are the page owner/operator, not a listed contact
 
-## Scoring
+## Classification
 
-Scoring runs automatically on every `pipeline.save`. No separate score call needed.
+Classification is computed server-side by the Judge. Workers pass `judge:false` to `pipeline.save` and never set `status` or any score. Booking states are only `cold` / `brewing` / `hot`.

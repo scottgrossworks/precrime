@@ -139,19 +139,6 @@ extensions:
     timeout: 30
     bundled: null
     available_tools: []
-  leedz:
-    enabled: true
-    type: stdio
-    name: leedz
-    description: Local Leedz proxy. Hard-codes email='false' and pr=0 on every createLeed call, then forwards to remote Leedz API.
-    cmd: python
-    args:
-    - __PROJECT_ROOT__\tools\leedz_proxy_mcp.py
-    envs: {}
-    env_keys: []
-    timeout: 60
-    bundled: null
-    available_tools: []
   gmail:
     enabled: true
     type: stdio

@@ -48,7 +48,7 @@ model Booking {
   hourlyRate       Float?
   flatRate         Float?
   totalAmount      Float?
-  status           String    @default("brewing")  // brewing | outreach_ready | leed_ready | shared | taken | expired. Set ONLY by computeBookingTargetScore. See DOCS/SCORING.json gates.
+  status           String    @default("brewing")  // cold | brewing | hot. Set ONLY by the Judge (computeBookingTargetScore): procedural gates + LLM PMF judge. See DOCS/CLASSIFICATION.md. (The `shared` boolean tracks acted-on; status returns to cold after an action.)
   source           String?
   sourceUrl        String?
   trade            String?
@@ -58,9 +58,6 @@ model Booking {
   sharedAt         BigInt?
   leedPrice        Int?
   leedId           String?   // returned by createLeed MCP tool
-  bookingScore     Int?      // 0–100 procedural readiness score
-  factletScore     Int?      // factlet contribution score
-  contactQuality   String?   // none | generic_email | name_only | named_email | named_email_and_name
   createdAt        DateTime  @default(now())
   updatedAt        DateTime  @updatedAt
   client           Client    @relation(fields: [clientId], references: [id])
@@ -193,7 +190,8 @@ model Config {
   leedzSession             String?  // session JWT for createLeed MCP calls
   signature                String?  // outreach email signature block, mirrored from VALUE_PROP.md
   llmApiKey                String?
-  llmProvider              String?
+  llmProvider              String?  // "anthropic" | "openai" | "openrouter"
+  llmModel                 String?  // model id, e.g. an OpenRouter model; pick the cheapest that performs
   llmBaseUrl               String?
   llmAnthropicVersion      String?
   llmMaxTokens             Int?     @default(1024)

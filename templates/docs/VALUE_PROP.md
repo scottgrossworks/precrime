@@ -19,12 +19,15 @@ This document is the Composer's reference. The enrichment agent reads it before 
 
 ## SIGNATURE
 
-<!-- The literal signature block appended verbatim to every outreach email.
-     Drafting skills call `precrime__pipeline({ action:"get_config", key:"signature" })`
-     and append the returned value exactly as-is. No greeting words here.
-     Edit the lines below; everything between the heading and the next `---` is
-     captured. Lines that still contain `[YOUR ...]` placeholders are treated as
-     unset and the wizard will prompt for them. -->
+<!-- REQUIRED STRICT FORMAT.
+     This top-level heading is the canonical signature source.
+     Put only the literal email signature lines below. No sample email, no prose,
+     no greeting. Everything until the next `---` is mirrored into Config and
+     appended verbatim by outreach drafting. Lines still containing `[YOUR ...]`
+     placeholders are treated as unset.
+
+     Startup also accepts legacy nested headings like `### Signature`, but new
+     deployments should use this exact `## SIGNATURE` block. -->
 
 [YOUR NAME]
 [YOUR COMPANY]

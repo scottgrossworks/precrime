@@ -20,14 +20,53 @@ if errorlevel 1 (
   exit /b 1
 )
 
-:: Database: optional argument overrides default
-:: Usage:  hermes                       -> data\myproject.sqlite
-::         hermes ca_schools_migrated   -> data\ca_schools_migrated.sqlite
-if "%~1"=="" (
-  set "DBNAME=myproject.sqlite"
-) else (
-  set "DBNAME=%~1"
+:: Args -> mode + objective + DB. Same flag set as precrime.bat / goose.bat.
+:: Usage:  hermes                                   -> interactive (hybrid)
+::         hermes --headless                        -> headless (marketplace)
+::         hermes --headless --outreach             -> headless outreach (Gmail required)
+::         hermes --interactive --marketplace mydb  -> interactive marketplace, custom DB
+::         hermes ca_schools_migrated               -> interactive (hybrid), custom DB
+set "PRECRIME_MODE=interactive"
+set "PRECRIME_OBJECTIVE="
+set "DBNAME=myproject.sqlite"
+
+:parse_args
+if "%~1"=="" goto :args_done
+if /i "%~1"=="--headless" (
+  set "PRECRIME_MODE=headless"
+  shift
+  goto :parse_args
 )
+if /i "%~1"=="--interactive" (
+  set "PRECRIME_MODE=interactive"
+  shift
+  goto :parse_args
+)
+if /i "%~1"=="--marketplace" (
+  set "PRECRIME_OBJECTIVE=marketplace"
+  shift
+  goto :parse_args
+)
+if /i "%~1"=="--outreach" (
+  set "PRECRIME_OBJECTIVE=outreach"
+  shift
+  goto :parse_args
+)
+if /i "%~1"=="--hybrid" (
+  set "PRECRIME_OBJECTIVE=hybrid"
+  shift
+  goto :parse_args
+)
+set "DBNAME=%~1"
+shift
+goto :parse_args
+:args_done
+
+:: Defaults: headless => marketplace, interactive => hybrid.
+if "%PRECRIME_OBJECTIVE%"=="" (
+  if /i "%PRECRIME_MODE%"=="headless" ( set "PRECRIME_OBJECTIVE=marketplace" ) else ( set "PRECRIME_OBJECTIVE=hybrid" )
+)
+
 if not "%DBNAME:~-7%"==".sqlite" set "DBNAME=%DBNAME%.sqlite"
 
 set "DBPATH=%~dp0data\%DBNAME%"
@@ -66,11 +105,17 @@ if errorlevel 1 (
   exit /b 1
 )
 
-:: Launch Hermes via Docker
+echo  Mode: %PRECRIME_MODE%   Objective: %PRECRIME_OBJECTIVE%
+
+:: Launch Hermes via Docker. PRECRIME_RUN_MODE and PRECRIME_OBJECTIVE are
+:: exported into the container so the agent's init-wizard can detect them
+:: even without a startup prompt.
 docker run -it --rm ^
   -e OPENAI_API_KEY=%OPENAI_API_KEY% ^
   -e ANTHROPIC_API_KEY=%ANTHROPIC_API_KEY% ^
   -e TAVILY_API_KEY=%TAVILY_API_KEY% ^
   -e DATABASE_URL=%DATABASE_URL% ^
+  -e PRECRIME_RUN_MODE=%PRECRIME_MODE% ^
+  -e PRECRIME_OBJECTIVE=%PRECRIME_OBJECTIVE% ^
   -v "%CD%:/precrime" ^
   hermes-precrime

@@ -19,10 +19,8 @@ const email = (text.match(/\*\*Email:\*\*\s*(.+)/)?.[1] || '').trim();
 const pitchMatch = text.match(/## THE PITCH[^\n]*\n+([\s\S]*?)(?=\n---|\n## )/);
 const pitch = (pitchMatch?.[1] || '').trim();
 
-// SIGNATURE: literal block from VALUE_PROP.md between `## SIGNATURE` and the
-// next `---` or `## `. Strip <!-- html comments -->. If every line still carries
-// a [YOUR ...] placeholder, treat as unset.
-const sigMatch = text.match(/## SIGNATURE[^\n]*\n+([\s\S]*?)(?=\n---|\n## |$)/);
+// SIGNATURE: capture any markdown heading named "signature", any case.
+const sigMatch = text.match(/^#{2,6}\s+signature\b[^\n]*\n+([\s\S]*?)(?=\n---|\n#{1,6}\s+|$)/im);
 let signature = (sigMatch?.[1] || '').replace(/<!--[\s\S]*?-->/g, '').trim();
 const sigUsable = signature && signature.split(/\r?\n/).some(line => line.trim() && !/\[YOUR/i.test(line));
 
@@ -32,17 +30,16 @@ if (email && !email.match(/\[YOUR/i)) patch.companyEmail = email;
 if (pitch && !pitch.match(/\[YOUR|\[Describe|\[FILL/i)) patch.businessDescription = pitch;
 if (sigUsable) patch.signature = signature;
 
-// Auto-detect trade from product name/title
+// Trade: explicit VALUE_PROP `**Trade:**` wins. Whole-file fallback is unsafe:
+// relevance examples can mention other trades and must not override the masthead.
 const trades = ["activity party","airbrush","baker","balloons","bartender","braider","car detailer","caricatures","caterer","concessions","dancer","decor","dj","drones","esthetician","event rentals","eyelashes","face painter","flowers","gaming trailer","hair","henna","inflatables","juggler","lighting","magician","makeup","massage","musician","nails","photo booth","photographer","restrooms","security","tennis","tent rental","trainer","valet","videographer","yoga"];
-// Trade detection: check title/first line first, then full text
+const explicitTrade = (text.match(/\*\*Trade:\*\*\s*(.+)/i)?.[1] || '').trim().toLowerCase();
+let matchedTrade = trades.find(t => explicitTrade === t || explicitTrade.includes(t));
+// Fallback only to title/seller line, not body/relevance examples.
 const titleLine = (text.match(/^#.*$/m)?.[0] || '').toLowerCase();
 const sellerLine = (text.match(/\*\*Seller:\*\*\s*(.+)/)?.[1] || '').toLowerCase();
 const titleText = titleLine + ' ' + sellerLine;
-const textLower = text.toLowerCase();
-// Priority: match in title/seller line first (most specific)
-let matchedTrade = trades.find(t => titleText.includes(t));
-// Fallback: match in full text (less reliable)
-if (!matchedTrade) matchedTrade = trades.find(t => textLower.includes(t));
+if (!matchedTrade) matchedTrade = trades.find(t => titleText.includes(t));
 if (matchedTrade) patch.defaultTrade = matchedTrade;
 
 // Marketplace-only deployment -- always leedz_api
@@ -73,7 +70,27 @@ if (patch.leedzEmail) {
   patch.leedzSession = `${header}.${payload}.${sig}`;
 }
 
-if (Object.keys(patch).length === 0) { process.exit(0); }
+// Report exactly what was parsed so a silent failure becomes visible. Without
+// this, the launcher prints "Config synced" while Config is actually empty,
+// and the wizard then asks the user to paste fields that ARE in VALUE_PROP.md.
+const parsed = {
+  Trade:    !!patch.defaultTrade,
+  Seller:   !!patch.companyName,
+  Email:    !!patch.companyEmail,
+  Pitch:    !!patch.businessDescription,
+  Signature:!!patch.signature
+};
+const missing = Object.entries(parsed).filter(([, ok]) => !ok).map(([k]) => k);
+if (missing.length) {
+  console.error(`[sync-config] WARNING: VALUE_PROP.md is missing or unreadable for: ${missing.join(', ')}`);
+  console.error(`[sync-config] Required markers: **Trade:**, **Seller:**, **Email:**, ## THE PITCH block, signature heading (## SIGNATURE preferred; legacy ### Signature accepted).`);
+  console.error(`[sync-config] File scanned: ${vpPath}`);
+}
+
+if (Object.keys(patch).length === 0) {
+  console.error('[sync-config] FATAL: no fields parsed from VALUE_PROP.md. Config NOT updated.');
+  process.exit(1);
+}
 
 const prisma = new PrismaClient();
 
@@ -84,7 +101,10 @@ async function main() {
   } else {
     await prisma.config.create({ data: patch });
   }
-  console.log('Config synced from VALUE_PROP.md');
+  console.log(`Config synced from VALUE_PROP.md (wrote: ${Object.keys(patch).sort().join(', ')})`);
 }
 
-main().catch(() => {}).finally(() => prisma.$disconnect());
+main().catch(err => {
+  console.error('[sync-config] FATAL: write to Config failed:', err.message);
+  process.exitCode = 1;
+}).finally(() => prisma.$disconnect());

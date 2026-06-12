@@ -1,822 +1,745 @@
-# PRECRIME Architecture Redesign Implementation Spec
+# PRECRIME Parallel Worker Runtime -- Coding Agent Handoff
 
 Reference article: https://cursor.com/blog/scaling-agents
 
-## Goal
+This document is the implementation brief for a coding agent with zero context. It records the intended architecture, the current real code state, the failure, and the required fix.
 
-Redesign PRECRIME so the LLM is no longer responsible for understanding and steering the whole workflow.
+## Mandate
 
-The new architecture is:
+PRECRIME must become a planner + parallel worker system.
 
-```text
-Planner = procedural MCP code that creates Tasks
-Worker = LLM skill that executes one Task
-Judge = procedural scoring/date/share gatekeeper
-Presenter = shows or acts on judged results
-Session = audit container for one run
-```
+The current build has a procedural Planner and a Task table, but workflow execution is still effectively serial because Goose/Claude Desktop claims and executes one Task at a time. That is not sufficient.
 
-The core PRECRIME behavior must remain:
-
-- Recursive discovery: while finding Sources, Clients, Bookings, and Factlets, the system may discover more Sources, Clients, Bookings, and Factlets.
-- Promotion by score: marketplace-ready and outreach-ready items are promoted only by Judge/scoring code.
-- Interactive mode: user chooses whether to show hot leedz or run the workflow.
-- Headless mode: process hot items first, then run workflow automatically.
-- Date safety: no LLM-computed marketplace epochs.
-- Enrichment: Clients accumulate a useful running dossier from searches, bookings, and reusable Factlets.
-- Bounded recursion: one run may discover unlimited future inputs, but it may only execute work up to its Session budgets. Leftover Sources, Clients, Factlets, and Bookings stay in SQLite for the next run.
-
-## How We Know It Works
-
-The implementation solves the problem when all of these are true:
-
-1. A run can start, create Tasks, claim Tasks, complete Tasks, judge affected records, and continue without the LLM choosing the global strategy.
-2. Worker prompts are one-job prompts. A `SCRAPE_SOURCE` worker does not need the whole marketplace flow. An `ENRICH_CLIENT` worker does not need the whole discovery loop.
-3. Multiple workers can safely claim different ready Tasks without duplicate work on the same target.
-4. Interactive startup asks only:
-   - `SHOW_HOT_LEEDZ`
-   - `RUN_WORKFLOW`
-5. Headless startup handles existing hot work first, then runs the workflow.
-6. `share_booking` is the only marketplace posting path. Direct `leedz__createLeed` from skills is removed or blocked.
-7. `resolve_dates` accepts structured date fields and returns the only valid `st` and `et`.
-8. `APPLY_FACTLET` can assimilate live Factlets into Client dossiers without using a complicated factlet graph.
-9. `recycler` runs at startup and removes stale Factlets and old finished Tasks using configurable retention.
-10. Session reports summarize actual Task outcomes from SQLite, not LLM narration.
-11. A Session closes deterministically when Planner creates no new Tasks and no ready/claimed Tasks remain for that Session, or when its Session-wide budgets are exhausted.
-
-## Existing Source Files
-
-A fresh coding agent should read these first:
-
-- `C:\Users\Admin\Desktop\WKG\PRECRIME\DOCS\FOUNDATION.md`
-- `C:\Users\Admin\Desktop\WKG\PRECRIME\DOCS\SCORING.json`
-- `C:\Users\Admin\Desktop\WKG\PRECRIME\DOCS\STATUS.md`
-- `C:\Users\Admin\Desktop\WKG\PRECRIME\server\prisma\schema.prisma`
-- `C:\Users\Admin\Desktop\WKG\PRECRIME\server\mcp\mcp_server.js`
-- `C:\Users\Admin\Desktop\WKG\PRECRIME\templates\skills\url-loop.md`
-- `C:\Users\Admin\Desktop\WKG\PRECRIME\templates\skills\enrichment-agent.md`
-- `C:\Users\Admin\Desktop\WKG\PRECRIME\templates\skills\marketplace_flow.md`
-- `C:\Users\Admin\Desktop\WKG\PRECRIME\templates\skills\headless_flow.md`
-- `C:\Users\Admin\Desktop\WKG\PRECRIME\templates\skills\share-skill.md`
-- `C:\Users\Admin\Desktop\WKG\PRECRIME\templates\skills\leed-drafter.md`
-
-## Canonical Terms
-
-Use these terms only:
-
-- `Task`: one unit of work.
-- `Session`: container for Tasks in one run; audit/reporting only.
-- `Source`: where to look.
-- `Client`: who might buy.
-- `Booking`: concrete opportunity.
-- `Factlet`: temporary reusable evidence.
-- `Dossier`: accumulated client understanding.
-
-Do not use `WorkItem`. Do not use `PRESENT_READY`. Use `SHOW_HOT_LEEDZ`.
-
-## Subproject 1: Task Table And Lifecycle
-
-Implement a `Task` table in `server\prisma\schema.prisma` and runtime table creation for old SQLite deployments.
-
-Task is a SQLite row. It is not a JSON file.
-
-Required fields:
+Required runtime:
 
 ```text
-id            unique id created by MCP
-type          DISCOVER_SOURCES | SCRAPE_SOURCE | ENRICH_CLIENT | APPLY_FACTLET | JUDGE_AFFECTED | SHOW_HOT_LEEDZ | SHARE_BOOKING
-status        ready | claimed | done | failed | cancelled
-sessionId     optional Session/run container
-targetType    Source | Client | Booking | Factlet | none
-targetId      id of the target object
-input         small JSON input
-output        small JSON output
-error         short failure text
-claimedAt
-claimedBy
-createdAt
-updatedAt
-finishedAt
+User / Goose / Claude Desktop
+  -> starts or monitors workflow
+  -> calls plan_tasks
+  -> starts worker supervisor
+  -> presents hot leedz
+
+Planner
+  -> scans DB
+  -> creates Task rows
+  -> does not execute work
+
+Worker Supervisor
+  -> starts N worker processes
+  -> each process owns one skill / task type
+  -> workers claim Tasks atomically
+  -> workers call LLM + MCP tools
+  -> workers complete Tasks
+
+Judge
+  -> procedural scoring only
+  -> promotes statuses
+
+Presenter / Marketplace / Outreach
+  -> acts only on judged hot work
 ```
 
-The source of every Task is the Planner/MCP server. `targetType` and `targetId` describe what the Task applies to.
+Do not solve this with another markdown rewrite. The missing component is a real worker runtime.
 
-Examples:
+## Source Of Truth
+
+Source repo:
+
+```text
+C:\Users\Admin\Desktop\WKG\PRECRIME
+```
+
+Do not treat deployed verticals as source truth. They are test deployments copied from this repo, for example:
+
+```text
+C:\Users\Admin\Desktop\WKG\TDS\precrime
+C:\Users\Admin\Desktop\WKG\VERTICALS\PB_DALLAS\precrime
+```
+
+Primary files:
+
+```text
+C:\Users\Admin\Desktop\WKG\PRECRIME\server\mcp\mcp_server.js
+C:\Users\Admin\Desktop\WKG\PRECRIME\server\prisma\schema.prisma
+C:\Users\Admin\Desktop\WKG\PRECRIME\server\sync-config.js
+C:\Users\Admin\Desktop\WKG\PRECRIME\precrime_config.json
+C:\Users\Admin\Desktop\WKG\PRECRIME\precrime_config.sample.json
+C:\Users\Admin\Desktop\WKG\PRECRIME\templates\GOOSE.md
+C:\Users\Admin\Desktop\WKG\PRECRIME\templates\skills\init-wizard.md
+C:\Users\Admin\Desktop\WKG\PRECRIME\templates\skills\headless_flow.md
+C:\Users\Admin\Desktop\WKG\PRECRIME\templates\skills\apply-factlet.md
+C:\Users\Admin\Desktop\WKG\PRECRIME\templates\skills\enrichment-agent.md
+C:\Users\Admin\Desktop\WKG\PRECRIME\templates\skills\url-loop.md
+C:\Users\Admin\Desktop\WKG\PRECRIME\templates\skills\outreach-drafter.md
+C:\Users\Admin\Desktop\WKG\PRECRIME\templates\skills\show-hot-leedz.md
+C:\Users\Admin\Desktop\WKG\PRECRIME\templates\skills\share-skill.md
+C:\Users\Admin\Desktop\WKG\PRECRIME\scripts\smoke_test_tasks.js
+C:\Users\Admin\Desktop\WKG\PRECRIME\scripts\audit_build_zip.js
+```
+
+## Background
+
+The project started from the scaling-agents idea: split a workflow into roles with bounded responsibility.
+
+For PRECRIME, the roles are:
+
+| Role | Meaning |
+|---|---|
+| Planner | Procedural code that decides what work exists and creates Tasks. |
+| Worker | Separate execution process that claims one Task type, follows one skill, and completes Tasks. |
+| Judge | Procedural scoring that decides whether Clients/Bookings are ready. |
+| Presenter | Interactive UI step for hot leedz. |
+| Session | Audit/run container, not the execution engine. |
+
+The intended gain was parallelism and accountability:
+
+- many factlets can be applied at once
+- many clients can be enriched at once
+- many sources can be scraped at once
+- judging remains centralized and procedural
+- hot leads interrupt lower-value work
+- Goose remains a control surface, not the worker pool
+
+## Current Real State
+
+The code currently contains useful pieces:
+
+- `pipelinePlanTasks(...)` in `server\mcp\mcp_server.js`
+- `pipelineClaimTask(...)`
+- `pipelineCompleteTask(...)`
+- `pipelineJudgeAffected(...)`
+- `share_booking`
+- Task rows in SQLite
+- per-task limits and session budgets
+- skill files written as one-Task workers
+- stage-gated planning logic
+- objective gates: `marketplace`, `outreach`, `hybrid`
+- startup sync from `DOCS\VALUE_PROP.md`
+
+The current architecture still fails the parallelization mandate because no real worker supervisor exists.
+
+Current runtime is effectively:
+
+```text
+Goose calls plan_tasks
+Goose calls claim_task
+Goose loads one skill
+Goose executes one Task
+Goose completes the Task
+Goose repeats serially
+```
+
+That means "worker" is currently just a markdown role read by Goose. It is not a separate process.
+
+## Critical Failure
+
+The current system overlaps responsibilities:
+
+| Responsibility | Current owner | Correct owner |
+|---|---|---|
+| User command/menu | Goose / Claude Desktop | Goose / Claude Desktop |
+| Planning Task rows | MCP server Planner | MCP server Planner |
+| Claiming workflow Tasks | Goose / Claude Desktop | Worker processes |
+| Loading worker skill text | Goose / Claude Desktop | Worker process |
+| Calling LLM for worker work | Goose / Claude Desktop | Worker process |
+| Completing worker Tasks | Goose / Claude Desktop | Worker process |
+| Presenting hot leedz | Goose / Claude Desktop | Goose / Claude Desktop |
+| Posting marketplace leed | `share_booking` only | `share_booking` only |
+
+Because Goose is both UI and worker executor, it stalls, loses claimed Task context, invents menus, and serializes work. This is the wrong execution model.
+
+## Explicit Non-Goal
+
+Do not rewrite the whole project into LangSmith, LangGraph, Temporal, Celery, or another framework as a first move.
+
+Reason: the repo already has:
+
+- a Task table
+- atomic claim/complete primitives
+- procedural scoring
+- skill boundaries
+- marketplace safety gates
+- deployment scripts
+
+The missing piece is smaller: a worker supervisor/runtime that uses the existing primitives. A framework migration can be reconsidered only after the existing Task architecture has a real worker pool and still fails.
+
+## Required Design
+
+Add a real worker runtime under source control.
+
+Recommended files:
+
+```text
+C:\Users\Admin\Desktop\WKG\PRECRIME\server\workers\supervisor.js
+C:\Users\Admin\Desktop\WKG\PRECRIME\server\workers\worker.js
+C:\Users\Admin\Desktop\WKG\PRECRIME\server\workers\skill_runner.js
+C:\Users\Admin\Desktop\WKG\PRECRIME\server\workers\worker_config.js
+```
+
+If a smaller implementation is cleaner, `supervisor.js` and `worker.js` are enough. Do not create a large framework.
+
+## Correct Runtime Split
+
+### Goose / Claude Desktop
+
+Goose is UI/control only.
+
+It may:
+
+- run startup
+- verify config
+- show the two-choice menu
+- call `plan_tasks`
+- start worker supervisor
+- stop worker supervisor
+- poll workflow status
+- call hot presenter
+- let user choose share/draft/skip
+
+It must not:
+
+- execute `APPLY_FACTLET`
+- execute `ENRICH_CLIENT`
+- execute `SCRAPE_SOURCE`
+- execute `DRAFT_OUTREACH`
+- execute `JUDGE_AFFECTED`
+- run the whole claim/dispatch/complete loop itself
+- invent workflow menus after planner output
+
+### Planner
+
+Planner is procedural code in:
+
+```text
+server\mcp\mcp_server.js
+```
+
+MCP action:
+
+```text
+precrime__pipeline({ action:"plan_tasks", mode, objective })
+```
+
+Planner:
+
+- reads SQLite
+- creates `Task` rows
+- enforces stage gates
+- enforces budgets/limits
+- returns counts/status
+- does not call an LLM
+- does not execute a Task
+
+### Worker Supervisor
+
+Supervisor is a local process manager.
+
+It:
+
+- starts bounded worker processes
+- assigns each worker an allowed Task type or allowed Task type set
+- passes runtime config and skill path
+- watches exit codes
+- restarts crashed workers up to a limit
+- stops cleanly on request
+- reports status
+
+Supervisor does not decide business order. Planner + claim priority decide order.
+
+### Worker Process
+
+Worker process:
+
+- owns one skill file
+- has its own LLM HTTP connection
+- has access to the Precrime MCP endpoint
+- claims only allowed Task types
+- executes exactly one claimed Task at a time
+- calls `complete_task`
+- loops until stopped or idle timeout
+
+Each worker must be independent. Parallelism comes from multiple OS processes claiming from the same Task table.
+
+### Judge
+
+Judge remains procedural.
+
+`JUDGE_AFFECTED` should not require expensive LLM calls. A worker can claim the Task, call `pipeline.judge_affected`, and complete it.
+
+### Presenter
+
+`SHOW_HOT_LEEDZ` should normally remain interactive and handled by Goose/Claude Desktop. Do not run it in the background worker pool by default because it needs user choice.
+
+## Task Types
+
+Keep existing Task types:
+
+```text
+DISCOVER_SOURCES
+SCRAPE_SOURCE
+APPLY_FACTLET
+ENRICH_CLIENT
+JUDGE_AFFECTED
+SHOW_HOT_LEEDZ
+SHARE_BOOKING
+DRAFT_OUTREACH
+```
+
+Parallel worker candidates:
+
+| Task type | Parallel? | Worker |
+|---|---:|---|
+| `APPLY_FACTLET` | Yes | LLM worker using `apply-factlet.md` |
+| `ENRICH_CLIENT` | Yes | LLM worker using `enrichment-agent.md` |
+| `SCRAPE_SOURCE` | Yes | LLM/tool worker using `url-loop.md` |
+| `DRAFT_OUTREACH` | Yes, headless only | LLM worker using `outreach-drafter.md` |
+| `JUDGE_AFFECTED` | Yes | procedural worker |
+| `SHARE_BOOKING` | Yes, headless only | procedural `share_booking` worker |
+| `DISCOVER_SOURCES` | Usually low concurrency | discovery worker |
+| `SHOW_HOT_LEEDZ` | No by default | interactive presenter |
+
+## Planner Modes
+
+Do not confuse these with interactive/headless user mode.
+
+Planner `mode`:
+
+| Planner mode | Meaning |
+|---|---|
+| `hot_only` | Only create hot-presenter work. Used when user chooses `SHOW_HOT_LEEDZ`. |
+| `workflow` | Interactive workflow planning. Creates background work but hot leads are presented to user. |
+| `headless` | Autonomous workflow planning. Hot leads become `SHARE_BOOKING` or `DRAFT_OUTREACH` depending on objective. |
+
+Run mode:
+
+| Run mode | Meaning |
+|---|---|
+| `interactive` | User is present. Default objective is `hybrid`. |
+| `headless` | Autonomous. Default objective is `marketplace`. |
+
+Objective:
+
+| Objective | Meaning |
+|---|---|
+| `marketplace` | Hot marketplace bookings are shared through `share_booking`. |
+| `outreach` | Hot outreach candidates get drafted via Gmail MCP. |
+| `hybrid` | Both are allowed. |
+
+## Planner Stage Gates
+
+Planner must remain stage-gated. This is already partly implemented and must be preserved.
+
+Business loop:
+
+```text
+consume known evidence
+judge immediately
+if hot, interrupt and act/present
+if not hot, enrich
+if evidence is sparse, scrape/discover more
+```
+
+Claim priority:
+
+```text
+JUDGE_AFFECTED
+SHOW_HOT_LEEDZ
+SHARE_BOOKING
+DRAFT_OUTREACH
+APPLY_FACTLET
+ENRICH_CLIENT
+SCRAPE_SOURCE
+DISCOVER_SOURCES
+```
+
+Planner creation gates:
+
+1. `hot_only`: create only `SHOW_HOT_LEEDZ`.
+2. Judge needed: create `JUDGE_AFFECTED`, suppress lower stages.
+3. Hot interrupt: create presenter/share/draft action, suppress lower stages.
+4. Apply Factlets: consume live unprocessed Factlets.
+5. Enrich Clients: improve existing Clients.
+6. Scrape Sources: consume existing Source queue.
+7. Discover Sources: only when sparse.
+
+## Factlet Processing
+
+Do not add DB fields.
+
+Factlet processed marker:
+
+```text
+terminal APPLY_FACTLET Task for that Factlet targetId
+```
+
+Terminal means:
+
+```text
+done
+failed
+cancelled
+```
+
+Recycler must retain terminal `APPLY_FACTLET` Tasks at least as long as Factlets remain live, otherwise a Factlet can be reprocessed.
+
+## Scoring Boundary
+
+Only Judge promotes.
+
+Workers:
+
+- save evidence with `judge:false`
+- return affected Client/Booking ids
+- complete the Task
+- do not write `Booking.status`
+- do not call `rescore`
+- do not call `judge_affected` unless they are the dedicated `JUDGE_AFFECTED` worker
+
+Judge:
+
+- calls procedural scoring
+- writes `leed_ready`, `outreach_ready`, `brewing`, `shared`, expired/deprecated states as appropriate
+
+## Marketplace Boundary
+
+Direct Leedz tool access is forbidden.
+
+Allowed path:
+
+```text
+share_booking -> server builds payload -> server posts to Leedz
+```
+
+Forbidden outside server:
+
+```text
+leedz__createLeed
+```
+
+LLM may draft only:
+
+```text
+titleDraft
+dtDraft
+rqDraft
+```
+
+Server owns:
+
+```text
+cn, em, ph, lc, zp, st, et, tn, pr, sh
+```
+
+LLM must not compute `st` or `et`.
+
+## VALUE_PROP Startup Fixes Already Required
+
+Startup must treat `DOCS\VALUE_PROP.md` as source truth.
+
+Current parser requirements:
+
+- explicit `**Trade:**` wins
+- do not infer trade from the full body because relevance examples can mention adjacent trades
+- signature parser accepts any markdown heading named `signature`, any capitalization, levels `##` through `######`
+
+The parser should be simple:
+
+```js
+const sigMatch = text.match(/^#{2,6}\s+signature\b[^\n]*\n+([\s\S]*?)(?=\n---|\n#{1,6}\s+|$)/im);
+```
+
+Never let stale SQLite Config outrank explicit `VALUE_PROP`.
+
+## Worker Supervisor Implementation Plan
+
+### Step 1 -- Add Worker Config
+
+Add config under `precrime_config.json` and sample:
 
 ```json
 {
-  "type": "SCRAPE_SOURCE",
-  "targetType": "Source",
-  "targetId": "src_123",
-  "input": {
-    "url": "https://example.com/events"
-  }
-}
-```
-
-```json
-{
-  "type": "ENRICH_CLIENT",
-  "targetType": "Client",
-  "targetId": "cli_123",
-  "input": {
-    "missing": ["direct_contact", "current_event_signal"]
-  }
-}
-```
-
-Lifecycle:
-
-```text
-ready -> claimed -> done
-ready -> claimed -> failed
-ready -> claimed -> cancelled
-claimed timed out -> ready
-```
-
-Tasks are consumed by status change, not immediate deletion. Old finished Tasks are deleted later by `recycler`.
-
-Why preserve finished Tasks:
-
-- They are proof of what the run attempted.
-- They show what completed and failed.
-- They make Dallas/Orlando style stuck states debuggable.
-- They let Session reports query SQLite instead of trusting LLM prose.
-
-## Subproject 2: Session As Audit Container
-
-Keep `Session` and `SessionEvent`, but clarify their purpose.
-
-Session is a container of Tasks for one run. It does not decide workflow and does not own ontology.
-
-Session answers:
-
-- What happened during this run?
-- When did it start and end?
-- Which Tasks belonged to it?
-- What did PRECRIME actually accomplish?
-
-Task answers:
-
-- What was one unit of work?
-- What target did it apply to?
-- Did it finish?
-- What was its output?
-
-Required behavior:
-
-- `Task.sessionId` links a Task to its Session.
-- `SessionEvent` remains optional append-only detail logging.
-- `report_session` summarizes Task counts and outcomes.
-- Session must not be required to decide the next action.
-- Planner creates or reuses one active Session for a run.
-- Planner stamps every Task it creates with that Session id.
-- Planner closes the Session when both are true:
-  - the current `plan_tasks` call created zero new Tasks for that Session
-  - there are zero `ready` or `claimed` Tasks for that Session
-- Planner also closes the Session when the configured Session-wide budgets are exhausted.
-
-### Session Budgets
-
-Session budgets are not concurrency limits. They are run-wide work budgets.
-
-Two settings exist:
-
-1. `tasks.limits`: maximum open Tasks of each type at one moment.
-2. `tasks.sessionBudgets`: maximum total Tasks of each type that one Session may create before closing.
-
-Example:
-
-```json
-{
-  "tasks": {
-    "limits": {
-      "SCRAPE_SOURCE": 5,
-      "ENRICH_CLIENT": 10
-    },
-    "sessionBudgets": {
-      "SCRAPE_SOURCE": 25,
-      "ENRICH_CLIENT": 50
+  "workers": {
+    "enabled": true,
+    "pollMs": 1500,
+    "idleExitMs": 300000,
+    "maxRestarts": 3,
+    "concurrency": {
+      "APPLY_FACTLET": 4,
+      "ENRICH_CLIENT": 4,
+      "SCRAPE_SOURCE": 2,
+      "JUDGE_AFFECTED": 2,
+      "SHARE_BOOKING": 1,
+      "DRAFT_OUTREACH": 2,
+      "DISCOVER_SOURCES": 1
     }
   }
 }
 ```
 
-Meaning:
+These are worker process counts. They are separate from existing `tasks.limits`, which cap open Task rows.
 
-- Planner may have at most 5 `SCRAPE_SOURCE` Tasks open at once.
-- Over the whole Session, Planner may create at most 25 `SCRAPE_SOURCE` Tasks.
-- If the 25th scrape discovers 50 more Sources, those Sources stay in SQLite for the next Session.
+### Step 2 -- Add Supervisor
 
-This is how PRECRIME stays recursive without becoming infinite. Workers discover new inputs. Planner turns inputs into Tasks only while both conditions hold:
+Create:
 
 ```text
-open Tasks for type < tasks.limits[type]
-AND
-created Tasks for Session/type < tasks.sessionBudgets[type]
+server\workers\supervisor.js
 ```
-
-## Subproject 3: Planner MCP Actions
-
-Planner lives in:
-
-```text
-C:\Users\Admin\Desktop\WKG\PRECRIME\server\mcp\mcp_server.js
-```
-
-It is implemented as new `precrime__pipeline` actions. Under the covers this is a switch statement dispatching `args.action` to functions.
-
-Add these actions:
-
-```text
-plan_tasks
-claim_task
-complete_task
-tasks
-```
-
-`plan_tasks`:
-
-- Input: `mode`, optional `objective`, optional `session_id`.
-- Reads SQLite state.
-- Creates ready Tasks up to configured per-type limits.
-- Enforces Session-wide budgets before creating any Task.
-- Does not scrape, enrich, judge, or present.
-- Returns `session_id`, counts by Task type, budget usage, budget exhaustion flags, and a short explanation.
-
-`claim_task`:
-
-- Input: `role`, optional `types`, optional `session_id`.
-- Atomically claims one ready Task.
-- Also reclaims timed-out claimed Tasks.
-- Returns one compact Task packet.
-
-`complete_task`:
-
-- Input: `taskId`, `status`, optional `output`, optional `error`.
-- Marks Task done/failed/cancelled.
-- Records affected client/booking/factlet ids in `output`.
-- Does not itself perform long scraping or LLM work.
-
-Task `output` canonical keys for affected records are:
-
-- `clientIds`
-- `bookingIds`
-- `factletIds`
-- `sourceIds`
-
-These match the Phase 3 worker skills (`url-loop.md`, `enrichment-agent.md`, `apply-factlet.md`) and the Judge inputs in Subproject 6 below.
-
-For backward compatibility, the Planner also accepts the legacy keys when reading completed Task output to plan `JUDGE_AFFECTED`:
-
-- `affectedClientIds`
-- `affectedBookingIds`
-
-Normalization happens in `extractAffectedIds(output)` in `C:\Users\Admin\Desktop\WKG\PRECRIME\server\mcp\mcp_server.js`. It unions and dedupes canonical + legacy. New code must write the canonical keys; legacy names exist only so older `done` Tasks still get judged.
-
-`tasks`:
-
-- Debug/audit list.
-- Supports filters: `status`, `type`, `sessionId`, `targetType`, `targetId`.
-
-Planner should be a priority-ordered state machine, not LLM reasoning.
-
-Interactive startup:
-
-```text
-Ask:
-  1. SHOW_HOT_LEEDZ
-  2. RUN_WORKFLOW
-```
-
-If `SHOW_HOT_LEEDZ`:
-
-- Create one `SHOW_HOT_LEEDZ` Task.
-- Do not scrape or enrich.
-
-If `RUN_WORKFLOW`:
-
-- Create one bounded `DISCOVER_SOURCES` Task at the start of the Session unless one already exists for that Session.
-- Create claimable `SCRAPE_SOURCE`, `APPLY_FACTLET`, and `ENRICH_CLIENT` Tasks up to configured limits.
-- Stop creating a Task type once that Session has reached its `tasks.sessionBudgets[type]`.
-- Let workers claim Tasks.
-
-Headless startup:
-
-- Create `SHARE_BOOKING` Tasks for existing unshared `leed_ready` Bookings first.
-- Then create the same workflow Tasks as `RUN_WORKFLOW`.
-
-Planner Task creation order for workflow mode:
-
-1. `DISCOVER_SOURCES`, once per Session/cycle.
-2. `SCRAPE_SOURCE` for claimable Source rows.
-3. `APPLY_FACTLET` for live Factlets not yet broadly assimilated.
-4. `ENRICH_CLIENT` for stale/thin Clients.
-5. `JUDGE_AFFECTED` for completed Tasks with affected ids.
-6. `SHOW_HOT_LEEDZ` if judged hot items exist.
-
-Per-type Task limits and Session budgets come from the top-level runtime config. Limits mean "open right now." Budgets mean "total created in this Session."
-
-Default limits:
-
-```json
-{
-  "DISCOVER_SOURCES": 1,
-  "SCRAPE_SOURCE": 5,
-  "APPLY_FACTLET": 5,
-  "ENRICH_CLIENT": 10,
-  "JUDGE_AFFECTED": 5,
-  "SHOW_HOT_LEEDZ": 1,
-  "SHARE_BOOKING": 3
-}
-```
-
-Default Session budgets:
-
-```json
-{
-  "DISCOVER_SOURCES": 1,
-  "SCRAPE_SOURCE": 25,
-  "APPLY_FACTLET": 50,
-  "ENRICH_CLIENT": 50,
-  "JUDGE_AFFECTED": 50,
-  "SHOW_HOT_LEEDZ": 1,
-  "SHARE_BOOKING": 10
-}
-```
-
-When a budget is reached, Planner does not delete or discard remaining inputs. It leaves them in their ontology tables:
-
-- unprocessed Sources remain in `Source`
-- live Factlets remain in `Factlet`
-- stale/thin Clients remain in `Client`
-- unshared Bookings remain in `Booking`
-
-The next Session may continue from that leftover work.
-
-## Subproject 4: Worker Skills Become One-Task Skills
-
-Rewrite worker-facing skills so each skill executes exactly one claimed Task.
-
-First rewrites:
-
-- `templates\skills\url-loop.md`
-  - Claim or receive one `SCRAPE_SOURCE` Task.
-  - Scrape that Source.
-  - Save discovered Sources, Clients, Bookings, and Factlets.
-  - Mark the Source processed.
-  - Complete the Task.
-  - Stop.
-
-- `templates\skills\enrichment-agent.md`
-  - Claim or receive one `ENRICH_CLIENT` Task.
-  - Load that Client.
-  - Improve contact info, target URLs, Bookings, and dossier.
-  - Save updates.
-  - Complete the Task.
-  - Stop.
-
-Add one new worker skill:
-
-- `templates\skills\apply-factlet.md`
-  - Claim or receive one `APPLY_FACTLET` Task.
-  - Load one Factlet.
-  - Compare it to Clients using the enrichment flow below.
-  - Assimilate relevant evidence into Client dossiers.
-  - Complete the Task.
-  - Stop.
-
-Workers must not decide global strategy. Workers write truth. Planner decides what comes next.
-
-## Subproject 5: Enrichment And Factlets
-
-This resolves the previous TBD.
-
-Chosen method:
-
-```text
-Factlet = temporary reusable evidence in SQLite
-Client.dossier = accumulated client understanding
-APPLY_FACTLET = decide whether a live Factlet should be assimilated into a Client dossier
-Recycler = deletes stale Factlets after N days
-```
-
-Do not use `ClientFactlet[]` as the primary enrichment model.
-
-Do not add `Client.zip`. Zip belongs to `Booking`. If a Client has stable geography, write it into the dossier as a permanent note.
-
-Factlet stays simple:
-
-```text
-id
-content
-source
-createdAt
-status
-```
-
-Client dossier is plain text, but disciplined:
-
-```text
-[PERMANENT] Static facts that should not expire, such as a venue address or business type.
-[2026-05-23] Time-sensitive signal from source...
-[2026-06-01] Newer related signal...
-```
-
-`clientNotes` is different from `dossier`. Clarify later, but for now:
-
-- `dossier`: intelligence about the Client.
-- `clientNotes`: private operational notes about how to communicate or handle the Client.
-
-`ENRICH_CLIENT` behavior:
-
-1. Load Client and existing dossier.
-2. Search using name, company, website, existing target URLs, clientNotes, and known Bookings.
-3. Find direct contacts, new URLs, Bookings, and Factlets.
-4. Any Factlet discovered during this Client-targeted Task is first assimilated into this Client's dossier if relevant.
-5. If the Factlet may help other Clients, create an `APPLY_FACTLET` Task targeting that Factlet.
-6. Complete the Task with affected Client/Booking ids.
-
-`APPLY_FACTLET` behavior:
-
-1. Load one live Factlet.
-2. Compare it to current Clients.
-3. Start with fast procedural checks:
-   - Client name/company overlap.
-   - Website/domain overlap.
-   - Regex intersection with `clientNotes`.
-   - Regex intersection with `dossier`.
-   - Booking title/location/zip/date/trade overlap.
-   - Phone area code only when useful and not misleading.
-4. If there is no cheap overlap, skip the Client.
-5. If there is plausible overlap, use LLM fallback with only:
-   - Factlet content/source/date.
-   - Client name/company/website.
-   - Client dossier.
-   - Client notes.
-   - Recent Booking summaries.
-6. LLM returns one of:
-   - `no_change`
-   - `append_dossier_entry`
-   - `rewrite_existing_dossier_entry`
-   - `update_permanent_profile`
-7. Save updated dossier when relevant.
-8. Complete Task with affected Client/Booking ids.
-
-Duplication rule:
-
-- Do not blindly append the same event or fact twice.
-- If the new Factlet is a newer/better mention of an existing dossier item, rewrite or refine the existing entry.
-- If it is genuinely new, append a dated entry.
-
-New Client behavior:
-
-- When a Client is created or enriched, it can be exposed to recent live Factlets.
-- Fast checks run first.
-- LLM fallback runs only on plausible matches.
-- Live Factlets remain available until recycler deletes them.
-
-Staleness rule:
-
-- Do not automatically remove old dossier entries.
-- They are dated, and the drafter/judge should prefer recent entries.
-- Recycler deletes old Factlet rows, not dossier memory.
-
-Legacy `ClientFactlet`:
-
-- Existing schema has `ClientFactlet`.
-- New architecture should not depend on it for drafting/scoring.
-- If retained for backwards compatibility, treat it as a pointer-only legacy list.
-- If a pointer references a missing Factlet, delete that pointer lazily when encountered.
-
-## Subproject 6: Judge And Scoring Boundary
-
-Scoring belongs in Judge, not scattered across workers.
-
-Target boundary:
-
-```text
-Worker saves facts.
-Worker completes Task with affected ids.
-Judge scores affected Client/Booking records.
-Planner reacts to judged state.
-Presenter acts on judged state.
-```
-
-Add or formalize:
-
-```text
-judge_affected
-```
-
-Inputs:
-
-- `clientIds`
-- `bookingIds`
-- `factletIds`, optional
-- `session_id`, optional
 
 Responsibilities:
 
-- Run client/booking scoring.
-- Update `Booking.status` only through canonical scoring logic.
-- Do not scrape.
-- Do not enrich.
-- Do not draft.
-- Return changed statuses and missing fields.
-
-Existing `computeBookingTargetScore()` remains the marketplace/outreach promotion authority.
-
-Implementation note:
-
-- Existing `pipeline.save` currently auto-scores. This must be migrated by extraction, not by coexistence.
-
-Required migration decision:
-
-- Create one internal scoring helper first:
+- load `precrime_config.json`
+- resolve repo root
+- spawn workers with `child_process.spawn`
+- pass env:
+  - `PRECRIME_WORKER_TYPE`
+  - `PRECRIME_SKILL_PATH`
+  - `PRECRIME_OBJECTIVE`
+  - `DATABASE_URL`
+  - LLM provider env/config
+- write logs to:
 
 ```text
-judgeAffected({ clientIds, bookingIds, reason, writeStatus })
+logs\workers\supervisor.log
+logs\workers\<task-type>-<n>.log
 ```
 
-- Move the current `pipeline.save` scoring block into that helper.
-- `computeBookingTargetScore()` remains the score authority inside the helper.
-- `pipeline.save` may call `judgeAffected` only as a legacy compatibility caller.
-- Add optional `judge` input to `pipeline.save`.
-- Default: `judge: true`, so existing skills do not break during migration.
-- New Task-based workers must call `pipeline.save` with `judge: false`.
-- New Task-based workers must return affected ids in Task `output`.
-- Planner must then create a `JUDGE_AFFECTED` Task for those affected ids.
-- `JUDGE_AFFECTED` is the only scoring caller in the new Task path.
-
-This creates one temporary compatibility path, not two scoring systems:
+Supervisor commands:
 
 ```text
-Legacy path:
-pipeline.save(judge: true) -> judgeAffected(...)
-
-New Task path:
-pipeline.save(judge: false) -> complete_task(output.affectedIds) -> JUDGE_AFFECTED -> judgeAffected(...)
+node server\workers\supervisor.js start --mode workflow --objective hybrid
+node server\workers\supervisor.js start --mode headless --objective marketplace
+node server\workers\supervisor.js status
+node server\workers\supervisor.js stop
 ```
 
-Forbidden:
+Keep the first version simple. If persistent background management is hard on Windows, start foreground workers and let `Ctrl+C` stop them.
 
-- Do not leave a copied scoring block inside `pipeline.save`.
-- Do not let `pipeline.save(judge: false)` update `Booking.status`.
-- Do not let workers set `Booking.status` directly except terminal operational states explicitly owned elsewhere, such as `shared`, `taken`, or `expired`.
-- Do not run both `pipeline.save` auto-score and `JUDGE_AFFECTED` for the same Task output.
+### Step 3 -- Add Worker
 
-End state:
-
-- Task-based workflow always scores through `JUDGE_AFFECTED`.
-- `pipeline.save(judge: true)` remains only for unmigrated legacy/manual callers until they are removed or rewritten.
-
-## Subproject 7: Structured Dates And `share_booking`
-
-This bug must never happen again:
+Create:
 
 ```text
-LLM hand-computed st/et and posted a marketplace leed.
+server\workers\worker.js
 ```
 
-The LLM is a fuzzy date recognizer. MCP is the deterministic date validator/converter.
-
-Required `resolve_dates` input shape:
-
-```json
-{
-  "action": "resolve_dates",
-  "rawText": "Grad Nite, June 10, 9:30pm to 5am, Santa Monica",
-  "start": {
-    "year": 2026,
-    "month": 6,
-    "day": 10,
-    "hour": 9,
-    "minute": 30,
-    "ampm": "PM"
-  },
-  "end": {
-    "year": 2026,
-    "month": 6,
-    "day": 11,
-    "hour": 5,
-    "minute": 0,
-    "ampm": "AM"
-  },
-  "timezone": "America/Los_Angeles",
-  "zip": "90405",
-  "sourceProof": {
-    "kind": "email|url|snippet",
-    "value": "proof text, email id, or source URL"
-  }
-}
-```
-
-MCP must:
-
-- Reject missing year, month, day, time, end time, ambiguous AM/PM, and missing timezone.
-- An explicit IANA `timezone` is REQUIRED. Zip-to-timezone derivation is not supported -- if only `zip` is supplied, the call is rejected with `timezone:missing_zip_only_derivation_unsupported`. `zip` is echoed in the response for provenance only.
-- Validate calendar dates.
-- Validate end is after start.
-- Validate start has not passed.
-- Calculate `st` and `et`.
-- Return `st`, `et`, ISO fields, human display string, and provenance.
-
-LLM must:
-
-- Copy raw messy date evidence.
-- Extract structured start/end fields.
-- Extract timezone or zip/location.
-- Never compute epoch milliseconds.
-- Never repair or reinterpret MCP output.
-
-Add:
+Worker loop:
 
 ```text
-share_booking
+while not stopped:
+  claim_task(types:[allowed type])
+  if NO_TASK:
+    sleep pollMs
+    exit after idleExitMs if configured
+  if CLAIMED:
+    run handler for task.type
+    complete_task(done|failed)
 ```
 
-Inputs:
+Worker must claim its own Task. Goose must not pre-claim work for worker processes.
 
-- `bookingId`
-- `mode`: `draft` or `post`
+### Step 4 -- Worker Handlers
 
-Not inputs:
+Procedural handlers:
 
-- `st`
-- `et`
+| Task | Handler |
+|---|---|
+| `JUDGE_AFFECTED` | call `pipeline.judge_affected`, then `complete_task` |
+| `SHARE_BOOKING` | call `pipeline.share_booking`, then `complete_task` |
+| `DISCOVER_SOURCES` | bounded Tavily/source discovery, then `add_sources`, then `complete_task` |
 
-`share_booking` must:
+LLM handlers:
 
-1. Load Booking and Client.
-2. Run Judge/rescore.
-3. Reject unless Booking is still `leed_ready`.
-4. Require structured date provenance.
-5. Build addLeed JSON server-side.
-6. In `draft` mode, return addLeed JSON and human display dates.
-7. In `post` mode, call Leedz and save `leedId`, `sharedAt`, `sharedTo`.
+| Task | Skill |
+|---|---|
+| `APPLY_FACTLET` | `templates\skills\apply-factlet.md` |
+| `ENRICH_CLIENT` | `templates\skills\enrichment-agent.md` |
+| `SCRAPE_SOURCE` | `templates\skills\url-loop.md` |
+| `DRAFT_OUTREACH` | `templates\skills\outreach-drafter.md` |
 
-Remove direct `leedz__createLeed` instructions from:
+The coding agent must decide the lowest-risk LLM execution method available in this repo. Acceptable first implementation:
 
-- `templates\skills\share-skill.md`
-- `templates\skills\leed-drafter.md`
-- `templates\skills\headless_flow.md`
-- `templates\GOOSE.md`
-- `DOCS\FOUNDATION.md`
+- spawn a CLI model process with a strict prompt containing the claimed Task JSON and exactly one skill file
+- or call configured LLM HTTP endpoint directly
 
-## Subproject 8: Recycler
-
-Add a startup cleanup MCP action:
-
-```json
-{
-  "action": "recycler",
-  "olderThanDays": 30,
-  "dryRun": true
-}
-```
-
-Recycler runs at PRECRIME startup.
-
-Responsibilities:
-
-- Delete Factlets older than configured N days.
-- Delete or summarize finished Tasks older than configured N days.
-- Requeue timed-out claimed Tasks.
-- Never delete ready Tasks.
-- Never delete active claimed Tasks unless timeout has expired.
-- Never delete ontology truth: Clients, Bookings, Sources.
-
-Factlet cleanup:
-
-- Delete stale Factlet rows.
-- Do not chase dossier entries.
-- If legacy `ClientFactlet` pointers remain, drafting/scoring should delete stale pointers lazily when they point to missing Factlets.
-
-Task cleanup:
-
-- Purge `done`, `failed`, and `cancelled` Tasks older than retention.
-- Do not purge Tasks attached to active Sessions.
-- Preserve enough Session summary to report old runs.
-
-Retention defaults:
-
-```json
-{
-  "factletStaleDays": 180,
-  "taskRetentionDays": 30,
-  "claimTimeoutMinutes": 10
-}
-```
-
-## Subproject 9: Presenter And Modes
-
-Presenter handles judged outputs only.
-
-Interactive:
-
-- `SHOW_HOT_LEEDZ` displays `leed_ready` and `outreach_ready` items.
-- User decides share/email/skip.
-- Marketplace share calls `share_booking(mode="post")`.
-
-Headless:
-
-- Existing hot work first.
-- `SHARE_BOOKING` Tasks for `leed_ready`.
-- Outreach sending only if configured.
-- No direct Leedz calls from LLM.
-
-Presenter must not scrape, enrich, or score.
-
-## Subproject 10: User-Editable Config (Two Separate Surfaces)
-
-PRECRIME has two user-facing config concepts. They do not overlap.
-
-1. `DOCS\VALUE_PROP.md` -- product/sales truth.
-   What is being sold, seller identity, seller email, trade/category, geography, pitch, buyers, relevance signals, pricing, outreach style, examples. This is the soul of the deployment.
-
-2. `precrime_config.json` -- runtime/API config.
-   API keys, LLM provider/model/baseUrl, database file path, runtime mode, Task limits, Session budgets, recycler limits, marketplace/session/auth tokens, paths to auxiliary config files.
-
-These two files are the only user-editable config surfaces. SQLite `Config` is an internal runtime mirror/cache, not a user surface. `.env` is not part of the build.
-
-Do not collapse VALUE_PROP into precrime_config.json. Do not place product/sales fields (companyName, companyEmail, businessDescription, defaultTrade, leedzEmail, pitch, buyers, geography, pricing, outreach examples) in precrime_config.json.
-
-### Canonical paths
+The LLM worker prompt must include:
 
 ```text
-C:\Users\Admin\Desktop\WKG\PRECRIME\precrime_config.json
-C:\Users\Admin\Desktop\WKG\PRECRIME\DOCS\VALUE_PROP.md
+You are a PRECRIME one-task worker.
+Use only the provided claimed Task.
+Do not call claim_task.
+Complete exactly this task.id.
+Stop after complete_task.
 ```
 
-### Startup behavior
+Do not load unrelated skills into the worker prompt.
 
-- Startup reads runtime fields from `precrime_config.json` via `server\config\precrime_config.js` (`loadPrecrimeConfig`).
-- Startup syncs product/sales fields from `DOCS\VALUE_PROP.md` into SQLite `Config` via `server\sync-config.js`.
-- If a third-party library demands `process.env.X` at import time, startup sets `process.env.X` from the loaded config as internal plumbing. This is not documented as a workflow and is not user-facing.
+### Step 5 -- MCP Access From Workers
 
-### Loader contract
+Workers need a way to call Precrime pipeline actions.
 
-`server\config\precrime_config.js` exports `loadPrecrimeConfig({ refresh?, path? })`. Path precedence: explicit `opts.path` > `process.env.PRECRIME_CONFIG_PATH` > project root `precrime_config.json`. The loader reads only `precrime_config.json`. It does not read `.env`. It does not import `dotenv`.
+Preferred simple path:
 
-### Wired callers
+- factor pipeline core functions enough for local worker code to call them directly, or
+- start the existing MCP server and have workers call it over stdio/http if already supported.
 
-- `server\mcp\mcp_server.js` reads the config at startup. `TASK_TYPE_LIMITS`, `TASK_SESSION_BUDGETS`, `CLAIM_TIMEOUT_MINUTES`, and `recycler` thresholds come from the config.
-- `scripts\bootstrap_config.js` reads `precrime_config.json` and emits Windows `set NAME=value` lines on stdout so the .bat launchers can lift `PRECRIME_*` runtime knobs and `OPENAI_API_KEY` / `ANTHROPIC_API_KEY` / `TAVILY_API_KEY` into the process environment for inheritance by child processes. It does NOT rewrite `.mcp.json`, and it does NOT rewrite the Goose user config -- `goose.bat` regenerates `%APPDATA%\Block\goose\config\config.yaml` from `goose_config.template.yaml` on every launch.
-- `precrime.bat`, `goose.bat`, `hermes.bat` invoke `scripts\bootstrap_config.js` and refuse to start when `precrime_config.json` is missing.
-- `server\sync-config.js` reads `DOCS\VALUE_PROP.md` as the sole source for companyName, companyEmail, businessDescription, defaultTrade, leedzEmail, geography, and pitch, then writes those into SQLite `Config`. It does not read product/sales fields from `precrime_config.json`.
+Do not duplicate scoring or share logic in worker files. Use existing server functions/actions.
 
-### Stays scattered (per spec)
+If direct function import from `mcp_server.js` is too tangled, add a small internal module:
 
-- `server\mcp\gmail_mcp_config.json` (Gmail OAuth plumbing).
-- `rss\...`, `reddit\...`, `ig\...` source lists (source-specific knobs).
-- `server\mcp\mcp_server_config.json` (MCP protocol metadata and logging file path).
+```text
+server\pipeline_actions.js
+```
 
-## Subproject 11: Tests
+Move reusable action implementations there, and have both MCP server and worker runtime call it.
 
-Add tests or smoke scripts that prove:
+Keep this refactor narrow.
 
-1. `plan_tasks` creates no more than configured limits per Task type.
-1a. `plan_tasks` creates no more than configured Session budgets per Task type across one Session.
-2. `claim_task` atomically claims one ready Task.
-3. Claimed timed-out Tasks return to ready.
-4. `complete_task` records `output`, status, and timestamps.
-5. `report_session` summarizes Tasks for one Session.
-6. `SCRAPE_SOURCE` worker saves discoveries and stops after one Source.
-7. `ENRICH_CLIENT` worker updates one Client dossier and stops.
-8. `APPLY_FACTLET` updates only plausible Client dossiers and avoids duplicate entries.
-9. `judge_affected` is the only status promotion path for new architecture flows.
-10. `resolve_dates` rejects text-only timezone smuggling and accepts structured input.
-11. `share_booking` refuses LLM-provided `st`/`et`.
-12. `recycler` deletes stale Factlets at startup and leaves Clients/Bookings intact.
-13. Planner closes a Session when no new Tasks are created and no ready/claimed Tasks remain for that Session.
-14. Planner leaves leftover recursive inputs in SQLite when a Session budget is exhausted.
+### Step 6 -- Goose Instructions
 
-## Implementation Order
+Update:
 
-1. Add `Task` schema and runtime table creation.
-2. Add `plan_tasks`, `claim_task`, `complete_task`, and `tasks`.
-3. Extract the current `pipeline.save` scoring block into `judgeAffected(...)`.
-4. Add `judge_affected` MCP action backed by the same `judgeAffected(...)` helper.
-5. Add optional `judge` input to `pipeline.save`; default `true`, but new Task workers must pass `false`.
-6. Add `recycler` with dry-run support.
-7. Rewrite `url-loop.md` to one `SCRAPE_SOURCE` Task.
-8. Rewrite `enrichment-agent.md` to one `ENRICH_CLIENT` Task.
-9. Add `apply-factlet.md`.
-10. Implement `APPLY_FACTLET` dossier assimilation.
-11. Add structured `resolve_dates`.
-12. Add `share_booking`.
-13. Rewrite presenter/share/headless skills to use `SHOW_HOT_LEEDZ` and `share_booking`.
-14. Run smoke tests on a copied Dallas/TDS database.
-15. (DONE) `precrime_config.json` is now the canonical runtime/API config surface; `server\config\precrime_config.js` loads it, `scripts\bootstrap_config.js` exports `set NAME=value` lines from it, and the .bat launchers refuse to start without it.
+```text
+templates\GOOSE.md
+templates\skills\init-wizard.md
+templates\skills\headless_flow.md
+```
 
-## Non-Goals For First Pass
+New interactive behavior:
 
-- Do not add keyword index tables.
-- Do not add `Client.zip`.
-- Do not build a complex scheduler.
-- Do not spawn multiple OS processes yet.
-- Do not rewrite every harvester in the first pass.
-- Do not rely on LLM prose for audit.
-- Do not let workers decide global strategy.
-- Do not let presenters post directly to Leedz.
+```text
+User chooses RUN_WORKFLOW
+Goose calls plan_tasks(mode:"workflow", objective)
+Goose starts worker supervisor if not running
+Goose polls work_status/tasks
+Goose calls plan_tasks periodically or when workers drain queue
+Goose presents SHOW_HOT_LEEDZ when planner creates it
+```
+
+New headless behavior:
+
+```text
+startup detects headless
+call plan_tasks(mode:"headless", objective)
+start supervisor
+loop: poll status, re-plan when queue drains, stop on budgets/idle
+```
+
+Goose must not execute worker skills itself except `SHOW_HOT_LEEDZ`.
+
+### Step 7 -- Planner Replan Trigger
+
+Add one of these, simplest first:
+
+Option A:
+
+- Goose/supervisor calls `plan_tasks` every N seconds while active.
+- Existing planner dedup/budgets prevent duplicate flood.
+
+Option B:
+
+- Supervisor calls `plan_tasks` when all worker queues go idle.
+
+Option C:
+
+- Worker completion of source/evidence Tasks triggers a lightweight replan.
+
+Start with A or B. Avoid event frameworks.
+
+## What To Remove Or Demote
+
+Demote these instructions:
+
+- Goose as full workflow executor
+- serial claim/dispatch/complete heartbeat in Goose for all Task types
+- any language saying "worker skill claims next task" when running under Goose
+- any workflow menu invented after planner output
+
+Keep:
+
+- startup wizard
+- config checks
+- hot presenter
+- audit/status commands
+
+## Sessions
+
+Sessions are audit/run containers only.
+
+They must not be used as the execution engine.
+
+Rules:
+
+- Planner may create/reuse Session for a run.
+- Tasks may have `sessionId`.
+- Worker completions may log to Session.
+- Session failure must not be based solely on `save` count.
+- A run with completed Tasks and zero saves can be valid: `completed_no_new_evidence`.
+
+## Required Tests
+
+Add or update tests in:
+
+```text
+scripts\smoke_test_tasks.js
+scripts\audit_build_zip.js
+```
+
+Minimum tests:
+
+1. `plan_tasks(mode:"workflow")` creates Task rows but does not execute them.
+2. Supervisor starts configured worker counts.
+3. Two `APPLY_FACTLET` workers can claim different Tasks concurrently.
+4. A worker cannot claim a Task outside its allowed type.
+5. Claimed Task context is preserved through completion.
+6. Worker skill prompt contains one skill file only.
+7. Goose docs no longer instruct serial execution of all workflow Tasks.
+8. `SHOW_HOT_LEEDZ` remains interactive and is not claimed by background pool by default.
+9. `JUDGE_AFFECTED` worker calls procedural judge and stamps source Task judged metadata.
+10. `SHARE_BOOKING` worker uses only `share_booking`.
+11. No direct `leedz__createLeed` active instruction exists.
+12. `VALUE_PROP` explicit trade parser is protected against body false positives.
+13. Signature parser accepts `### Signature`.
+14. Full syntax checks pass:
+
+```text
+node --check server\mcp\mcp_server.js
+node --check server\sync-config.js
+node --check server\workers\supervisor.js
+node --check server\workers\worker.js
+node --check scripts\smoke_test_tasks.js
+node --check scripts\audit_build_zip.js
+```
+
+If full smoke fails at Prisma schema engine startup, report that exact infrastructure failure and still run targeted unit/static tests.
+
+## Acceptance Criteria
+
+The fix is complete only when:
+
+- There is a real worker supervisor.
+- Multiple worker OS processes can run at once.
+- Each worker has its own LLM call path.
+- Workers claim Tasks atomically from SQLite.
+- Goose no longer executes ordinary workflow Tasks serially.
+- Planner remains procedural and stage-gated.
+- Judge remains procedural.
+- Hot lead interrupt still works.
+- Marketplace posting still routes only through `share_booking`.
+- TDS/PB_DALLAS style deployments can run without stale `defaultTrade` or missing signature startup failures.
+
+## Mental Model
+
+PRECRIME is not a chat flow.
+
+PRECRIME is:
+
+```text
+Planner fills queue.
+Workers drain queue in parallel.
+Judge scores evidence.
+Presenter/action handles hot leads.
+Goose is the control panel.
+```
+
+Any implementation that leaves Goose as the only worker executor has not implemented the requested architecture.

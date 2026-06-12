@@ -10,7 +10,7 @@ When scraped content contains someone requesting a specific service at a specifi
 
 Create the client (if not already in DB -- run classify-contact.md first):
 ```
-precrime__pipeline({ action: "save", patch: {
+precrime__pipeline({ action: "save", judge: false, patch: {
   name: "[contact name]",
   company: "[company]",
   email: "[email if found]",
@@ -21,7 +21,7 @@ precrime__pipeline({ action: "save", patch: {
 
 Attach the booking:
 ```
-precrime__pipeline({ action: "save", id: clientId, patch: {
+precrime__pipeline({ action: "save", judge: false, id: clientId, patch: {
   bookings: [{
     trade: "[detected trade -- must match precrime__trades exactly]",
     dateText: "[verbatim date/time text copied from the source page]",
@@ -33,7 +33,7 @@ precrime__pipeline({ action: "save", id: clientId, patch: {
 }})
 ```
 
-The server resolves `dateText` into `startDate` / `endDate` procedurally, then scores the booking against `DOCS/SCORING.json`. It stays `new` / brewing until every `leed_ready` gate passes, including contact, zip, end date, source URL, and fresh relevant factlet evidence.
+The server resolves `dateText` into `startDate` / `endDate` procedurally. The Judge classifies the booking server-side as `cold` / `brewing` / `hot`. Do not set status or scores. A booking stays `brewing` until it is enriched enough to act on, which the Judge decides from contact, zip, end date, source URL, and fresh relevant factlet evidence.
 `sourceUrl` must be the live page that proves the booking. `pipeline.save` rejects 404s, homepage redirects, pages that do not mention the detected booking terms/year, and event dates not proven on the source page.
 
 Do not invent ISO dates or epoch values. The model's job is to copy raw date text from the source; the MCP server computes exact Leedz wall-clock epoch values.
@@ -66,4 +66,4 @@ A Booking record represents an EVENT THAT REQUIRES VALUE_PROP, not a contact who
 
 For these cases, create the CLIENT (via classify-contact.md) with dossier notes capturing the encounter. Let the enrichment loop attach factlets. The booking only appears later, if and when actual demand evidence is found (RFP, inquiry, past purchase of VALUE_PROP at a recurring event, etc.).
 
-The cost of a wrong Booking is that it lands at `outreach_ready` (no demand signal) and pollutes the queue. The scoring gates will catch it, but the cleaner path is to not create the Booking in the first place.
+The cost of a wrong Booking is that it pollutes the queue with no demand signal. The Judge will hold it at `brewing` rather than `hot`, but the cleaner path is to not create the Booking in the first place.

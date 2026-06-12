@@ -25,11 +25,18 @@ Product identity, seller info, audience, and geography are defined in `DOCS/VALU
 
 ## RUNNING THE WORKFLOW
 
-The launcher (`precrime.bat`, `goose.bat`, or `hermes.bat`) sets up the DB, the API keys (from `precrime_config.json`), and routes the agent through `skills/init-wizard.md`. The wizard offers exactly two interactive choices, plus a headless mode triggered by the launcher flag:
+The launcher (`precrime.bat`, `goose.bat`, or `hermes.bat`) sets up the DB, the API keys (from `precrime_config.json`), and routes the agent through `skills/init-wizard.md`.
+
+Every run picks two axes:
+
+- **Mode**: `--interactive` (default) or `--headless`.
+- **Objective**: `--marketplace`, `--outreach`, or `--hybrid`. Default: headless => marketplace; interactive => hybrid.
+
+`--outreach` (or `--hybrid` in headless) requires the Gmail MCP -- init-wizard fails fast with `OUTREACH_REQUIRES_GMAIL` if it is not registered.
 
 - **`SHOW_HOT_LEEDZ`** -- present already-judged `leed_ready` / `outreach_ready` Bookings and route per-item share / email / skip via `skills/show-hot-leedz.md` -> `skills/share-skill.md`.
-- **`RUN_WORKFLOW`** -- run a full discovery + scrape + enrich + judge cycle via the Planner. Worker skills (`url-loop.md`, `enrichment-agent.md`, `apply-factlet.md`) process one Task each. Judge runs server-side via `JUDGE_AFFECTED`.
-- **Headless** (`goose.bat --headless`) -- `skills/headless_flow.md` orchestrates `plan_tasks(mode:"headless")` -> drain -> replan -> exit. Zero questions, auto-posts `leed_ready` Bookings via `share_booking(mode:"post")`. Final report appended to `logs/ROUNDUP.md`.
+- **`RUN_WORKFLOW`** -- run a full discovery + scrape + enrich + judge cycle via the Planner. Worker skills (`url-loop.md`, `enrichment-agent.md`, `apply-factlet.md`, and `outreach-drafter.md` when objective allows) process one Task each. Judge runs server-side via `JUDGE_AFFECTED`.
+- **Headless** (`goose.bat --headless [--marketplace|--outreach|--hybrid]`) -- `skills/headless_flow.md` orchestrates `plan_tasks(mode:"headless", objective:...)` -> drain -> replan -> exit. Zero questions. Marketplace objective auto-posts `leed_ready` Bookings via `share_booking(mode:"post")`. Outreach objective drafts via `outreach-drafter.md` (Gmail draft, never auto-send). Final report appended to `logs/ROUNDUP.md`.
 
 The Planner (`precrime__pipeline({ action:"plan_tasks" })`) is the single source of truth for what runs next. Workers never decide global strategy.
 
@@ -42,7 +49,7 @@ Two user-editable surfaces. They do not overlap.
 | File | Purpose |
 |------|---------|
 | `DOCS/VALUE_PROP.md` | Product / sales truth: seller, trade, geography, pitch, buyers, pricing, relevance signals, outreach examples. |
-| `precrime_config.json` | Runtime / API config: `apiKeys`, `llm`, `databaseFile`, `defaultMode`, `timezone`, `tasks.limits`, `recycler` thresholds. |
+| `precrime_config.json` | Runtime / API config: `apiKeys`, `llm`, `databaseFile`, `defaultMode`, `tasks.limits`, `tasks.sessionBudgets`, `tasks.workflowStrategy`, `recycler` thresholds. No timezone field; share time derives timezone from `Booking.zip`. |
 
 The SQLite `Config` table is an internal runtime mirror written from `DOCS/VALUE_PROP.md` by `server/sync-config.js` at launch. It is not a user surface. No `.env` file is part of the build.
 
@@ -66,7 +73,7 @@ Save: `precrime__pipeline({ action:"save", judge:false, ... })`. Read: `precrime
 | `precrime-rss` | `rss/rss-scorer-mcp/index.js` | RSS factlet harvester (`get_top_articles`). |
 | `gmail` | `server/mcp/mcp_gmail.js` | `gmail_send`. Token from Chrome extension on port 3001. |
 | `tavily` | `tools/tavily_lean_mcp.py` | `tavily_search` / `tavily_extract` with response bloat trimmed. |
-| `leedz` | `tools/leedz_proxy_mcp.py` | Local Leedz proxy. Direct `leedz__createLeed` from skill prose is forbidden; the sanctioned share path is `share_booking(mode:"post")`. |
+| Leedz marketplace | internal HTTP from `share_booking` | The Leedz MCP proxy is not exposed to the agent. The sanctioned share path is `share_booking(mode:"post")`. |
 
 ---
 

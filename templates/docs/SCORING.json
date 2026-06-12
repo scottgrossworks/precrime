@@ -32,6 +32,7 @@
   "factlet": {
     "threshold": 3,
     "pointsPerFreshFactlet": 2,
+    "pointsPerDemandFactlet": 6,
     "defaultStaleDays": 180,
     "freshRelevantRequiredForLeedReady": 1,
     "useOnlyRelevant": true,
@@ -40,8 +41,9 @@
     "clientLevelFactletsCannotAloneVerifyEvent": true
   },
   "demandSignal": {
-    "_comment": "Demand signal = evidence the buyer's hair is on fire. Explicit: regex match on demand verbs in booking title/description/notes/sourceUrl. Inferred: fresh relevant factlets count >= factletsForInferred (the Prom Pattern five-slot stack lands here via factlets). Recomputed every score; never stored. See FOUNDATION.md.",
+    "_comment": "Demand signal = evidence the buyer's hair is on fire. Explicit: regex match on demand verbs in booking title/description/notes/sourceUrl. Inferred: fresh Client-matching factlets that also mention VALUE_PROP/trade count >= valuePropFactletsForDemand. Generic Client factlets help dossier score but do not prove demand. Recomputed every score; never stored. See FOUNDATION.md.",
     "factletsForInferred": 3,
+    "valuePropFactletsForDemand": 1,
     "hotDaysOut": 14,
     "explicitPatterns": [
       "\\b(looking|searching) for (a |an |some )?\\w+",
@@ -79,7 +81,7 @@
     "minimumForOutreachReady": 60,
     "gates": {
       "leedReady": {
-        "_comment": "Real demand. demandSignal === true means explicit verb match OR factlets stack to inferred threshold. Without it, even a 100-score booking is outreach_ready, not leed_ready.",
+        "_comment": "Real demand. demandSignal === true means explicit verb match OR a fresh Client-matching factlet also mentions VALUE_PROP/trade. Without it, even a 100-score booking is outreach_ready, not leed_ready.",
         "all": [
           { "field": "score", "op": ">=", "value": 90 },
           { "field": "tn", "op": "present" },
@@ -200,7 +202,9 @@
   "statusRules": {
     "leed_ready": "leedReady gate passes (all fields + demandSignal === true). Marketplace post allowed.",
     "outreach_ready": "outreachReady gate passes but leedReady does not (no demand signal). Cold pitch allowed, marketplace post denied.",
-    "brewing": "Neither gate passes. Booking still being enriched. Empty slots are next enrichment targets."
+    "brewing": "Neither gate passes. Booking still being enriched. Empty slots are next enrichment targets.",
+    "shared": "Already acted on. Score is reset to 0 so it cannot be presented or posted again.",
+    "expired": "Past or dead opportunity. Score is reset to 0 until fresh future evidence is saved as a new/enriched booking."
   },
   "promotionAuthority": {
     "onlyMcpMaySetLeedReady": true,

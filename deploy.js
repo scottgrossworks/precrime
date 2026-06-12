@@ -541,7 +541,7 @@ if (fs.existsSync(baseIgCfgPath)) {
 //   - init-wizard          (router)
 //   - headless_flow        (Planner-driven orchestrator)
 //   - url-loop / enrichment-agent / apply-factlet / show-hot-leedz   (one-Task workers)
-//   - share-skill / leed-drafter / outreach-drafter                  (share/draft helpers)
+//   - share-skill / outreach-drafter                                 (share/draft helpers)
 //   - client-finder, shared/*                                        (helpers called by workers)
 // Plus per-channel _sources.md / discovered_directories.md seed files that
 // init-wizard.md Step 1.5 imports once at startup via pipeline.import_sources.
@@ -561,7 +561,6 @@ console.log('\nSkill playbooks:');
   ['skills/apply-factlet.md',                 'skills/apply-factlet.md'],
   ['skills/show-hot-leedz.md',                'skills/show-hot-leedz.md'],
   ['skills/share-skill.md',                   'skills/share-skill.md'],
-  ['skills/leed-drafter.md',                  'skills/leed-drafter.md'],
   ['skills/outreach-drafter.md',              'skills/outreach-drafter.md'],
   ['skills/client-finder.md',                 'skills/client-finder.md'],
   // Source seed files (read once at startup by pipeline.import_sources):

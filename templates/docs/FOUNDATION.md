@@ -62,7 +62,7 @@ Every skill file is an implementation of one of these functions.
 | Worker: complete one Task       | `precrime__pipeline({ action: "complete_task", taskId, status, output, error? })` |
 | Save / update record (worker)   | `precrime__pipeline({ action: "save", id?, judge: false, patch })` |
 | Judge: rescore affected records | `precrime__pipeline({ action: "judge_affected", clientIds?, bookingIds? })` |
-| Presenter: build / post leed    | `precrime__pipeline({ action: "share_booking", bookingId, mode: "draft" \| "post", timezone })` |
+| Presenter: build / post leed    | `precrime__pipeline({ action: "share_booking", bookingId, mode: "draft" \| "post" })` (server derives IANA timezone from `Booking.zip`; do not pass `timezone`) |
 | Structured date validator       | `precrime__pipeline({ action: "resolve_dates", start, end, timezone, ... })` |
 | Recycler: stale Factlets / old Tasks | `precrime__pipeline({ action: "recycler", dryRun? })` |
 | List Tasks (audit / debug)      | `precrime__pipeline({ action: "tasks", status?, type?, sessionId? })` |
@@ -74,7 +74,7 @@ Every skill file is an implementation of one of these functions.
 | Fetch RSS articles              | `precrime_rss__get_top_articles({ limit })` |
 | Web search / extract            | `tavily__tavily_search({ query })` / `tavily__tavily_extract({ url })` |
 | Send email                      | `gmail__gmail_send({ to, subject, body })` |
-| Post marketplace leed (LEGACY)  | `leedz__createLeed` -- forbidden for normal sharing; `share_booking(mode:"post")` is the only sanctioned path. |
+| Post marketplace leed           | `share_booking(mode:"post")` is the only sanctioned path. External Leedz tools are not exposed to the agent. |
 
 Workers always pass `judge: false` on `pipeline.save`. The Planner converts a completed Task's `output.clientIds` / `output.bookingIds` into a `JUDGE_AFFECTED` Task; the Judge then runs canonical scoring (`computeBookingTargetScore` over `DOCS/SCORING.json`) and writes the resulting `Booking.status`. There is no separate "rescore" call in this architecture.
 
@@ -97,7 +97,7 @@ The conceptual `PRECRIME(sources, clients)` pseudocode above is implemented as a
 
 The orchestrator is `skills/headless_flow.md` in headless mode, or `skills/init-wizard.md` -> `RUN_WORKFLOW` / `SHOW_HOT_LEEDZ` route in interactive mode. Both follow the same dispatch shape:
 
-1. **Plan.** `precrime__pipeline({ action: "plan_tasks", mode })`. Server enqueues `Task` rows up to per-type limits from `precrime_config.json` (`tasks.limits`). Hot `SHARE_BOOKING` Tasks come first in `mode:"headless"`; `SHOW_HOT_LEEDZ` comes first in `mode:"hot_only"`.
+1. **Plan.** `precrime__pipeline({ action: "plan_tasks", mode })`. Server enqueues `Task` rows up to per-type limits from `precrime_config.json` (`tasks.limits`) and per-run budgets (`tasks.sessionBudgets`). If live unprocessed Factlets reach `tasks.workflowStrategy.factletBacklogDiscoveryPause`, planning pauses new discovery and drains APPLY_FACTLET / JUDGE_AFFECTED first. In `mode:"headless"`, workflow Tasks and Judge run before `SHARE_BOOKING` so a cold restart refreshes stale ready rows before posting. `SHOW_HOT_LEEDZ` comes first in `mode:"hot_only"`.
 2. **Drain.** Loop: `precrime__pipeline({ action: "claim_task", role })` -> dispatch by `task.type` -> `precrime__pipeline({ action: "complete_task", taskId, status, output })`.
 3. **Replan.** When `claim_task` returns `NO_TASK`, call `plan_tasks` again. The Planner converts completed worker Tasks into `JUDGE_AFFECTED` Tasks via `extractAffectedIds(output)`, schedules `APPLY_FACTLET` Tasks for live unassimilated Factlets, and re-enqueues stale `ENRICH_CLIENT` candidates.
 4. **Exit.** When `plan_tasks` creates `0` Tasks in every type AND `claim_task` returns `NO_TASK`, the queue is permanently empty for this run.
@@ -110,9 +110,19 @@ The orchestrator is `skills/headless_flow.md` in headless mode, or `skills/init-
 | `ENRICH_CLIENT`    | `skills/enrichment-agent.md` (same handoff convention). |
 | `APPLY_FACTLET`    | `skills/apply-factlet.md`. |
 | `SHOW_HOT_LEEDZ`   | `skills/show-hot-leedz.md` (interactive only; cancelled in headless). |
-| `SHARE_BOOKING`    | Orchestrator calls `share_booking(mode:"post")` and completes the Task. Never `leedz__createLeed`. |
+| `SHARE_BOOKING`    | Orchestrator calls `share_booking(mode:"post")` and completes the Task. Never external Leedz tools. Scheduled only when objective is `marketplace` or `hybrid`. |
+| `DRAFT_OUTREACH`   | `skills/outreach-drafter.md`. Composes the email, saves the draft (`draftStatus:"ready"`), completes. Scheduled only when objective is `outreach` or `hybrid`. Headless persists drafts (no auto-send). |
 | `JUDGE_AFFECTED`   | Orchestrator calls `judge_affected(clientIds, bookingIds)` from `task.input` and completes. |
 | `DISCOVER_SOURCES` | Orchestrator runs one bounded `tavily_search` keyed by `defaultTrade` + geography, feeds results to `add_sources`, completes. |
+
+### Mode vs Objective
+
+Two orthogonal axes drive every run:
+
+- **Mode** (`headless` | `interactive`) -- how the agent is driven. Headless is non-interactive; interactive allows menus and per-leed approval.
+- **Objective** (`marketplace` | `outreach` | `hybrid`) -- the end state Tasks aim at. Marketplace schedules `SHARE_BOOKING`; outreach schedules `DRAFT_OUTREACH`; hybrid does both.
+
+Defaults: headless => marketplace; interactive => hybrid. Launchers (`precrime.bat`, `goose.bat`) accept `--marketplace` / `--outreach` / `--hybrid` and pass `objective=<value>` into the startup prompt. The Planner echoes the resolved objective in every `plan_tasks` response. **Headless + outreach (or hybrid)** requires the Gmail MCP; init-wizard fails fast with `OUTREACH_REQUIRES_GMAIL` if `gmail__gmail_send` is not registered.
 
 ### Recursion arms (Task-based)
 
@@ -137,12 +147,13 @@ The Recycler (`pipeline.recycler`) runs at startup to delete stale Factlets, pur
 | Concern | Owner | How |
 |---|---|---|
 | Per-type Task limits          | Server (Planner) | `plan_tasks` reads `precrime_config.json` `tasks.limits`. |
+| Factlet/discovery bias        | Server (Planner) | `plan_tasks` reads `precrime_config.json` `tasks.workflowStrategy.factletBacklogDiscoveryPause`. |
 | Atomic Task claim             | Server | `claim_task` flips `ready` -> `claimed` in one transaction. |
 | Reclaim stuck claims          | Server | `plan_tasks` and `recycler` requeue Tasks past `claimTimeoutMinutes`. |
 | Empty patch rejection         | Server | `pipeline.save` returns -32602. |
 | Dedup by company              | Server | `pipeline.save` merges by company name. |
 | Scoring + status promotion    | Server (Judge) | `judge_affected` -> `computeBookingTargetScore` -> `Booking.status`. |
-| `share_booking` date math     | Server | `resolve_dates` from structured Booking fields + IANA timezone. Rejects LLM-supplied `st`/`et`. |
+| `share_booking` date math     | Server | `resolve_dates` from structured Booking fields + IANA timezone derived from `Booking.zip`. Rejects LLM-supplied `st`/`et`. |
 | Worker control flow           | Agent  | follow the one-Task skill file top-to-bottom. |
 | Relevance / classification    | Agent  | judgment per `skills/shared/*` rules. |
 | Dispatch on Task type         | Agent  | one switch on `task.type` in the orchestrator. |

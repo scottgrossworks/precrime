@@ -21,14 +21,53 @@ if errorlevel 1 (
   exit /b 1
 )
 
-:: Database: optional argument overrides default
-:: Usage:  precrime                       -> data\myproject.sqlite
-::         precrime ca_schools_migrated   -> data\ca_schools_migrated.sqlite
-if "%~1"=="" (
-  set "DBNAME=myproject.sqlite"
-) else (
-  set "DBNAME=%~1"
+:: Args -> mode + objective + DB. Same flag set as goose.bat.
+:: Usage:  precrime                                  -> interactive (hybrid)
+::         precrime --headless                       -> headless (marketplace)
+::         precrime --headless --outreach            -> headless outreach (Gmail required)
+::         precrime --interactive --marketplace mydb -> interactive marketplace, custom DB
+::         precrime ca_schools_migrated              -> interactive (hybrid), custom DB
+set "PRECRIME_MODE=interactive"
+set "PRECRIME_OBJECTIVE="
+set "DBNAME=myproject.sqlite"
+
+:parse_args
+if "%~1"=="" goto :args_done
+if /i "%~1"=="--headless" (
+  set "PRECRIME_MODE=headless"
+  shift
+  goto :parse_args
 )
+if /i "%~1"=="--interactive" (
+  set "PRECRIME_MODE=interactive"
+  shift
+  goto :parse_args
+)
+if /i "%~1"=="--marketplace" (
+  set "PRECRIME_OBJECTIVE=marketplace"
+  shift
+  goto :parse_args
+)
+if /i "%~1"=="--outreach" (
+  set "PRECRIME_OBJECTIVE=outreach"
+  shift
+  goto :parse_args
+)
+if /i "%~1"=="--hybrid" (
+  set "PRECRIME_OBJECTIVE=hybrid"
+  shift
+  goto :parse_args
+)
+set "DBNAME=%~1"
+shift
+goto :parse_args
+:args_done
+
+:: Defaults: headless => marketplace, interactive => hybrid.
+if "%PRECRIME_OBJECTIVE%"=="" (
+  if /i "%PRECRIME_MODE%"=="headless" ( set "PRECRIME_OBJECTIVE=marketplace" ) else ( set "PRECRIME_OBJECTIVE=hybrid" )
+)
+
 if not "%DBNAME:~-7%"==".sqlite" set "DBNAME=%DBNAME%.sqlite"
 
 set "DBPATH=%~dp0data\%DBNAME%"
@@ -72,6 +111,28 @@ if errorlevel 1 (
   exit /b 1
 )
 
+:: Sync VALUE_PROP.md masthead into DB Config. This is the source of truth for
+:: companyName, companyEmail, businessDescription, defaultTrade, signature, etc.
+:: Errors are surfaced (no `2>nul`): a silent failure here means the wizard will
+:: interactively prompt for fields that ARE in VALUE_PROP.md.
+echo  Syncing VALUE_PROP.md into Config...
+node "%~dp0server\sync-config.js"
+if errorlevel 1 (
+  echo.
+  echo  WARNING: sync-config.js failed. The wizard may prompt for VALUE_PROP fields.
+  echo  Fix DOCS\VALUE_PROP.md or check DATABASE_URL=%DATABASE_URL%.
+  echo.
+)
+
 :: Launch Claude -- skip all permission dialogs, pre-seed the startup prompt.
 :: Pin to Sonnet 4.5. Without --model, Claude Code defaults to Opus which is far more expensive.
-claude --dangerously-skip-permissions --chrome --model claude-sonnet-4-5 "run precrime (database: %DBNAME%)"
+:: Mode + objective are encoded in the trigger prompt so init-wizard.md can
+:: detect them deterministically (env-var inheritance into spawned MCP children
+:: is not relied on for routing).
+if /i "%PRECRIME_MODE%"=="headless" (
+  set "PRECRIME_TRIGGER=headless precrime objective=%PRECRIME_OBJECTIVE% (database: %DBNAME%)"
+) else (
+  set "PRECRIME_TRIGGER=run precrime objective=%PRECRIME_OBJECTIVE% (database: %DBNAME%)"
+)
+echo  Mode: %PRECRIME_MODE%   Objective: %PRECRIME_OBJECTIVE%
+claude --dangerously-skip-permissions --chrome --model claude-sonnet-4-5 "%PRECRIME_TRIGGER%"
