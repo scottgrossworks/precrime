@@ -156,12 +156,12 @@ Pass `objective` to every `plan_tasks` call.
      3. `CLAIMED` -> dispatch by `task.type` to exactly one handler:
         - `APPLY_FACTLET`  -> pass the claimed Task packet to `__PROJECT_ROOT__/skills/apply-factlet.md`
         - `ENRICH_CLIENT`  -> pass the claimed Task packet to `__PROJECT_ROOT__/skills/enrichment-agent.md`
-        - `SCRAPE_SOURCE`  -> pass the claimed Task packet to `__PROJECT_ROOT__/skills/url-loop.md`
+        - `SCRAPE_SOURCE`  -> route by `task.input.channel` (interactive has the browser MCP): `fb` -> `__PROJECT_ROOT__/skills/fb-factlet-harvester/SKILL.md`, `ig` -> `__PROJECT_ROOT__/skills/ig-factlet-harvester/SKILL.md`, `x` -> `__PROJECT_ROOT__/skills/x-factlet-harvester/SKILL.md`, all others -> `__PROJECT_ROOT__/skills/url-loop.md`
         - `DRAFT_OUTREACH` -> pass the claimed Task packet to `__PROJECT_ROOT__/skills/outreach-drafter.md`
         - `SHOW_HOT_LEEDZ` -> pass the claimed Task packet to `__PROJECT_ROOT__/skills/show-hot-leedz.md`
         - `JUDGE_AFFECTED` -> call `pipeline.judge_affected({ clientIds, bookingIds, session_id })` inline, then `complete_task`.
         - `SHARE_BOOKING`  -> call `pipeline.share_booking({ bookingId, mode:"post" })` inline (only if objective allows marketplace), then `complete_task`.
-        - `DISCOVER_SOURCES` -> run one bounded discovery search inline, `pipeline.add_sources`, then `complete_task`.
+        - `DISCOVER_SOURCES` -> peer table first: read `DOCS/PEER_SOURCES.json`, enqueue `sources[]` of every `peers[]` entry whose `match[]` hits your trade/segments (`discoveredFrom:"peer-table"`); only if nothing matches, run one bounded discovery search. `pipeline.add_sources`, then `complete_task`.
         Worker skills receive the already-claimed Task packet and call `complete_task` themselves. They MUST NOT call `claim_task`. Inline handlers MUST call `complete_task` after the action returns.
      4. After `NO_TASK` from claim, `precrime__pipeline({ action: "plan_tasks", mode: "workflow", objective: "<resolved>" })` again. Exit when this replan creates ZERO Tasks AND the previous drain claimed ZERO Tasks. Otherwise resume the cycle.
   4. Do NOT preload every worker skill on every heartbeat -- load only the skill that matches the claimed `task.type`. Do NOT decide workflow order yourself; the Planner already chose.

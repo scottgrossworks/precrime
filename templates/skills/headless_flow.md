@@ -86,7 +86,13 @@ On composition failure (`MISSING_SIGNATURE`, `MISSING_RATE`, thin dossier), comp
 
 `SCRAPE_SOURCE`
 
-Run `skills/url-loop.md` with the full claimed Task packet from Step 2. Task is already claimed; the worker must not call `claim_task`.
+Route by `task.input.channel` (headless has no browser MCP):
+
+- `fb` / `ig` -> browser-only, cannot render headless. Complete `cancelled` with `error:"browser_channel_skipped_headless"` and return to Step 2; these channels are processed in interactive mode.
+- `x` -> run `skills/x-factlet-harvester/SKILL.md` (its Tavily `site:x.com` fallback works headless).
+- all others (`rss` / `directory` / `blog` / `website` / `reddit`) -> run `skills/url-loop.md`.
+
+Pass the full claimed Task packet from Step 2. The worker must not call `claim_task`.
 
 `ENRICH_CLIENT`
 
@@ -105,11 +111,11 @@ complete_task({ taskId: task.id, status:"done", output:{ clientIds: task.input.c
 
 `DISCOVER_SOURCES`
 
-Run one bounded search for plausible source URLs, then:
+Seed from the peer table first (C#1). Read `DOCS/PEER_SOURCES.json`. For each `peers[]` entry whose `match[]` contains a substring of your trade or segments (from `DOCS/VALUE_PROP.md`), enqueue its `sources[]` via `add_sources` with `discoveredFrom:"peer-table"`. Only if NO entry matches (or the file is missing/malformed) fall back to one bounded web search. Then:
 
 ```
-precrime__pipeline({ action:"add_sources", entries:[{ url, channel:"directory", discoveredFrom:"discover" }, ...] })
-complete_task({ taskId: task.id, status:"done", output:{ sourceIds: response.addedIds || [], summary:"discovered <N> sources", needsJudge:false } })
+precrime__pipeline({ action:"add_sources", entries:[/* matched peer sources, else searched urls */ { url, channel, subtype, label, discoveredFrom:"peer-table" }] })
+complete_task({ taskId: task.id, status:"done", output:{ sourceIds: response.addedIds || [], summary:"discovered <N> sources (<peer|search>)", needsJudge:false } })
 ```
 
 `SHOW_HOT_LEEDZ`

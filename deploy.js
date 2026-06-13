@@ -546,12 +546,18 @@ if (fs.existsSync(baseIgCfgPath)) {
 // Plus per-channel _sources.md / discovered_directories.md seed files that
 // init-wizard.md Step 1.5 imports once at startup via pipeline.import_sources.
 //
+// Browser-channel SCRAPE_SOURCE workers (fb/ig/x): one-Task workers dispatched
+// by channel from headless_flow / init-wizard. fb/ig need an interactive browser
+// MCP; x has a Tavily fallback so it also runs headless. reddit needs no browser
+// (handled by url-loop's default web branch), so it has no SKILL.md.
+// demand-radar.md: option-B seeder -- runs last30days on VALUE_PROP topics and
+// feeds add_sources + factlets (see DOCS/wiki/concepts/recursive-loop.md).
+//
 // Intentionally NOT packaged (orphaned by the new architecture; only legacy
 // docs referenced them):
 //   marketplace_flow.md  hybrid_flow.md  outreach_flow.md
 //   source-discovery.md (top-level skill)
 //   client-seeder.md  draft-checker.md  relevance-judge.md  value-prop-validator.md
-//   {rss,fb,reddit,ig,x}-factlet-harvester/SKILL.md (harvester SKILL.md files)
 console.log('\nSkill playbooks:');
 [
   ['skills/init-wizard.md',                   'skills/init-wizard.md'],
@@ -563,6 +569,11 @@ console.log('\nSkill playbooks:');
   ['skills/share-skill.md',                   'skills/share-skill.md'],
   ['skills/outreach-drafter.md',              'skills/outreach-drafter.md'],
   ['skills/client-finder.md',                 'skills/client-finder.md'],
+  ['skills/demand-radar.md',                  'skills/demand-radar.md'],
+  // Browser-channel SCRAPE_SOURCE workers (dispatched by channel):
+  ['skills/fb-factlet-harvester/SKILL.md',    'skills/fb-factlet-harvester/SKILL.md'],
+  ['skills/ig-factlet-harvester/SKILL.md',    'skills/ig-factlet-harvester/SKILL.md'],
+  ['skills/x-factlet-harvester/SKILL.md',     'skills/x-factlet-harvester/SKILL.md'],
   // Source seed files (read once at startup by pipeline.import_sources):
   ['skills/rss-factlet-harvester/rss_sources.md',       'skills/rss-factlet-harvester/rss_sources.md'],
   ['skills/fb-factlet-harvester/fb_sources.md',         'skills/fb-factlet-harvester/fb_sources.md'],
@@ -584,6 +595,8 @@ console.log('\nDocs:');
   ['docs/STATUS.md',       'DOCS/STATUS.md'],
   ['docs/VALUE_PROP.md',   'DOCS/VALUE_PROP.md'],
   ['docs/SCORING.json',    'DOCS/SCORING.json'],
+  ['docs/PROMPTS.json',    'DOCS/PROMPTS.json'],       // server-side LLM judge prompts (loaded at startup)
+  ['docs/PEER_SOURCES.json','DOCS/PEER_SOURCES.json'], // topic->peer-source table + engagement knobs
   ['docs/SUMMARY.md',      'DOCS/SUMMARY.md'],
   ['docs/FOUNDATION.md',   'DOCS/FOUNDATION.md'],
 ].forEach(([src, dst]) => copyTemplate(src, dst, tokens));

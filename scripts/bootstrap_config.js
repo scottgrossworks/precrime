@@ -14,10 +14,12 @@
 //   PRECRIME_LLM_PROVIDER
 //   PRECRIME_LLM_MODEL
 //   PRECRIME_LLM_BASE_URL
-//   OPENAI_API_KEY      (only if non-empty in config)
-//   ANTHROPIC_API_KEY   (only if non-empty in config)
-//   OPENROUTER_API_KEY  (only if non-empty in config)
-//   TAVILY_API_KEY      (only if non-empty in config)
+//   OPENAI_API_KEY          (only if non-empty in config)
+//   ANTHROPIC_API_KEY       (only if non-empty in config)
+//   OPENROUTER_API_KEY      (only if non-empty in config)
+//   TAVILY_API_KEY          (only if non-empty in config)
+//   SCRAPECREATORS_API_KEY  (only if non-empty; consumed by the last30days skill)
+//   XAI_API_KEY             (only if non-empty; X/Twitter via last30days)
 //
 // Timezone is intentionally NOT emitted: share_booking derives the IANA zone
 // from Booking.zip at leed creation time. Users do not configure a timezone.
@@ -59,8 +61,12 @@ emit('PRECRIME_LLM_BASE_URL',    cfg.llm && cfg.llm.baseUrl);
 // API keys: emit only when the user has filled them in precrime_config.json.
 // Names match what node libs expect at import time; this is internal plumbing.
 if (cfg.apiKeys) {
-    emit('OPENAI_API_KEY',     cfg.apiKeys.openai);
-    emit('ANTHROPIC_API_KEY',  cfg.apiKeys.anthropic);
-    emit('OPENROUTER_API_KEY', cfg.apiKeys.openrouter);
-    emit('TAVILY_API_KEY',     cfg.apiKeys.tavily);
+    emit('OPENAI_API_KEY',         cfg.apiKeys.openai);
+    emit('ANTHROPIC_API_KEY',      cfg.apiKeys.anthropic);
+    emit('OPENROUTER_API_KEY',     cfg.apiKeys.openrouter);
+    emit('TAVILY_API_KEY',         cfg.apiKeys.tavily);
+    // last30days reads these from os.environ (its highest-priority source), so the
+    // launcher env IS the config -- no last30days .env file needed.
+    emit('SCRAPECREATORS_API_KEY', cfg.apiKeys.scrapecreators);
+    emit('XAI_API_KEY',            cfg.apiKeys.xai);
 }

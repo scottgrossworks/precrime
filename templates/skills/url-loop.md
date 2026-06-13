@@ -62,6 +62,10 @@ From successful content, extract only VALUE_PROP-relevant:
 
 Do NOT write to `skills/rss-factlet-harvester/rss_sources.md` at runtime. It is a SEED only. Runtime queue writes go through `add_sources`.
 
+### Engagement floor (C#2)
+
+Before saving, consult the `engagement` block of `DOCS/PEER_SOURCES.json` for this `channel`. If a scraped post exposes the channel's `signal` (e.g. `reddit` -> `upvotes`), drop posts below `floor` as noise and turn the highest-engagement posts into Clients/Factlets first. Channels with `floor:0` (`rss`/`directory`/`blog`/`website`) keep everything.
+
 ## Step 3 -- Save
 
 For each Client / Booking / Factlet group:

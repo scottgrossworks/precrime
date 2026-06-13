@@ -31,10 +31,12 @@ const DEFAULTS = Object.freeze({
     databaseFile:   'data/myproject.sqlite',
     defaultMode:    'interactive',
     apiKeys: {
-        openai:     '',
-        anthropic:  '',
-        openrouter: '',
-        tavily:     ''
+        openai:         '',
+        anthropic:      '',
+        openrouter:     '',
+        tavily:         '',
+        scrapecreators: '',   // last30days social scrapers (IG/TikTok/Threads/Pinterest) -> SCRAPECREATORS_API_KEY
+        xai:            ''     // X/Twitter via xAI -> XAI_API_KEY
     },
     llm: {
         provider: 'openai',
@@ -219,10 +221,12 @@ function loadPrecrimeConfig(opts) {
 function applyApiKeysToProcessEnv(cfg) {
     if (!cfg || !cfg.apiKeys) return;
     const map = {
-        OPENAI_API_KEY:     cfg.apiKeys.openai,
-        ANTHROPIC_API_KEY:  cfg.apiKeys.anthropic,
-        OPENROUTER_API_KEY: cfg.apiKeys.openrouter,
-        TAVILY_API_KEY:     cfg.apiKeys.tavily
+        OPENAI_API_KEY:         cfg.apiKeys.openai,
+        ANTHROPIC_API_KEY:      cfg.apiKeys.anthropic,
+        OPENROUTER_API_KEY:     cfg.apiKeys.openrouter,
+        TAVILY_API_KEY:         cfg.apiKeys.tavily,
+        SCRAPECREATORS_API_KEY: cfg.apiKeys.scrapecreators,
+        XAI_API_KEY:            cfg.apiKeys.xai
     };
     for (const [name, val] of Object.entries(map)) {
         if (val && !process.env[name]) process.env[name] = val;
