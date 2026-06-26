@@ -9,7 +9,7 @@ cd /d "%~dp0"
 ::   3. Parse args -> mode + DB name. Verify DB file exists.
 ::   4. Verify the chosen LLM provider has its key. Verify Tavily key.
 ::   5. Run setup.bat (npm install + prisma generate). Idempotent.
-::   6. Run sync-config.js to mirror VALUE_PROP.md into Config (errors surfaced).
+::   6. (removed) Config is read in-memory at MCP startup from VALUE_PROP.md.
 ::   7. Render goose user config + patch GOOSE.md project root.
 ::   8. Launch goose.
 :: ============================================================================
@@ -50,7 +50,7 @@ if errorlevel 1 (
 :: Defaults: headless => marketplace; interactive => hybrid.
 set "PRECRIME_MODE=interactive"
 set "PRECRIME_OBJECTIVE="
-set "DBNAME=myproject.sqlite"
+set "DBARG="
 
 :parse_args
 if "%~1"=="" goto :args_done
@@ -79,7 +79,7 @@ if /i "%~1"=="--hybrid" (
   shift
   goto :parse_args
 )
-set "DBNAME=%~1"
+set "DBARG=%~1"
 shift
 goto :parse_args
 :args_done
@@ -93,20 +93,43 @@ if "%PRECRIME_OBJECTIVE%"=="" (
   )
 )
 
-if not "%DBNAME:~-7%"==".sqlite" set "DBNAME=%DBNAME%.sqlite"
-set "DBPATH=%~dp0data\%DBNAME%"
+:: DB selection -- precrime_config.json "databaseFile" is the SINGLE knob
+:: (emitted as PRECRIME_DATABASE_FILE by bootstrap_config.js above). Change that
+:: one line + restart to switch DBs. CLI arg overrides for one run. Value may be
+:: relative to this folder (data\myproject.sqlite) or absolute (C:\...\leedz.sqlite).
+if not "%DBARG%"=="" ( set "DBSPEC=%DBARG%" ) else ( set "DBSPEC=%PRECRIME_DATABASE_FILE%" )
+if "%DBSPEC%"=="" set "DBSPEC=data\myproject.sqlite"
+set "DBSPEC=%DBSPEC:/=\%"
+if not "%DBSPEC:~-7%"==".sqlite" set "DBSPEC=%DBSPEC%.sqlite"
+:: Resolve DBSPEC -> absolute DBPATH: absolute as-is; contains "\" relative to here;
+:: bare name under data\.
+set "DBPATH="
+if "%DBSPEC:~1,1%"==":"  set "DBPATH=%DBSPEC%"
+if "%DBSPEC:~0,2%"=="\\" set "DBPATH=%DBSPEC%"
+set "DBNOBS=%DBSPEC:\=%"
+if not defined DBPATH if "%DBNOBS%"=="%DBSPEC%" set "DBPATH=%~dp0data\%DBSPEC%"
+if not defined DBPATH set "DBPATH=%~dp0%DBSPEC%"
 
+if "%DBPATH%"=="" (
+  echo.
+  echo  FATAL: Could not resolve database path.
+  echo  Set "databaseFile" in precrime_config.json, e.g.:
+  echo    "databaseFile": "data/myproject.sqlite"
+  echo.
+  pause
+  exit /b 1
+)
 if not exist "%DBPATH%" (
   echo.
-  echo  Database not found: data\%DBNAME%
-  echo  Put your .sqlite file in the data\ folder and try again.
+  echo  Database not found: %DBPATH%
+  echo  Set "databaseFile" in precrime_config.json, or pass a name/path arg, then retry.
   echo.
   pause
   exit /b 1
 )
 
 :: Set DATABASE_URL absolute (Prisma resolves relative paths from CWD).
-:: Inherited by goose-spawned MCP server and by sync-config.js below.
+:: Inherited by the goose-spawned MCP server.
 set "DATABASE_URL=file:%DBPATH%"
 
 :: Ensure goose is on PATH (default install location from download_cli.ps1).
@@ -175,8 +198,15 @@ if errorlevel 1 (
 
 echo.
 echo  Pre-Crime (Goose)  -  Provider: %LLM_PROVIDER%  Model: %GOOSE_MODEL%
-echo  Database: data\%DBNAME%
+echo  Database: %DBPATH%
 echo.
+
+:: Stop a prior PRECRIME MCP server + any orphaned workers to release the Prisma
+:: DLL lock. Match COMMAND LINE, never image name -- a blanket `taskkill /IM
+:: node.exe` / `claude.exe` would crash the user's interactive Claude Code session
+:: (Claude Code runs as node/claude too). Kills only mcp_server.js + worker procs.
+powershell -NoProfile -ExecutionPolicy Bypass -Command "Get-CimInstance Win32_Process | Where-Object { ($_.Name -in 'node.exe','claude.exe','goose.exe') -and $_.CommandLine -and ($_.CommandLine -like '*mcp_server.js*' -or $_.CommandLine -like '*--print*' -or $_.CommandLine -like '*--no-session*') } | ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }"
+timeout /t 1 /nobreak >nul
 
 :: --- 5. Setup ---
 call setup.bat
@@ -187,15 +217,10 @@ if errorlevel 1 (
   exit /b 1
 )
 
-:: --- 6. Sync VALUE_PROP.md into Config (errors surfaced) ---
-echo  Syncing VALUE_PROP.md into Config...
-node "%~dp0server\sync-config.js"
-if errorlevel 1 (
-  echo.
-  echo  WARNING: sync-config.js failed. The wizard may prompt for VALUE_PROP fields.
-  echo  Fix DOCS\VALUE_PROP.md or check DATABASE_URL=%DATABASE_URL%.
-  echo.
-)
+:: --- 6. (Config sync removed) ---
+:: VALUE_PROP.md identity + precrime_config.json runtime config are read into an
+:: in-memory struct by the MCP server at startup. No DB Config table to sync.
+:: Edit DOCS\VALUE_PROP.md or precrime_config.json and restart to change config.
 
 :: --- 7. Render goose user config + GOOSE.md from templates ---
 :: Goose reads %APPDATA%\Block\goose\config\config.yaml. Regenerated every launch
@@ -225,15 +250,69 @@ if errorlevel 1 (
   pause & exit /b 1
 )
 
+:: --- 7b. Start the MCP server (HTTP transport on :5179) ---
+:: The goose 'precrime' extension is streamable_http -> http://127.0.0.1:5179/mcp,
+:: so the server MUST already be listening before goose launches, or the extension
+:: fails to initialize and goose runs with NO precrime tools. (Mirrors precrime.bat.)
+:: Worker binary MUST be the absolute goose.exe path. The conductor spawns
+:: `<bin> run --instructions <skill>` via cmd.exe; bare `goose` would resolve to
+:: THIS goose.bat (same name, CWD searched before PATH) and recurse into the
+:: launcher, which then treats the .md skill path as a DB arg and dies with
+:: "Database not found: ...md.sqlite". Setting the full .exe path bypasses that.
+set "PRECRIME_WORKER_BIN=%USERPROFILE%\.local\bin\goose.exe"
+set "PRECRIME_WORKER_ARGS=run"
+set "PRECRIME_WORKER_INST_FLAG=--instructions"
+:: Start in its OWN window (NOT /B). /B shares goose's console, and the conductor's
+:: log writes collide with goose's interactive TUI -> goose's stdout handle goes bad
+:: and it dies with "The parameter is incorrect. (os error 87)". A separate window
+:: keeps the conductor logs visible AND leaves goose sole owner of its console.
+start "PreCrime MCP (conductor)" node "%~dp0server\mcp\mcp_server.js"
+:: Poll until :5179 is listening (up to 10s) instead of a fixed sleep.
+powershell -NoProfile -ExecutionPolicy Bypass -Command "$d=[DateTime]::Now.AddSeconds(10);while([DateTime]::Now -lt $d){if(Get-NetTCPConnection -LocalPort 5179 -EA SilentlyContinue){break};Start-Sleep -Milliseconds 500}"
+
 :: --- 8. Launch goose ---
 :: Trigger text encodes BOTH mode and objective so init-wizard.md can detect
 :: them without depending on env-variable inheritance into the goose process.
 :: PRECRIME_OBJECTIVE is also exported (env) for any tool that prefers env over
 :: prompt parsing.
-if "%PRECRIME_MODE%"=="headless" (
-  set "GOOSE_TRIGGER=headless precrime objective=%PRECRIME_OBJECTIVE% (database: %DBNAME%)"
-) else (
-  set "GOOSE_TRIGGER=run precrime objective=%PRECRIME_OBJECTIVE% (database: %DBNAME%)"
+:: Headless: no menu, run straight through.
+if /i "%PRECRIME_MODE%"=="headless" (
+  set "GOOSE_TRIGGER=headless precrime objective=%PRECRIME_OBJECTIVE% (database: %DBPATH%)"
+  goto :launch
 )
+
+:: Interactive: the LAUNCHER prints the menu (deterministic, model-independent) and
+:: bakes the choice into the trigger as choice=hot|workflow. The wizard honors it and
+:: does NOT re-print a menu. (set /p is kept OUT of if() blocks to dodge batch quirks.)
+:menu
+echo.
+echo   ============================================================
+echo      PRE-CRIME   --   objective: %PRECRIME_OBJECTIVE%
+echo   ============================================================
+echo      [1]  SHOW HOT LEEDZ    review judged-hot bookings (share / email / skip)
+echo      [2]  RUN WORKFLOW      discover - scrape - enrich - judge (fills the queue)
+echo      [Q]  QUIT
+echo   ============================================================
+set "PRECRIME_CHOICE="
+set /p "PRECRIME_CHOICE=   Choose [1/2/Q]: "
+if /i "%PRECRIME_CHOICE%"=="1" goto :pick_hot
+if /i "%PRECRIME_CHOICE%"=="2" goto :pick_workflow
+if /i "%PRECRIME_CHOICE%"=="Q" goto :quit
+echo   Please type 1, 2, or Q.
+goto :menu
+
+:pick_hot
+set "GOOSE_TRIGGER=run precrime choice=hot objective=%PRECRIME_OBJECTIVE% (database: %DBPATH%)"
+goto :launch
+
+:pick_workflow
+set "GOOSE_TRIGGER=run precrime choice=workflow objective=%PRECRIME_OBJECTIVE% (database: %DBPATH%)"
+goto :launch
+
+:quit
+echo   Exiting. The MCP server is still running in the background; close this window to stop it.
+exit /b 0
+
+:launch
 echo  Mode: %PRECRIME_MODE%   Objective: %PRECRIME_OBJECTIVE%
-"%USERPROFILE%\.local\bin\goose.exe" run --system "First call developer__shell: type %~dp0GOOSE.md. Then follow it tersely." -t "%GOOSE_TRIGGER%" -s
+"%USERPROFILE%\.local\bin\goose.exe" run --system "Read %~dp0GOOSE.md once via developer__shell type, then act on the trigger message in THIS turn: route per GOOSE.md and execute the matched skill end to end, calling each tool it lists in order. The trigger carries choice=workflow or choice=hot — honor it and do NOT print a menu. Reading a file is NOT acting: run every wizard step (status, import_sources, the config and trade gates, then plan_tasks for the chosen path) without yielding until the skill's stop point. Stay terse." -t "%GOOSE_TRIGGER%" -s

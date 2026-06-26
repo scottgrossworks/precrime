@@ -15,7 +15,23 @@
 
 const DEFAULT_GENERIC_PREFIXES = [
     'info', 'contact', 'hello', 'support', 'admin', 'office', 'sales',
-    'events', 'bookings', 'team', 'mail', 'help', 'noreply'
+    'events', 'bookings', 'team', 'mail', 'help', 'noreply',
+    // event / vendor role inboxes -- never a real decision-maker
+    'expo', 'vendor', 'vendors', 'exhibitor', 'exhibitors', 'exhibits',
+    'booth', 'booths', 'registration', 'register', 'tickets', 'boxoffice',
+    'sponsor', 'sponsors', 'partnerships', 'partner', 'concessions', 'hospitality'
+];
+
+// Tokens that mark a "name" as an organization / team / role rather than a real
+// person. A hot leed MUST reach an actual decision-maker, so an org/team name
+// (e.g. "VidCon Expo Team", "VidCon LLC", "Informa") holds at brewing.
+const DEFAULT_ORG_NAME_TOKENS = [
+    'team', 'teams', 'expo', 'llc', 'inc', 'ltd', 'corp', 'corporation',
+    'group', 'committee', 'dept', 'department', 'company', 'foundation',
+    'association', 'productions', 'production', 'events', 'event', 'festival',
+    'convention', 'informa', 'holdings', 'enterprises', 'agency', 'council',
+    'society', 'league', 'organization', 'organisation', 'staff', 'crew',
+    'exhibits', 'exhibitor', 'exhibitors', 'sponsorship', 'sponsorships'
 ];
 
 function isGenericEmail(email, prefixes) {
@@ -23,6 +39,16 @@ function isGenericEmail(email, prefixes) {
     const set = new Set((prefixes && prefixes.length ? prefixes : DEFAULT_GENERIC_PREFIXES));
     const prefix = String(email).split('@')[0].toLowerCase().replace(/[^a-z]/g, '');
     return set.has(prefix);
+}
+
+// True when `name` looks like an organization / team / role rather than a person.
+// Whole-word match (so "Cody" never matches "co"): the name is an org if ANY of
+// its words is an org token.
+function isOrgName(name, tokens) {
+    if (!name) return false;
+    const set = new Set((tokens && tokens.length ? tokens : DEFAULT_ORG_NAME_TOKENS).map(t => String(t).toLowerCase()));
+    const words = String(name).toLowerCase().split(/[^a-z0-9]+/).filter(Boolean);
+    return words.some(w => set.has(w));
 }
 
 function nonEmpty(v) {
@@ -49,6 +75,7 @@ function classify(client, booking, opts) {
     const futureMinHours = typeof o.futureMinHours === 'number' ? o.futureMinHours : 12;
     const factletCount = typeof o.factletCount === 'number' ? o.factletCount : 0;
     const prefixes = o.genericEmailPrefixes || [];
+    const orgTokens = o.orgNameTokens || [];
 
     // ---- COLD: nothing to judge ----
     // Acted upon -> recycle to cold (can warm again next cycle).
@@ -60,9 +87,17 @@ function classify(client, booking, opts) {
     if (factletCount <= 0) return cold('no_factlets');
 
     // ---- HOT PREREQUISITES (all required) -> otherwise BREWING ----
+    // MANDATORY authentic contact: a real PERSON (not an org/team/role) with a
+    // direct (non-role) email. Product-market fit alone NEVER makes a leed hot --
+    // a generic inbox (expo@, info@) or an org name ("VidCon Expo Team", "Informa")
+    // holds at brewing so enrichment finds a real decision-maker first. Phone is
+    // preferred but not required.
     const missing = [];
 
-    if (!nonEmpty(client && client.name)) missing.push('client_name');
+    const name = client && client.name ? String(client.name).trim() : '';
+    if (!name) missing.push('client_name');
+    else if (isOrgName(name, orgTokens)) missing.push('client_name_not_person');
+
     const email = client && client.email ? String(client.email).trim() : '';
     if (!email) missing.push('client_email');
     else if (isGenericEmail(email, prefixes)) missing.push('client_email_generic');
@@ -85,4 +120,4 @@ function classify(client, booking, opts) {
     return { state: 'hot_eligible', missing: [] };
 }
 
-module.exports = { classify, isGenericEmail };
+module.exports = { classify, isGenericEmail, isOrgName };

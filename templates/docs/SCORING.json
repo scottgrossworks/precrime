@@ -7,16 +7,38 @@
     "sh": "*"
   },
   "addLeedBusinessRequired": {
-    "absolute": ["tn", "ti", "lc", "zp", "st", "et", "cn", "em", "dt"],
-    "defaulted": ["pr", "sh"],
-    "recommended": ["ph", "rq"]
+    "absolute": [
+      "tn",
+      "ti",
+      "lc",
+      "zp",
+      "st",
+      "et",
+      "cn",
+      "em",
+      "dt"
+    ],
+    "defaulted": [
+      "pr",
+      "sh"
+    ],
+    "recommended": [
+      "ph",
+      "rq"
+    ]
   },
   "verification": {
     "required": true,
     "sourceUrlRequired": true,
     "liveUrlRequired": true,
-    "allowedHttpStatus": [200],
-    "mustContain": ["event_name_or_title", "event_date_or_year", "location_or_venue"],
+    "allowedHttpStatus": [
+      200
+    ],
+    "mustContain": [
+      "event_name_or_title",
+      "event_date_or_year",
+      "location_or_venue"
+    ],
     "rejectIf": [
       "404",
       "redirect_to_homepage",
@@ -83,41 +105,130 @@
       "leedReady": {
         "_comment": "Real demand. demandSignal === true means explicit verb match OR a fresh Client-matching factlet also mentions VALUE_PROP/trade. Without it, even a 100-score booking is outreach_ready, not leed_ready.",
         "all": [
-          { "field": "score", "op": ">=", "value": 90 },
-          { "field": "tn", "op": "present" },
-          { "field": "ti", "op": "present" },
-          { "field": "lc", "op": "present" },
-          { "field": "zp", "op": "matches", "value": "^\\d{5}$" },
-          { "field": "st", "op": "present" },
-          { "field": "et", "op": "present" },
-          { "field": "et", "op": "afterField", "value": "st" },
-          { "field": "cn", "op": "present" },
-          { "field": "em", "op": "directEmail" },
-          { "field": "dt", "op": "present" },
-          { "field": "pr", "op": "===", "value": 0 },
-          { "field": "sh", "op": "===", "value": "*" },
-          { "field": "sourceUrl", "op": "present" },
-          { "field": "demandSignal", "op": "===", "value": true }
+          {
+            "field": "score",
+            "op": ">=",
+            "value": 90
+          },
+          {
+            "field": "tn",
+            "op": "present"
+          },
+          {
+            "field": "ti",
+            "op": "present"
+          },
+          {
+            "field": "lc",
+            "op": "present"
+          },
+          {
+            "field": "zp",
+            "op": "matches",
+            "value": "^\\d{5}$"
+          },
+          {
+            "field": "st",
+            "op": "present"
+          },
+          {
+            "field": "et",
+            "op": "present"
+          },
+          {
+            "field": "et",
+            "op": "afterField",
+            "value": "st"
+          },
+          {
+            "field": "cn",
+            "op": "present"
+          },
+          {
+            "field": "em",
+            "op": "directEmail"
+          },
+          {
+            "field": "dt",
+            "op": "present"
+          },
+          {
+            "field": "pr",
+            "op": "===",
+            "value": 0
+          },
+          {
+            "field": "sh",
+            "op": "===",
+            "value": "*"
+          },
+          {
+            "field": "sourceUrl",
+            "op": "present"
+          },
+          {
+            "field": "demandSignal",
+            "op": "===",
+            "value": true
+          }
         ]
       },
       "outreachReady": {
         "_comment": "Complete enough to cold-pitch. Name + direct email + venue + date window + time. No demand signal required. Marketplace post still requires leedReady.",
         "all": [
-          { "field": "score", "op": ">=", "value": 60 },
-          { "field": "tn", "op": "present" },
-          { "field": "lc", "op": "present" },
-          { "field": "st", "op": "present" },
-          { "field": "et", "op": "present" },
-          { "field": "et", "op": "afterField", "value": "st" },
-          { "field": "cn", "op": "present" },
-          { "field": "em", "op": "directEmail" },
-          { "field": "hasTime", "op": "===", "value": true }
+          {
+            "field": "score",
+            "op": ">=",
+            "value": 60
+          },
+          {
+            "field": "tn",
+            "op": "present"
+          },
+          {
+            "field": "lc",
+            "op": "present"
+          },
+          {
+            "field": "st",
+            "op": "present"
+          },
+          {
+            "field": "et",
+            "op": "present"
+          },
+          {
+            "field": "et",
+            "op": "afterField",
+            "value": "st"
+          },
+          {
+            "field": "cn",
+            "op": "present"
+          },
+          {
+            "field": "em",
+            "op": "directEmail"
+          },
+          {
+            "field": "hasTime",
+            "op": "===",
+            "value": true
+          }
         ]
       },
       "draftReady": {
         "all": [
-          { "field": "contactGate", "op": "===", "value": true },
-          { "field": "dossierScore", "op": ">=", "value": 5 }
+          {
+            "field": "contactGate",
+            "op": "===",
+            "value": true
+          },
+          {
+            "field": "dossierScore",
+            "op": ">=",
+            "value": 5
+          }
         ]
       }
     },
@@ -196,7 +307,25 @@
       "customercare",
       "care",
       "feedback",
-      "staff"
+      "staff",
+      "expo",
+      "vendor",
+      "vendors",
+      "exhibitor",
+      "exhibitors",
+      "exhibits",
+      "booth",
+      "booths",
+      "registration",
+      "register",
+      "tickets",
+      "boxoffice",
+      "sponsor",
+      "sponsors",
+      "partnerships",
+      "partner",
+      "concessions",
+      "hospitality"
     ]
   },
   "statusRules": {
@@ -211,5 +340,46 @@
     "agentsMayNotSetLeedReadyDirectly": true,
     "rescoreDemotesInvalidReadyBookings": true,
     "shareSkillMustRevalidateBeforePosting": true
+  },
+  "classification": {
+    "orgNameTokens": [
+      "team",
+      "teams",
+      "expo",
+      "llc",
+      "inc",
+      "ltd",
+      "corp",
+      "corporation",
+      "group",
+      "committee",
+      "dept",
+      "department",
+      "company",
+      "foundation",
+      "association",
+      "productions",
+      "production",
+      "events",
+      "event",
+      "festival",
+      "convention",
+      "informa",
+      "holdings",
+      "enterprises",
+      "agency",
+      "council",
+      "society",
+      "league",
+      "organization",
+      "organisation",
+      "staff",
+      "crew",
+      "exhibits",
+      "exhibitor",
+      "exhibitors",
+      "sponsorship",
+      "sponsorships"
+    ]
   }
 }

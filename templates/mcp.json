@@ -15,6 +15,10 @@
     "tavily": {
       "command": "python",
       "args": ["tools/tavily_lean_mcp.py"]
+    },
+    "chrome": {
+      "type": "http",
+      "url": "http://127.0.0.1:12306/mcp"
     }
   }
 }

@@ -24,10 +24,15 @@
  *   ClientFactlet is removed from the active schema.
  *
  * 2026-06-11 (classification model): the canonical Booking drops bookingScore /
- * factletScore / contactQuality (still preserved in _legacy_Booking), Config gains
- * llmModel, and every legacy Booking.status is remapped onto cold|brewing|hot
- * (mapBookingStatus). No row is deleted; run pipeline.rescore after migrating to
- * re-classify brewing -> hot. See DOCS/CLASSIFICATION.md.
+ * factletScore / contactQuality (still preserved in _legacy_Booking), and every
+ * legacy Booking.status is remapped onto cold|brewing|hot (mapBookingStatus).
+ * No row is deleted; run pipeline.rescore after migrating to re-classify
+ * brewing -> hot. See DOCS/CLASSIFICATION.md.
+ *
+ * 2026-06-15 (unified schema): the Config TABLE is eliminated (runtime config is
+ * in-memory from VALUE_PROP.md + precrime_config.json); a legacy Config is kept
+ * only as _legacy_Config. Booking gains squarePaymentUrl and a SquareConnection
+ * table is added so PRECRIME and the Leedz desktop (INVOICER) share one schema.
  */
 
 'use strict';
@@ -142,6 +147,7 @@ const CURRENT_SCHEMA = {
       ['sharedAt', 'BIGINT', null],
       ['leedPrice', 'INTEGER', null],
       ['leedId', 'TEXT', null],
+      ['squarePaymentUrl', 'TEXT', null],
       ['createdAt', 'DATETIME', 'NOT NULL DEFAULT CURRENT_TIMESTAMP'],
       ['updatedAt', 'DATETIME', 'NOT NULL DEFAULT CURRENT_TIMESTAMP'],
     ],
@@ -228,27 +234,22 @@ const CURRENT_SCHEMA = {
       'CREATE INDEX IF NOT EXISTS "Task_targetType_targetId_idx" ON "Task"("targetType", "targetId")'
     ]
   },
-  Config: {
+  // Config table eliminated: runtime config is an in-memory struct built at MCP
+  // startup from VALUE_PROP.md + precrime_config.json. A legacy source `Config`
+  // table is preserved automatically as _legacy_Config (copyAllLegacyTables); it
+  // is NOT rebuilt as an active table.
+  // SquareConnection: owned by the Leedz desktop (INVOICER); durable Square OAuth
+  // state. PRECRIME never reads/writes it, but it is part of the unified schema so
+  // a shared DB carries it and the desktop's Prisma client finds it.
+  SquareConnection: {
     columns: [
       ['id', 'TEXT', 'PRIMARY KEY'],
-      ['companyName', 'TEXT', null],
-      ['companyEmail', 'TEXT', null],
-      ['businessDescription', 'TEXT', null],
-      ['activeEntities', 'TEXT', null],
-      ['defaultTrade', 'TEXT', null],
-      ['defaultBookingAction', 'TEXT', null],
-      ['marketplaceEnabled', 'BOOLEAN', 'NOT NULL DEFAULT false'],
-      ['leadCaptureEnabled', 'BOOLEAN', 'NOT NULL DEFAULT false'],
-      ['leedzEmail', 'TEXT', null],
-      ['leedzSession', 'TEXT', null],
-      ['signature', 'TEXT', null],
-      ['llmApiKey', 'TEXT', null],
-      ['llmProvider', 'TEXT', null],
-      ['llmModel', 'TEXT', null],
-      ['llmBaseUrl', 'TEXT', null],
-      ['llmAnthropicVersion', 'TEXT', null],
-      ['llmMaxTokens', 'INTEGER', 'DEFAULT 1024'],
-      ['factletStaleDays', 'INTEGER', 'DEFAULT 180'],
+      ['accessToken', 'TEXT', null],
+      ['refreshToken', 'TEXT', null],
+      ['expiresAt', 'BIGINT', null],
+      ['merchantId', 'TEXT', null],
+      ['locationId', 'TEXT', null],
+      ['state', 'TEXT', null],
       ['createdAt', 'DATETIME', 'NOT NULL DEFAULT CURRENT_TIMESTAMP'],
       ['updatedAt', 'DATETIME', 'NOT NULL DEFAULT CURRENT_TIMESTAMP'],
     ],
@@ -266,7 +267,9 @@ const TABLE_ALIASES = {
   session: 'Session', sessions: 'Session',
   sessionevent: 'SessionEvent', sessionevents: 'SessionEvent',
   task: 'Task', tasks: 'Task',
-  config: 'Config', configs: 'Config', settings: 'Config'
+  squareconnection: 'SquareConnection', squareconnections: 'SquareConnection'
+  // NOTE: legacy `config` / `settings` source tables intentionally have no alias --
+  // they are preserved as _legacy_<table> only, never rebuilt as an active table.
 };
 
 main();
@@ -437,10 +440,6 @@ function applyDefaults(table, row, sourceRow) {
     if (!row.sessionId) row.sessionId = 'legacy_orphan_session';
     if (!row.action) row.action = 'legacy_import';
     if (!row.ts) row.ts = now;
-  }
-  if (table === 'Config') {
-    row.marketplaceEnabled = boolish(row.marketplaceEnabled);
-    row.leadCaptureEnabled = boolish(row.leadCaptureEnabled);
   }
 }
 

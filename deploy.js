@@ -230,6 +230,19 @@ if (fs.existsSync(mcpSrc)) {
   console.warn('    Copy server/mcp/mcp_server.js into the generated workspace manually.');
 }
 
+// 2.1 Local modules required by mcp_server.js at startup (require('./classification'),
+// require('./value_prop'), require('./conductor'), require('./db')).
+// Without these the MCP server crashes immediately on startup.
+for (const mod of ['classification.js', 'value_prop.js', 'conductor.js', 'db.js', 'verify.js']) {
+  const src = path.join(PRECRIME, 'server', 'mcp', mod);
+  if (fs.existsSync(src)) {
+    copyFile(src, path.join(outputDir, 'server', 'mcp', mod));
+  } else {
+    console.error(`  ✗ FATAL: server/mcp/${mod} missing — mcp_server.js requires it and will not start`);
+    process.exit(1);
+  }
+}
+
 // 2a. Copy gmail MCP server (mcp_gmail.js + gmail_mcp_config.json).
 // Provides gmail_send tool. Receives OAuth token from Chrome extension on port 3001.
 const gmailSrc    = path.join(PRECRIME, 'server', 'mcp', 'mcp_gmail.js');
@@ -248,14 +261,8 @@ if (fs.existsSync(gmailCfgSrc)) {
   console.warn(`  ⚠ gmail_mcp_config.json missing: ${gmailCfgSrc}`);
 }
 
-// 2b. Copy sync-config.js
-const syncSrc = path.join(PRECRIME, 'server', 'sync-config.js');
-const syncDst = path.join(outputDir, 'server', 'sync-config.js');
-if (fs.existsSync(syncSrc)) {
-  copyFile(syncSrc, syncDst);
-} else {
-  console.warn(`  ⚠ sync-config.js missing: ${syncSrc}`);
-}
+// 2b. (removed) sync-config.js retired -- runtime config is now an in-memory
+// struct built at server startup from VALUE_PROP.md + precrime_config.json.
 
 // 2c. Copy server/package.json
 const pkgSrc = path.join(PRECRIME, 'server', 'package.json');
@@ -401,77 +408,11 @@ const tokens = buildTokens(manifest);
 
 // 4a. (removed) DATABASE_URL is set as process.env by precrime.bat at runtime, not via server/.env.
 
-// 4b. DB already shipped as blank.sqlite — no prisma db push needed
+// 4b. DB already shipped as blank.sqlite — no prisma db push needed.
+// (Config-table seeding removed: there is no Config table. Identity comes from
+//  DOCS/VALUE_PROP.md and LLM/runtime from precrime_config.json, both read into
+//  an in-memory struct at server startup.)
 if (!noInstall) {
-
-  // 4b-seed. Seed Config table from manifest.configSeed (optional — enables headless install)
-  if (manifest.configSeed && Object.keys(manifest.configSeed).length) {
-    // Strip doc keys (_*) and empty-string values so init-wizard still prompts for them
-    const seedData = {};
-    for (const [k, v] of Object.entries(manifest.configSeed)) {
-      if (k.startsWith('_')) continue;
-      if (v === '' || v === null || v === undefined) continue;
-      seedData[k] = v;
-    }
-
-    if (!Object.keys(seedData).length) {
-      console.log('\nconfigSeed present but no real values — skipping seed (init-wizard will prompt).');
-    } else {
-    console.log('\nSeeding Config table from manifest.configSeed...');
-
-    // Auto-generate leedzSession JWT if leedzEmail given but session not
-    if (seedData.leedzEmail && !seedData.leedzSession) {
-      const crypto = require('crypto');
-      const secret = '648373eeea08d422032db0d1e61a1bc096fe08dd2729ce611092c7a1af15d09c';
-      const b64url = (obj) => Buffer.from(JSON.stringify(obj)).toString('base64url');
-      const header  = b64url({ alg: 'HS256', typ: 'JWT' });
-      const payload = b64url({
-        email: seedData.leedzEmail,
-        type: 'session',
-        exp: Math.floor(Date.now() / 1000) + 365 * 24 * 3600
-      });
-      const sig = crypto.createHmac('sha256', secret).update(`${header}.${payload}`).digest('base64url');
-      seedData.leedzSession = `${header}.${payload}.${sig}`;
-      console.log('  ✓ Generated 1-year leedzSession JWT');
-    }
-
-    const seedScript = `
-const { PrismaClient } = require('@prisma/client');
-const prisma = new PrismaClient();
-const data = ${JSON.stringify(seedData)};
-(async () => {
-  try {
-    const existing = await prisma.config.findFirst();
-    if (existing) {
-      await prisma.config.update({ where: { id: existing.id }, data });
-    } else {
-      await prisma.config.create({ data });
-    }
-    console.log('  ✓ Config row seeded');
-  } catch (e) {
-    console.error('  ✗ Config seed failed:', e.message);
-    process.exit(1);
-  } finally {
-    await prisma.$disconnect();
-  }
-})();
-`;
-    const seedPath = path.join(outputDir, 'server', '_seed_config.js');
-    fs.writeFileSync(seedPath, seedScript);
-    try {
-      const seedDbUrl = `file:${path.relative(path.join(outputDir, 'server'), dbDest).replace(/\\/g, '/')}`;
-      execSync('node _seed_config.js', {
-        cwd: path.join(outputDir, 'server'),
-        stdio: 'inherit',
-        env: { ...process.env, DATABASE_URL: seedDbUrl }
-      });
-    } catch (e) {
-      console.warn('  ⚠ Config seed failed — Config table left empty, init-wizard will fill it');
-    } finally {
-      try { fs.unlinkSync(seedPath); } catch {}
-    }
-    }  // end if (seedData has real values)
-  }
 
   // 4c. Prune devDependencies (removes prisma CLI + its engine binaries — not needed at runtime)
   console.log('\nPruning devDependencies (npm prune --production)...');
@@ -563,6 +504,7 @@ console.log('\nSkill playbooks:');
   ['skills/init-wizard.md',                   'skills/init-wizard.md'],
   ['skills/headless_flow.md',                 'skills/headless_flow.md'],
   ['skills/url-loop.md',                      'skills/url-loop.md'],
+  ['skills/find-client-sources.md',           'skills/find-client-sources.md'],
   ['skills/enrichment-agent.md',              'skills/enrichment-agent.md'],
   ['skills/apply-factlet.md',                 'skills/apply-factlet.md'],
   ['skills/show-hot-leedz.md',                'skills/show-hot-leedz.md'],
@@ -592,7 +534,6 @@ console.log('\nSkill playbooks:');
 console.log('\nDocs:');
 [
   ['docs/CLAUDE.md',       'DOCS/CLAUDE.md'],
-  ['docs/STATUS.md',       'DOCS/STATUS.md'],
   ['docs/VALUE_PROP.md',   'DOCS/VALUE_PROP.md'],
   ['docs/SCORING.json',    'DOCS/SCORING.json'],
   ['docs/PROMPTS.json',    'DOCS/PROMPTS.json'],       // server-side LLM judge prompts (loaded at startup)

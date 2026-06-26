@@ -190,6 +190,36 @@ Example: "digital art commission", "graphic design job posting"]*
 
 ---
 
+## SOURCE DISCOVERY
+
+Everything an agent needs to CONSTRUCT a source-finding prompt should be above —
+Trade, Geography, Buyer Roles, Audience Segments, Relevance Signals. Fill those in well
+and an agent can discover real sources, validate them, and add them to the per-channel
+seed files; the harvesters scrape them and the wizard's `import_sources` loads new entries.
+
+**Channels to mine** (each has a seed file under `skills/`):
+- RSS / blogs — `skills/rss-factlet-harvester/rss_sources.md`
+- Facebook pages / groups — `skills/fb-factlet-harvester/fb_sources.md`
+- Instagram handles / hashtags — `skills/ig-factlet-harvester/ig_sources.md`
+- Reddit subreddits — `skills/reddit-factlet-harvester/reddit_sources.md`
+- X / Twitter accounts — `skills/x-factlet-harvester/x_sources.md`
+- Directories / listings — `skills/source-discovery/discovered_directories.md`
+
+**What a good source looks like:** a place where your Buyer Roles announce or plan your
+Audience Segment events within your Geography — where FUTURE events surface *with a date and
+an organizer contact*. Prefer sources that pair an event with who to contact.
+
+**Query patterns to construct** (fill from Trade + Geography + Audience Segments):
+- `<audience segment> <city/zip> <year>`
+- `<buyer role> <city> seeking <trade> / vendors`
+- `<city> festivals fairs <year> vendor application` / `<venue> event calendar`
+- `"<audience segment>" site:eventbrite.com OR site:facebook.com/events <city>`
+
+**Rule:** validate before adding — the handle / feed / subreddit must exist, be active, and
+match the Trade + Geography. A hallucinated source is worse than none.
+
+---
+
 <!-- INSTRUCTIONS FOR COMPLETING THIS DOCUMENT
      ==========================================
      Priority order for completion:

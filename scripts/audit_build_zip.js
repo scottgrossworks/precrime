@@ -139,7 +139,6 @@ const REQUIRED = [
     'server/mcp/gmail_mcp_config.json',
     'server/mcp/mcp_server_config.json',
     'server/config/precrime_config.js',
-    'server/sync-config.js',
     'server/package.json',
     'server/prisma/schema.prisma',
     'scripts/bootstrap_config.js',
@@ -535,21 +534,23 @@ if (fileSet.has('DOCS/VALUE_PROP.md')) {
            'no `## SIGNATURE` heading');
 }
 
-// sync-config.js must parse signature into Config.
-if (fileSet.has('server/sync-config.js')) {
-    const sc = fs.readFileSync(path.join(ROOT, 'server/sync-config.js'), 'utf8');
-    expect('server/sync-config.js parses signature',
-           /signature/.test(sc) && /SIGNATURE/.test(sc),
-           'no signature parse');
-    expect('server/sync-config.js accepts legacy ### Signature headings',
-           /#\{2,6\}\\s\+signature\\b/.test(sc) && /\/im/.test(sc),
-           'no legacy Signature heading fallback');
-    expect('server/sync-config.js parses explicit **Trade:** before inference',
-           /explicitTrade/.test(sc) && /Trade:/.test(sc),
-           'no explicit Trade parser');
-    expect('server/sync-config.js does not infer trade from full VALUE_PROP body',
-           !/textLower\s*=\s*text\.toLowerCase/.test(sc),
-           'whole-body trade inference still present');
+// Config is built in-memory at MCP startup (buildRuntimeConfig) -- there is no
+// sync-config.js and no Config table. Assert mcp_server.js carries the builder
+// and the schema no longer declares a Config model.
+if (fileSet.has('server/mcp/mcp_server.js')) {
+    const ms = fs.readFileSync(path.join(ROOT, 'server/mcp/mcp_server.js'), 'utf8');
+    expect('mcp_server.js builds RUNTIME_CONFIG in-memory',
+           /function buildRuntimeConfig/.test(ms) && /const RUNTIME_CONFIG/.test(ms),
+           'buildRuntimeConfig / RUNTIME_CONFIG missing');
+    expect('mcp_server.js no longer reads a prisma Config table',
+           !/prisma\.config\./.test(ms),
+           'prisma.config.* still referenced');
+}
+if (fileSet.has('server/prisma/schema.prisma')) {
+    const sch = fs.readFileSync(path.join(ROOT, 'server/prisma/schema.prisma'), 'utf8');
+    expect('schema.prisma has no Config model',
+           !/^model Config\b/m.test(sch),
+           'Config model still present in schema');
 }
 
 // init-wizard.md must include a mandatory Config gate that references signature.

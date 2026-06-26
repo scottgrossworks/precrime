@@ -6,7 +6,13 @@ System instructions injected every turn via `--system`.
 
 ## Routing
 
-Wait for the user's first message. Do not act preemptively.
+The launcher delivers the user's first message as a startup trigger (e.g.
+`run precrime objective=hybrid`). Act on it **immediately and fully in the same
+turn** — route per the table below and EXECUTE the matched skill file end to end
+(every step, every tool call), not just read it. Reading a skill file is setup, not
+the action. Do NOT yield back to the `>` prompt until the skill reaches its natural
+stop: the interactive menu, or headless completion. If there is no trigger and the
+user is just chatting, then converse normally.
 
 Pre-Crime runs along TWO orthogonal axes -- detect both from the startup prompt:
 
@@ -35,7 +41,9 @@ The launcher injects `objective=<value>` into the trigger prompt (and may set `P
 The presence of `headless` is the only signal for headless mode. Detect objective by scanning the prompt for `objective=<value>` or one of `--marketplace` / `--outreach` / `--hybrid`. Never ask the user to disambiguate.
 
 **Reading a skill file:**
-1. Open with `developer__shell(command="type \"<absolute path>\"")` first.
+1. Open with `developer__shell(command="type \"<absolute path>\"")` first. The `type`
+   command is NOT the task — the moment it returns, continue straight into Step 1 of the
+   skill in the SAME turn. Never stop after merely printing the file.
 2. Execute steps top to bottom. Do not summarize instead of acting. Do not improvise from training data.
 3. When a step says to call a tool, call it verbatim with the arguments shown.
 4. When a step says to ask the user, ONLY ask if the question fits the **Ask whitelist** below. Otherwise apply the deterministic fallback the skill provides, or pick the next item, and continue.

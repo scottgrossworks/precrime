@@ -29,7 +29,7 @@ if errorlevel 1 (
 ::         precrime ca_schools_migrated              -> interactive (hybrid), custom DB
 set "PRECRIME_MODE=interactive"
 set "PRECRIME_OBJECTIVE="
-set "DBNAME=myproject.sqlite"
+set "DBARG="
 
 :parse_args
 if "%~1"=="" goto :args_done
@@ -58,7 +58,7 @@ if /i "%~1"=="--hybrid" (
   shift
   goto :parse_args
 )
-set "DBNAME=%~1"
+set "DBARG=%~1"
 shift
 goto :parse_args
 :args_done
@@ -68,27 +68,101 @@ if "%PRECRIME_OBJECTIVE%"=="" (
   if /i "%PRECRIME_MODE%"=="headless" ( set "PRECRIME_OBJECTIVE=marketplace" ) else ( set "PRECRIME_OBJECTIVE=hybrid" )
 )
 
-if not "%DBNAME:~-7%"==".sqlite" set "DBNAME=%DBNAME%.sqlite"
+:: ---------------------------------------------------------------------------
+:: DB selection -- precrime_config.json "databaseFile" is the SINGLE knob.
+:: bootstrap_config.js (above) emitted it as PRECRIME_DATABASE_FILE. To switch
+:: databases, change that ONE line and restart. A CLI arg overrides it for one
+:: run. The value may be a path relative to this folder (e.g. data\myproject.sqlite)
+:: or an absolute path (e.g. C:\Users\...\leedz.sqlite).
+:: ---------------------------------------------------------------------------
+if not "%DBARG%"=="" ( set "DBSPEC=%DBARG%" ) else ( set "DBSPEC=%PRECRIME_DATABASE_FILE%" )
+if "%DBSPEC%"=="" set "DBSPEC=data\myproject.sqlite"
+set "DBSPEC=%DBSPEC:/=\%"
+if not "%DBSPEC:~-7%"==".sqlite" set "DBSPEC=%DBSPEC%.sqlite"
 
-set "DBPATH=%~dp0data\%DBNAME%"
+:: Resolve DBSPEC -> absolute DBPATH:
+::   "X:\..." or "\\..."   absolute, used as-is
+::   contains a backslash  path relative to this folder (e.g. data\foo.sqlite)
+::   bare name             looked up under the data\ folder
+set "DBPATH="
+if "%DBSPEC:~1,1%"==":"  set "DBPATH=%DBSPEC%"
+if "%DBSPEC:~0,2%"=="\\" set "DBPATH=%DBSPEC%"
+set "DBNOBS=%DBSPEC:\=%"
+if not defined DBPATH if "%DBNOBS%"=="%DBSPEC%" set "DBPATH=%~dp0data\%DBSPEC%"
+if not defined DBPATH set "DBPATH=%~dp0%DBSPEC%"
 
 :: Verify the DB file exists
+if "%DBPATH%"=="" (
+  echo.
+  echo  FATAL: Could not resolve database path.
+  echo  Set "databaseFile" in precrime_config.json, e.g.:
+  echo    "databaseFile": "data/myproject.sqlite"
+  echo.
+  pause
+  exit /b 1
+)
 if not exist "%DBPATH%" (
   echo.
-  echo  Database not found: data\%DBNAME%
-  echo  Put your .sqlite file in the data\ folder and try again.
+  echo  Database not found: %DBPATH%
+  echo  Set "databaseFile" in precrime_config.json, or pass a name/path arg, then retry.
   echo.
   pause
   exit /b 1
 )
 
-:: Set DATABASE_URL for child processes -- Prisma reads this at runtime.
-:: Must be absolute (Prisma resolves relative paths from CWD).
+:: Set DATABASE_URL for child processes -- Prisma reads this at runtime (absolute).
 set "DATABASE_URL=file:%DBPATH%"
+
+:: --- 4. LLM provider + API key validation ---
+:: The MCP server makes LLM calls (Judge, enrichment workers) using these keys.
+:: Without a valid key the conductor workers will fail on every LLM call.
+set "LLM_PROVIDER=%PRECRIME_LLM_PROVIDER%"
+if "%LLM_PROVIDER%"=="" set "LLM_PROVIDER=openrouter"
+
+if /i "%LLM_PROVIDER%"=="openai" (
+  if "%OPENAI_API_KEY%"=="" (
+    echo.
+    echo  MISSING API KEY: llm.provider=openai but apiKeys.openai is empty in precrime_config.json.
+    echo  Edit: %~dp0precrime_config.json
+    echo.
+    pause & exit /b 1
+  )
+) else if /i "%LLM_PROVIDER%"=="anthropic" (
+  if "%ANTHROPIC_API_KEY%"=="" (
+    echo.
+    echo  MISSING API KEY: llm.provider=anthropic but apiKeys.anthropic is empty in precrime_config.json.
+    echo  Edit: %~dp0precrime_config.json
+    echo.
+    pause & exit /b 1
+  )
+) else if /i "%LLM_PROVIDER%"=="openrouter" (
+  if "%OPENROUTER_API_KEY%"=="" (
+    echo.
+    echo  MISSING API KEY: llm.provider=openrouter but apiKeys.openrouter is empty in precrime_config.json.
+    echo  Edit: %~dp0precrime_config.json
+    echo.
+    pause & exit /b 1
+  )
+) else (
+  echo.
+  echo  Unknown llm.provider="%LLM_PROVIDER%" in precrime_config.json.
+  echo  Expected one of: openai, anthropic, openrouter.
+  echo.
+  pause & exit /b 1
+)
+
+if "%TAVILY_API_KEY%"=="" (
+  echo.
+  echo  MISSING API KEY: apiKeys.tavily is empty in precrime_config.json.
+  echo  Tavily is required for source discovery and URL scraping.
+  echo  Edit: %~dp0precrime_config.json
+  echo.
+  pause & exit /b 1
+)
 
 echo.
 echo  Pre-Crime
-echo  Database: data\%DBNAME%
+echo  Database: %DBPATH%
 echo.
 
 :: Preflight: confirm claude CLI is on PATH (parity with goose.bat preflight).
@@ -102,6 +176,13 @@ if errorlevel 1 (
   exit /b 1
 )
 
+:: Stop a prior PRECRIME MCP server + any orphaned workers to release the Prisma
+:: DLL lock. Match COMMAND LINE, never image name -- a blanket `taskkill /IM
+:: node.exe` / `claude.exe` would crash the user's interactive Claude Code session
+:: (Claude Code runs as node/claude too). Kills only mcp_server.js + worker procs.
+powershell -NoProfile -ExecutionPolicy Bypass -Command "Get-CimInstance Win32_Process | Where-Object { ($_.Name -in 'node.exe','claude.exe','goose.exe') -and $_.CommandLine -and ($_.CommandLine -like '*mcp_server.js*' -or $_.CommandLine -like '*--print*' -or $_.CommandLine -like '*--no-session*') } | ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }"
+timeout /t 1 /nobreak >nul
+
 :: Setup: install deps + generate Prisma client. Idempotent -- fast if already done.
 call setup.bat
 if errorlevel 1 (
@@ -111,18 +192,24 @@ if errorlevel 1 (
   exit /b 1
 )
 
-:: Sync VALUE_PROP.md masthead into DB Config. This is the source of truth for
-:: companyName, companyEmail, businessDescription, defaultTrade, signature, etc.
-:: Errors are surfaced (no `2>nul`): a silent failure here means the wizard will
-:: interactively prompt for fields that ARE in VALUE_PROP.md.
-echo  Syncing VALUE_PROP.md into Config...
-node "%~dp0server\sync-config.js"
-if errorlevel 1 (
-  echo.
-  echo  WARNING: sync-config.js failed. The wizard may prompt for VALUE_PROP fields.
-  echo  Fix DOCS\VALUE_PROP.md or check DATABASE_URL=%DATABASE_URL%.
-  echo.
-)
+:: (Config sync removed.) VALUE_PROP.md identity + precrime_config.json runtime
+:: config are read into an in-memory struct by the MCP server at startup. There
+:: is no DB Config table to sync. Edit DOCS\VALUE_PROP.md or precrime_config.json
+:: and restart to change config.
+
+:: Worker binary -- conductor spawns ONE-SHOT workers that MATCH this orchestrator.
+:: precrime.bat = Claude orchestrator -> Claude workers (--print non-interactive).
+:: goose.bat    = Goose orchestrator  -> Goose workers  (these vars are NOT set there).
+set "PRECRIME_WORKER_BIN=claude"
+set "PRECRIME_WORKER_ARGS=--dangerously-skip-permissions --print --model claude-haiku-4-5-20251001"
+set "PRECRIME_WORKER_INST_FLAG=NONE"
+
+:: Start MCP server (HTTP mode). .mcp.json points Claude at http://127.0.0.1:5179/mcp.
+:: Own window (NOT /B): /B shares the console and the conductor's log writes corrupt
+:: the orchestrator's interactive TUI -> "The parameter is incorrect. (os error 87)".
+start "PreCrime MCP (conductor)" node "%~dp0server\mcp\mcp_server.js"
+:: Poll until :5179 is listening (up to 10s) instead of fixed sleep.
+powershell -NoProfile -ExecutionPolicy Bypass -Command "$d=[DateTime]::Now.AddSeconds(10);while([DateTime]::Now -lt $d){if(Get-NetTCPConnection -LocalPort 5179 -EA SilentlyContinue){break};Start-Sleep -Milliseconds 500}"
 
 :: Launch Claude -- skip all permission dialogs, pre-seed the startup prompt.
 :: Pin to Sonnet 4.5. Without --model, Claude Code defaults to Opus which is far more expensive.
@@ -130,9 +217,9 @@ if errorlevel 1 (
 :: detect them deterministically (env-var inheritance into spawned MCP children
 :: is not relied on for routing).
 if /i "%PRECRIME_MODE%"=="headless" (
-  set "PRECRIME_TRIGGER=headless precrime objective=%PRECRIME_OBJECTIVE% (database: %DBNAME%)"
+  set "PRECRIME_TRIGGER=headless precrime objective=%PRECRIME_OBJECTIVE% (database: %DBPATH%)"
 ) else (
-  set "PRECRIME_TRIGGER=run precrime objective=%PRECRIME_OBJECTIVE% (database: %DBNAME%)"
+  set "PRECRIME_TRIGGER=run precrime objective=%PRECRIME_OBJECTIVE% (database: %DBPATH%)"
 )
 echo  Mode: %PRECRIME_MODE%   Objective: %PRECRIME_OBJECTIVE%
 claude --dangerously-skip-permissions --chrome --model claude-sonnet-4-5 "%PRECRIME_TRIGGER%"

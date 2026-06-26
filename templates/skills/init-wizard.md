@@ -38,35 +38,33 @@ After Step 1.5, the agent uses `next_source` / `mark_source` / `add_sources` for
 
 ## Step 1.6: Mandatory Config gate (BLOCKING)
 
-The runtime tools and drafting skills demand a minimum mirror of `DOCS/VALUE_PROP.md` inside SQLite `Config` (server/sync-config.js writes it at launch). Missing mandatory fields mean drafts will refuse to compose and `share_booking` may stall.
+Runtime config is built in-memory by the MCP server at startup from `DOCS/VALUE_PROP.md` (identity) and `precrime_config.json` (LLM/runtime). There is no writable Config table: the wizard can READ config but cannot set it. The only way to fix a missing field is to edit the source file and restart. Missing mandatory fields mean drafts will refuse to compose and `share_booking` may stall.
 
-Mandatory fields:
+Mandatory fields (all sourced from `DOCS/VALUE_PROP.md`):
 
-- `companyName`
-- `companyEmail`
-- `businessDescription`
-- `defaultTrade` (re-validated in Step 1.7)
-- `leedzEmail` (defaults to `companyEmail` if missing)
-- `signature` (literal outreach signature block)
-- `defaultBookingAction`
+- `companyName` (VALUE_PROP `**Seller:**`)
+- `companyEmail` (VALUE_PROP `**Email:**`)
+- `businessDescription` (VALUE_PROP `## THE PITCH`)
+- `defaultTrade` (VALUE_PROP `**Trade:**` -- re-validated in Step 1.7)
+- `signature` (VALUE_PROP signature heading)
+- (`leedzEmail` auto-defaults to `companyEmail`; `defaultBookingAction` is fixed to `leedz_api` -- not user-entered)
 
-Probe Config:
+Probe config:
 
 ```
 status = precrime__pipeline({ action: "status" })   // already have this
 cfg    = status.config
 ```
 
-For each mandatory field where `cfg[field]` is empty/null:
+If any mandatory field in `cfg` is empty/null:
 
-- **Interactive mode:** ask one direct question per missing field (no menu, no chitchat). For `signature`, ask `Paste the literal signature block for outreach emails (multi-line ok, ends on a blank line):`. For others, ask `<field> is empty in Config. Enter value:`. After collecting a value, write it: `precrime__pipeline({ action: "configure", patch: { <field>: <value> } })`. Re-probe `status` until every mandatory field is populated.
-- **Headless mode:** do NOT prompt. STOP with: `CONFIG_INCOMPLETE: missing <comma-separated field names>. Edit DOCS/VALUE_PROP.md or call pipeline.configure to set these, then re-run.` Exit.
+- **Both modes:** do NOT try to write it -- `configure` is retired. STOP with: `CONFIG_INCOMPLETE: missing <comma-separated field names>. Fill the matching markers in DOCS/VALUE_PROP.md (Seller / Email / THE PITCH / Trade / signature heading) and restart.` Exit.
 
-After Step 1.6 succeeds, Config has every mandatory mirror field. Drafting skills that need identity / signature MUST call `pipeline.get_config({ key })` rather than re-reading VALUE_PROP.md for those fields.
+Drafting skills that need identity / signature call `pipeline.get_config({ key })` (served from the in-memory config), not re-reading VALUE_PROP.md for those fields.
 
 ## Step 1.7: Trade gate (BLOCKING)
 
-Trade is the marketplace category and the seed for demand-signal detection. The loop does not start until config has a `defaultTrade` that matches a canonical Leedz trade.
+Trade is the marketplace category and the seed for demand-signal detection. The server matches `**Trade:**` from VALUE_PROP.md against the canonical Leedz list at startup, in-memory. The wizard only validates; it cannot set the trade (edit VALUE_PROP.md + restart to change it).
 
 ```
 trades = precrime__trades()
@@ -74,24 +72,8 @@ status = precrime__pipeline({ action: "status" })   // already have this
 cfg    = status.config
 ```
 
-**A. Explicit VALUE_PROP trade wins.** Read `DOCS/VALUE_PROP.md` first and parse the `**Trade:**` line. If it exactly matches one canonical trade (case-insensitive), call:
-
-```
-precrime__pipeline({ action: "configure", patch: { defaultTrade: "<trade-from-VALUE_PROP>" } })
-```
-
-Then proceed to Step 2. Do this even when Config already has a different valid trade. Config is only a mirror; stale Config must never outrank `VALUE_PROP`.
-
-**B. Config already has a valid trade.** If `cfg.defaultTrade` is set AND `trades` contains it (case-insensitive exact match) -> proceed to Step 2.
-
-**C. Infer from VALUE_PROP.** Lowercase only the product name, `**Trade:**` value, and `**Seller:**` line. For each trade in `trades`, check whether the trade name (or its singular form) appears as a substring. Do not scan relevance examples or body text; they may mention adjacent trades.
-
-- Exactly one match -> set it: `precrime__pipeline({ action: "configure", patch: { defaultTrade: "<trade>" } })`. Tell the user: `Trade inferred: <trade>`. Proceed.
-- Zero matches OR multiple matches -> ambiguous. Go to D.
-
-**D. Prompt (interactive only).** Show the user the candidate list (matches if any, else the full `trades` list trimmed to 20). Ask: `Which Leedz trade describes <product name>?` Wait for answer, validate the answer is in `trades`, then `configure` it.
-
-**Headless mode:** if A, B, and C all fail, STOP with `TRADE_UNRESOLVED: defaultTrade not set and inference ambiguous. Edit DOCS/VALUE_PROP.md to clarify, or set Config.defaultTrade.` No prompt.
+- **Valid trade -> proceed.** If `cfg.defaultTrade` is set AND `trades` contains it (case-insensitive exact match) -> proceed to Step 2.
+- **Otherwise STOP (both modes):** `TRADE_UNRESOLVED: defaultTrade not set or not a canonical Leedz trade. Set **Trade:** in DOCS/VALUE_PROP.md to one of the canonical trades (see precrime__trades()), then restart.` No prompt, no configure.
 
 After this step, `cfg.defaultTrade` is set and validated. Demand-signal detection and marketplace post both depend on it.
 
@@ -123,9 +105,18 @@ If mode = `headless` AND objective is `outreach` or `hybrid`:
 - Verify the Gmail MCP is registered by attempting a probe (e.g. check that the `gmail__gmail_send` tool name is in your available tool surface). Do NOT actually send mail here; just verify the tool exists.
 - If unavailable, STOP immediately with: `OUTREACH_REQUIRES_GMAIL: objective=<objective> needs gmail__gmail_send. Register the Gmail MCP server or re-run with --marketplace.` No fallback, no downgrade.
 
-### Interactive menu
+### Interactive choice
 
-If mode = `interactive`, present exactly this two-choice menu and nothing else (objective is already latched; do NOT re-ask for marketplace/outreach/hybrid):
+The launcher (`goose.bat` / `precrime.bat`) prints the startup menu itself and bakes the
+user's pick into the trigger prompt as `choice=workflow` or `choice=hot`. Read it from the prompt:
+
+- prompt contains `choice=workflow` -> choice = `RUN_WORKFLOW`.
+- prompt contains `choice=hot`      -> choice = `SHOW_HOT_LEEDZ`.
+
+When `choice=` is present, do NOT print your own menu — the launcher already showed it. Just route.
+
+ONLY if mode = `interactive` AND there is no `choice=` token in the prompt (a launcher that
+didn't pre-select), present this two-choice menu and read the reply:
 
 ```
 What now?
@@ -133,8 +124,7 @@ What now?
   (2) RUN_WORKFLOW   -- full discovery + scrape + enrich + judge loop.
 ```
 
-- Answer "1" / "SHOW_HOT_LEEDZ" -> choice = `SHOW_HOT_LEEDZ`.
-- Answer "2" / "RUN_WORKFLOW"   -> choice = `RUN_WORKFLOW`.
+- "1" / "SHOW_HOT_LEEDZ" -> choice = `SHOW_HOT_LEEDZ`; "2" / "RUN_WORKFLOW" -> choice = `RUN_WORKFLOW`.
 
 In headless mode, skip the menu entirely.
 
@@ -142,32 +132,19 @@ In headless mode, skip the menu entirely.
 
 Pass `objective` to every `plan_tasks` call.
 
-- Mode = headless -> follow `__PROJECT_ROOT__/skills/headless_flow.md` with `objective=<resolved value>`.
+- Mode = headless -> follow `skills/headless_flow.md` with `objective=<resolved value>`.
 - Mode = interactive, choice = `SHOW_HOT_LEEDZ`:
   1. `precrime__pipeline({ action: "plan_tasks", mode: "hot_only", objective: "<resolved>" })`
   2. `precrime__pipeline({ action: "claim_task", role: "interactive-orchestrator", types: ["SHOW_HOT_LEEDZ"] })`
-  3. If `CLAIMED`, pass the returned Task packet to `__PROJECT_ROOT__/skills/show-hot-leedz.md`. The presenter must complete that exact `task.id`. Stop after one Task.
+  3. If `CLAIMED`, pass the returned Task packet to `skills/show-hot-leedz.md`. The presenter must complete that exact `task.id`. Stop after one Task.
 - Mode = interactive, choice = `RUN_WORKFLOW`:
   1. `precrime__pipeline({ action: "plan_tasks", mode: "workflow", objective: "<resolved>" })`
-  2. Respect the returned `workflowStrategy`: `consume_factlets` means prioritize apply-factlet / judge work and do not chase new discovery until the backlog drops; `discover_sources` means factlets are sparse enough to gather more evidence.
-  3. **Explicit heartbeat loop.** The Planner owns ordering; you are the executor. Repeat the cycle below until exit:
-     1. `precrime__pipeline({ action: "claim_task", role: "interactive-orchestrator" })`.
-     2. `NO_TASK` -> go to step 4 (replan).
-     3. `CLAIMED` -> dispatch by `task.type` to exactly one handler:
-        - `APPLY_FACTLET`  -> pass the claimed Task packet to `__PROJECT_ROOT__/skills/apply-factlet.md`
-        - `ENRICH_CLIENT`  -> pass the claimed Task packet to `__PROJECT_ROOT__/skills/enrichment-agent.md`
-        - `SCRAPE_SOURCE`  -> route by `task.input.channel` (interactive has the browser MCP): `fb` -> `__PROJECT_ROOT__/skills/fb-factlet-harvester/SKILL.md`, `ig` -> `__PROJECT_ROOT__/skills/ig-factlet-harvester/SKILL.md`, `x` -> `__PROJECT_ROOT__/skills/x-factlet-harvester/SKILL.md`, all others -> `__PROJECT_ROOT__/skills/url-loop.md`
-        - `DRAFT_OUTREACH` -> pass the claimed Task packet to `__PROJECT_ROOT__/skills/outreach-drafter.md`
-        - `SHOW_HOT_LEEDZ` -> pass the claimed Task packet to `__PROJECT_ROOT__/skills/show-hot-leedz.md`
-        - `JUDGE_AFFECTED` -> call `pipeline.judge_affected({ clientIds, bookingIds, session_id })` inline, then `complete_task`.
-        - `SHARE_BOOKING`  -> call `pipeline.share_booking({ bookingId, mode:"post" })` inline (only if objective allows marketplace), then `complete_task`.
-        - `DISCOVER_SOURCES` -> peer table first: read `DOCS/PEER_SOURCES.json`, enqueue `sources[]` of every `peers[]` entry whose `match[]` hits your trade/segments (`discoveredFrom:"peer-table"`); only if nothing matches, run one bounded discovery search. `pipeline.add_sources`, then `complete_task`.
-        Worker skills receive the already-claimed Task packet and call `complete_task` themselves. They MUST NOT call `claim_task`. Inline handlers MUST call `complete_task` after the action returns.
-     4. After `NO_TASK` from claim, `precrime__pipeline({ action: "plan_tasks", mode: "workflow", objective: "<resolved>" })` again. Exit when this replan creates ZERO Tasks AND the previous drain claimed ZERO Tasks. Otherwise resume the cycle.
-  4. Do NOT preload every worker skill on every heartbeat -- load only the skill that matches the claimed `task.type`. Do NOT decide workflow order yourself; the Planner already chose.
+  2. Note the returned `workflowStrategy` for the user (inform them whether the run will prioritize factlet processing or source discovery).
+  3. Exit. The conductor (Node.js loop inside `mcp_server.js`) owns all Task dispatch from this point. Do NOT call `claim_task`. Do NOT dispatch worker skills. Do NOT poll or loop. The conductor claims Tasks, spawns one-shot workers, and marks them done -- without your involvement.
+  4. Inform the user: "Queue seeded. The conductor is running. Call `report_session` when you want a summary."
 
 ## Rules
 
-- Config (name, email, pitch, trade, bookingAction) is set by sync-config.js before goose launches. Never ask for it.
+- Config (name, email, pitch, trade, bookingAction) is built in-memory at MCP startup from DOCS/VALUE_PROP.md + precrime_config.json. It is read-only at runtime. Never ask for it and never try to `configure` it.
 - If any config field is empty at Step 1, say: `Config incomplete. Fill in DOCS/VALUE_PROP.md and restart.` STOP.
 - Never auto-launch. Wait for mode selection (interactive) or detect headless.

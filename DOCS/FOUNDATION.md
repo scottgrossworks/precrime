@@ -6,7 +6,7 @@ Pre-Crime is a recursive intelligence-gathering system. It discovers people and 
 
 Every object in the system is moving toward one of two end states:
 
-1. **Leed shared to marketplace** — a booking that passes `DOCS/SCORING.json` `leed_ready` gates, posted via the Leedz API.
+1. **Leed shared to marketplace** — a booking that passes share-ready gates (hot status, verified contact, zip, description), posted via the Leedz API.
 2. **Outreach email sent** — a draft composed from a rich dossier, approved by the user, delivered via Gmail.
 
 Everything else is **brewing**. A client at score 0 is brewing. A factlet not yet linked is brewing. A booking missing a zip code is brewing. A source not yet scraped is brewing. The system's job is to move every object from brewing toward an end state. A low score is not a problem to report — it is the fuel that keeps the pipeline running.
@@ -15,7 +15,7 @@ Everything else is **brewing**. A client at score 0 is brewing. A factlet not ye
 
 A woman's hair catches fire at her desk. We email her a bucket of water at that moment, we make the sale. Five minutes early, next day, or the coworker next to her with fine hair: no sale. Cold outreach without a demand signal is selling buckets to people whose hair is not on fire. PRECRIME's job is to predict combustion, or detect it the instant it happens, and arrive with VALUE_PROP framed as the bucket.
 
-A booking is `leed_ready` only when a demand signal is present. Demand signal is never stored (fires start and go out); it is recomputed at enrichment from current evidence. Two sources: **explicit** (source literally states the need: "looking for X", RFP, inbound inquiry) or **inferred** (factlets stack into an argument the agent can state out loud). Without one, a complete booking is `outreach_ready`, not `leed_ready`.
+A booking is **share-ready** only when a demand signal is present. Demand signal is assessed by the LLM Judge and stored as `Booking.status = hot`. The verdict persists — it is not recomputed on every enrichment. Call `judge_affected` (or let the conductor schedule a `JUDGE_AFFECTED` task) to re-evaluate. Two sources: **explicit** (source literally states the need: "looking for X", RFP, inbound inquiry) or **inferred** (factlets stack into an argument the agent can state out loud). Without one, a complete booking is **outreach-ready**, not share-ready.
 
 Inferred archetype (the Prom Pattern). Five slots, all required: (1) named decision-maker for VALUE_PROP's category, (2) concrete event with a date inside the conversion window, (3) public precedent of buying this category before, (4) pattern of publicly crediting vendors, (5) thematic fit for this specific instance. Canonical case: activity director, prom in 60 days, past gallery shows caricature booth, school posts thank-yous to prior vendors, this year's theme matches the pitch. Transpose the nouns for other verticals (corporate planner + holiday party, brewery + tap takeover, etc.). Fewer than 5/5 slots filled = `outreach_ready`. Empty slots are the next enrichment target.
 
@@ -73,8 +73,8 @@ Every skill file is an implementation of one of these functions.
 | Send email | `gmail__gmail_send({ to, subject, body })` |
 | Post marketplace leed | `precrime__pipeline({ action: "share_booking", bookingId, mode })` -- the server builds the payload and computes `st`/`et`; external Leedz tools are not exposed to the agent |
 
-Scoring runs automatically on every `pipeline.save`. No separate score call needed.
-See `DOCS/SCORING.json` for the full algorithm and gates.
+Judging runs via explicit `JUDGE_AFFECTED` tasks dispatched by the conductor, or by calling `pipeline.judge_affected` directly. It does not run on every save.
+See `DOCS/SCORING.json` for tuning knobs (factlet thresholds, generic email prefixes, etc.).
 See `DOCS/SUMMARY.md` for session accountability (start_session / report_session / audit_session).
 
 ## Invariants

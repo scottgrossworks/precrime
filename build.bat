@@ -94,6 +94,14 @@ if exist "%ROOT%\templates\hermes.bat" (
   copy "%ROOT%\templates\hermes.bat" "%STAGEDIR%\hermes.bat" >nul
   echo   + hermes.bat
 )
+if exist "%ROOT%\killnode.bat" (
+  copy "%ROOT%\killnode.bat" "%STAGEDIR%\killnode.bat" >nul
+  echo   + killnode.bat
+)
+if exist "%ROOT%\.mcp.json" (
+  copy "%ROOT%\.mcp.json" "%STAGEDIR%\.mcp.json" >nul
+  echo   + .mcp.json
+)
 
 echo.
 echo Packaging zip...

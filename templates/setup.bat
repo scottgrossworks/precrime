@@ -66,6 +66,25 @@ if exist "package.json" (
 )
 
 cd "%~dp0"
+
+:: Install the Python dependency for the Tavily tool (web search / extract).
+:: tools\tavily_lean.py imports 'requests'. Without it, Goose logs
+:: "ModuleNotFoundError: No module named 'requests'" and the tavily extension
+:: stays disabled (no web search, no FIND_CLIENT_SOURCES enrichment). Non-fatal:
+:: warn and continue if python/pip is unavailable.
+where python >nul 2>&1
+if not errorlevel 1 (
+  echo [+] Installing Tavily tool dependency ^(python -m pip install requests^)...
+  python -m pip install --quiet requests
+  if errorlevel 1 (
+    echo     WARNING: pip install requests failed. Run manually: python -m pip install requests
+  ) else (
+    echo     Done.
+  )
+) else (
+  echo [i] python not on PATH -- skipping Tavily dependency ^(web search stays disabled until python + requests are available^).
+)
+
 echo.
 echo ============================================================
 echo  Setup complete. Server infrastructure is ready.

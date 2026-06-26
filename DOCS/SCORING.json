@@ -1,37 +1,55 @@
 {
-  "version": "4.0.0",
+  "version": "4.1.0",
   "purpose": "PRECRIME classification policy. Promotion is procedural hot-eligibility gates (server/mcp/classification.js) plus an LLM product-market-fit judge (mcp_server.js judgeLeed, prompt in DOCS/PROMPTS.json). No numeric score, no gates. See DOCS/CLASSIFICATION.md.",
-  "defaults": {
-    "pr": 0,
-    "sh": "*"
-  },
   "classification": {
-    "_comment": "Procedural hot-eligibility knobs read by classification.js. requiredFields is the addLeed contract a marketplace share must be able to compose; the addLeed API itself is the final judge of location precision and acceptance.",
     "futureMinHours": 12,
-    "requiredFields": ["tn", "ti", "lc", "zp", "st", "em", "dt"]
-  },
-  "demandSignal": {
-    "_comment": "hotDaysOut bounds the hot-leedz window for soonest-event ordering.",
-    "hotDaysOut": 14
+    "orgNameTokens": [
+      "team",
+      "teams",
+      "expo",
+      "llc",
+      "inc",
+      "ltd",
+      "corp",
+      "corporation",
+      "group",
+      "committee",
+      "dept",
+      "department",
+      "company",
+      "foundation",
+      "association",
+      "productions",
+      "production",
+      "events",
+      "event",
+      "festival",
+      "convention",
+      "informa",
+      "holdings",
+      "enterprises",
+      "agency",
+      "council",
+      "society",
+      "league",
+      "organization",
+      "organisation",
+      "staff",
+      "crew",
+      "exhibits",
+      "exhibitor",
+      "exhibitors",
+      "sponsorship",
+      "sponsorships"
+    ]
   },
   "factlet": {
     "threshold": 3,
     "pointsPerFreshFactlet": 2,
-    "pointsPerDemandFactlet": 6,
-    "defaultStaleDays": 180,
-    "freshRelevantRequiredForLeedReady": 1,
-    "useOnlyRelevant": true,
-    "mustSupportBooking": true,
-    "bookingSpecificEvidencePreferred": true,
-    "clientLevelFactletsCannotAloneVerifyEvent": true
+    "pointsPerDemandFactlet": 6
   },
   "client": {
-    "draftThreshold": 5,
-    "signalPoints": {
-      "pain": 2,
-      "occasion": 2,
-      "context": 1
-    }
+    "draftThreshold": 5
   },
   "booking": {
     "genericEmailPrefixes": [
@@ -66,7 +84,25 @@
       "customercare",
       "care",
       "feedback",
-      "staff"
+      "staff",
+      "expo",
+      "vendor",
+      "vendors",
+      "exhibitor",
+      "exhibitors",
+      "exhibits",
+      "booth",
+      "booths",
+      "registration",
+      "register",
+      "tickets",
+      "boxoffice",
+      "sponsor",
+      "sponsors",
+      "partnerships",
+      "partner",
+      "concessions",
+      "hospitality"
     ]
   },
   "statusRules": {

@@ -51,7 +51,7 @@ Two user-editable surfaces. They do not overlap.
 | `DOCS/VALUE_PROP.md` | Product / sales truth: seller, trade, geography, pitch, buyers, pricing, relevance signals, outreach examples. |
 | `precrime_config.json` | Runtime / API config: `apiKeys`, `llm`, `databaseFile`, `defaultMode`, `tasks.limits`, `tasks.sessionBudgets`, `tasks.workflowStrategy`, `recycler` thresholds. No timezone field; share time derives timezone from `Booking.zip`. |
 
-The SQLite `Config` table is an internal runtime mirror written from `DOCS/VALUE_PROP.md` by `server/sync-config.js` at launch. It is not a user surface. No `.env` file is part of the build.
+There is no SQLite `Config` table. Runtime config is an in-memory struct built by the MCP server at startup: identity (companyName, companyEmail, businessDescription, defaultTrade, signature) from `DOCS/VALUE_PROP.md`, and LLM / runtime settings from `precrime_config.json`. It is read-only at runtime; edit the source file and restart to change it. No `.env` file is part of the build.
 
 ---
 

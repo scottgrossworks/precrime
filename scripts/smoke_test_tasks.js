@@ -1371,24 +1371,21 @@ async function call(action, args = {}) {
                (tainted.fallbacks || []).some(f => /forbidden VALUE_PROP field/i.test(f)),
                JSON.stringify(tainted.fallbacks));
 
-        console.log('\n=== Test 30: sync-config.js sources VALUE_PROP.md and does not read precrime_config.json ===');
-        const syncPath = path.join(PRECRIME_ROOT, 'server', 'sync-config.js');
-        const syncSrc = fs.readFileSync(syncPath, 'utf8');
-        expect('sync-config.js reads VALUE_PROP.md',
-               /VALUE_PROP\.md/.test(syncSrc),
-               'no VALUE_PROP.md reference');
-        expect('sync-config.js does NOT require precrime_config loader',
-               !/loadPrecrimeConfig/.test(syncSrc),
-               'sync-config.js still loads precrime_config.json');
-        expect('sync-config.js parses explicit VALUE_PROP Trade line',
-               /explicitTrade/.test(syncSrc) && /Trade:/.test(syncSrc),
-               'sync-config.js does not parse **Trade:** directly');
-        expect('sync-config.js does NOT infer trade from full VALUE_PROP body',
-               !/textLower\s*=\s*text\.toLowerCase/.test(syncSrc),
-               'sync-config.js can still choose unrelated trades from body text');
-        expect('sync-config.js accepts legacy nested Signature heading',
-               /#\{2,6\}\\s\+signature\\b/.test(syncSrc) && /\/im/.test(syncSrc),
-               'sync-config.js does not accept ### Signature');
+        console.log('\n=== Test 30: runtime config is in-memory (no Config table, no sync-config.js) ===');
+        const msSrc = fs.readFileSync(path.join(PRECRIME_ROOT, 'server', 'mcp', 'mcp_server.js'), 'utf8');
+        expect('mcp_server.js builds RUNTIME_CONFIG in-memory from VALUE_PROP + precrime_config',
+               /function buildRuntimeConfig/.test(msSrc) && /const RUNTIME_CONFIG/.test(msSrc),
+               'buildRuntimeConfig / RUNTIME_CONFIG missing');
+        expect('mcp_server.js no longer reads a prisma Config table',
+               !/prisma\.config\./.test(msSrc),
+               'prisma.config.* still referenced');
+        expect('sync-config.js is gone (config no longer mirrored to DB)',
+               !fs.existsSync(path.join(PRECRIME_ROOT, 'server', 'sync-config.js')),
+               'server/sync-config.js still exists');
+        const schSrc = fs.readFileSync(path.join(PRECRIME_ROOT, 'server', 'prisma', 'schema.prisma'), 'utf8');
+        expect('schema.prisma has no Config model',
+               !/^model Config\b/m.test(schSrc),
+               'Config model still present in schema');
 
         console.log('\n=== Test 31: precrime_config.json + sample have no `timezone` key ===');
         expect('live precrime_config.json has no timezone',

@@ -1,6 +1,7 @@
 {
   "_comment": "PRECRIME runtime/API config sample. Copy to precrime_config.json and fill in API keys locally. Product/sales truth (company, pitch, trade, buyers, geography) lives in DOCS/VALUE_PROP.md -- never here.",
   "deploymentName": "MyProject",
+  "_databaseFile_note": "The ONE place that selects PRECRIME's SQLite DB. Change this line + restart to switch databases. Accepts a path relative to the project root (e.g. data/myproject.sqlite) OR an absolute path (e.g. C:/Users/Scott/.../leedz.sqlite).",
   "databaseFile": "data/myproject.sqlite",
   "defaultMode": "interactive",
   "apiKeys": {
@@ -19,8 +20,8 @@
   "tasks": {
     "limits": {
       "DISCOVER_SOURCES": 1,
-      "SCRAPE_SOURCE": 5,
-      "APPLY_FACTLET": 5,
+      "SCRAPE_SOURCE": 2,
+      "APPLY_FACTLET": 2,
       "ENRICH_CLIENT": 10,
       "JUDGE_AFFECTED": 5,
       "SHOW_HOT_LEEDZ": 1,
@@ -30,7 +31,7 @@
     "sessionBudgets": {
       "DISCOVER_SOURCES": 1,
       "SCRAPE_SOURCE": 25,
-      "APPLY_FACTLET": 50,
+      "APPLY_FACTLET": 200,
       "ENRICH_CLIENT": 50,
       "JUDGE_AFFECTED": 50,
       "SHOW_HOT_LEEDZ": 1,
@@ -41,8 +42,9 @@
       "factletBacklogDiscoveryPause": 25
     }
   },
+  "_workers_note": "No workers block on purpose: orchestrator is chosen by the LAUNCHER, not config. precrime.bat sets PRECRIME_WORKER_* (Claude); goose.bat sets none -> conductor uses its goose defaults (goose run --instructions <skill>). Hardcoding gooseBin here would force one orchestrator on both paths. Conductor defaults cover pollMs/maxWorkers/port/skillsRoot.",
   "recycler": {
-    "factletStaleDays": 180,
+    "factletStaleDays": 30,
     "taskRetentionDays": 30,
     "claimTimeoutMinutes": 10
   },

@@ -1,116 +1,67 @@
 ---
 name: {{DEPLOYMENT_NAME}}-enrichment
-description: One-Task ENRICH_CLIENT worker. Consume one already-claimed Client Task, enrich it, save with judge:false, complete, stop.
+description: One-Task ENRICH_CLIENT worker. Fold ONE pre-fetched source summary into one Client's dossier with judge:false, mark the summary consumed, complete, stop.
 triggers:
   - enrich one client
   - run enrich client task
   - ENRICH_CLIENT worker
 ---
 
-# enrichment-agent -- ENRICH_CLIENT Worker
+# enrichment-agent — ENRICH_CLIENT worker (synthesis only)
 
-Execute exactly one already-claimed `ENRICH_CLIENT` Task. Do not call `claim_task`, `plan_tasks`, `next`, `rescore`, `judge_affected`, or load another Client.
+Process ONE already-claimed ENRICH_CLIENT task. It names one Client and carries one
+pre-fetched source summary (`input.url` + `input.summary`, from find-client-sources).
+Fold that summary into the dossier — nothing else. Never search, scrape, pick URLs,
+create clients/bookings, or call `claim_task`, `plan_tasks`, `next`, `rescore`,
+`judge_affected`, or Tavily.
 
-## Step 1 -- Accept Claimed Task
+## Step 0 — Load task
+- `taskId = env.PRECRIME_TASK_ID`. Missing → complete `failed` `missing_task_id`, stop.
+- `precrime__pipeline({ action:"get_task", taskId })` → `clientId = task.targetId`,
+  `url = task.input.url`, `summary = task.input.summary`.
+- Not `{ type:"ENRICH_CLIENT", targetType:"Client" }` → complete `failed` `wrong_task_type`, stop.
+- `summary` empty → complete `done` `needsJudge:false`, but still mark the entry consumed
+  (Step 2) so it isn't retried.
 
-The orchestrator has already called `claim_task` and handed you the Task packet.
+## Step 1 — Load client
+`precrime__find({ action:"clients", filters:{ id: clientId }, limit:1, summary:false })`
+Capture `name`, `company`, `website`, `dossier`, `targetUrls`. Missing → complete `failed`.
 
-Set:
-
-- `taskId = task.id`
-- `clientId = task.targetId`
-
-Expected Task: `{ type:"ENRICH_CLIENT", targetType:"Client", targetId }`. If the Task is missing or not this type, stop and report `wrong_task_type`; do not claim another Task.
-
-## Step 2 -- Load Client
-
+## Step 2 — Synthesize (one LLM step)
+Fold only facts about THIS client into the dossier; invent nothing. Format:
 ```
-precrime__find({ action: "clients", filters: { id: clientId }, limit: 1 })
+[PERMANENT] stable fact (role, venue type, recurring event, service area)
+[YYYY-MM-DD] time-sensitive signal from <url>: buying occasion / event date / budget / trend
 ```
+- Dedup: don't append a fact already covered; rewrite a line only if the summary is sharper/newer.
+- Use today's date for new dated lines unless the summary states an explicit date.
+- Set `email`/`phone` ONLY if the summary states a direct, non-generic one. No factlets/bookings here.
+- Mark the source consumed: in `targetUrls` (JSON array) set the entry whose `url` matches to
+  `consumed:true`, leave all others unchanged (no match → leave as-is).
 
-Capture `name`, `company`, `email`, `phone`, `website`, `targetUrls`, `dossier`, `clientNotes`, recent Bookings/Factlets. If missing, complete as `failed`.
-
-## Step 3 -- Enrich This Client Only
-
-Allowed work:
-
-- Find/scrape up to 5 high-signal URLs for this Client: official site, event page, LinkedIn, Facebook, news, directory.
-- Extract direct contact info, event signals, pain/occasion/context signals, useful website URLs, and potential Bookings.
-- For other people/orgs discovered on this Client's pages, use `skills/shared/classify-contact.md`; save true sibling Clients with `pipeline.save({ judge:false, patch: ... })`.
-- For reusable signals, use `skills/shared/factlet-rules.md`; save as Factlets on this Client where applicable.
-- Verify or improve email using `skills/client-finder.md` when needed.
-
-Do not enrich sibling Clients here. Create them and let Planner schedule their own Tasks.
-
-## Step 4 -- Save
-
-Prefer one accumulated save for this Client:
-
+## Step 3 — Save (judge:false)
 ```
-precrime__pipeline({
-  action: "save",
-  id: clientId,
-  judge: false,
-  patch: {
-    name: "<corrected if needed>",
-    email: "<verified direct email if found>",
-    phone: "<if found>",
-    website: "<if found>",
-    targetUrls: "<JSON.stringify URL list>",
-    dossier: "<updated dossier>",
-    clientNotes: "<short operational note>",
-    factlets: [{ content: "...", source: "...", signalType: "occasion|context|pain" }],
-    bookings: [/* if discovered */],
-    lastEnriched: "<ISO timestamp now>"
-  }
-})
+precrime__pipeline({ action:"save", id: clientId, judge:false,
+  patch:{ dossier:"<updated dossier>",
+    targetUrls:"<JSON.stringify with this url's entry consumed:true>",
+    email:"<only if summary gave a direct email>", phone:"<only if summary gave a phone>" }})
 ```
+Always `judge:false`. Never write `Booking.status` or call `judge_affected`/`rescore`.
 
-Every `pipeline.save` call MUST pass `judge:false`. Do not call `judge_affected` or `rescore`. Do not write `Booking.status`.
-
-Collect `affectedClientIds`, `affectedBookingIds`, saved `factletIds`, and any sibling Client ids created.
-
-## Step 5 -- Complete
-
-Success:
-
+## Step 4 — Complete
+Synthesized:
 ```
-precrime__pipeline({
-  action: "complete_task",
-  taskId: taskId,
-  status: "done",
-  output: {
-    clientIds: [clientId, <sibling clients touched>],
-    bookingIds: [<affected booking ids>],
-    factletIds: [<saved factlet ids>],
-    sourceIds: [],
-    summary: "Enriched <clientId>: <short result>.",
-    needsJudge: true
-  }
-})
+precrime__pipeline({ action:"complete_task", taskId, status:"done",
+  output:{ clientIds:[clientId], bookingIds:[], factletIds:[], sourceIds:[],
+    summary:"Enriched <clientId> from <url>: <one-line result>.", needsJudge:true }})
 ```
-
-If nothing changed, use `needsJudge:false` and summary `"no enrichable signal"`.
-
+Nothing usable (or empty summary): same shape, `clientIds:[]`, summary `"no enrichable signal"`,
+`needsJudge:false` (still mark the entry consumed in Step 2).
 Failure:
-
 ```
-precrime__pipeline({
-  action: "complete_task",
-  taskId: taskId,
-  status: "failed",
-  error: "<client_missing | scrape_failed | no_signal | tool_error>",
-  output: {
-    clientIds: [clientId],
-    bookingIds: [],
-    summary: "Enrichment failed for <clientId>: <reason>.",
-    needsJudge: false
-  }
-})
+precrime__pipeline({ action:"complete_task", taskId, status:"failed",
+  error:"<client_missing|tool_error>",
+  output:{ clientIds:[clientId], bookingIds:[], factletIds:[], sourceIds:[],
+    summary:"Enrichment failed for <clientId>: <reason>.", needsJudge:false }})
 ```
-
-Never leave a claimed Task open.
-
-## Step 6 -- Stop
-
-After `complete_task`, exit. Do not claim another Task.
+Never leave a claimed task open. Then STOP.

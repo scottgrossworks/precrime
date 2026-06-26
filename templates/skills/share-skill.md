@@ -44,8 +44,8 @@ Compose these as a vendor-to-vendor sales pitch: you are pitching a FELLOW vendo
 Rules:
 
 - `titleDraft` (`ti`): punchy event title. No emails or phone numbers.
-- `dtDraft` (`dt`): what the event is, who the client is, the demand signal and fit, and why a vendor should want it. May include additional useful contact info when it is present in evidence.
-- `rqDraft` (`rq`): requirements and next-step notes. May include additional useful contact info for facilities, vendor coordination, marketing, utilities, onsite logistics, or decision-making when present in evidence.
+- `dtDraft` (`dt`): what the event is, who the client is, the DEMAND SIGNAL and product-market fit, and why a fellow vendor should want it. The demand signal lives HERE, never in `rq`.
+- `rqDraft` (`rq`): the concrete vendor-participation terms a fellow vendor needs to act -- booth / vendor fee, booth size options, certificate-of-insurance (COI) requirement, electrical / power, load-in / load-out, event hours, and any application deadline. These are RESEARCHED logistics. Pull them from the dossier; when not in evidence, research the event's vendor / exhibitor page (e.g. WebFetch) and cite only what you find. If vendor terms cannot be verified, write `vendor terms not yet researched` -- do NOT pad `rq` with the demand signal (that belongs in `dt`) or restate `dt`.
 - Never invent contacts, demand, dates, venue, location, zip, phone, email, or logistics.
 - Never output epochs, emails, phone numbers, or other PII in the prose. The server fills `tn` / `lc` / `zp` / `st` / `em` / `et`.
 - Never include payload field labels like `em:`, `cn:`, `st:`, `et:`.

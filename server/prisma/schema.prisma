@@ -58,6 +58,7 @@ model Booking {
   sharedAt         BigInt?
   leedPrice        Int?
   leedId           String?   // returned by createLeed MCP tool
+  squarePaymentUrl String?   // Leedz desktop (INVOICER) field; PRECRIME never writes it -- present so the shared DB satisfies the desktop's Prisma reads
   createdAt        DateTime  @default(now())
   updatedAt        DateTime  @updatedAt
   client           Client    @relation(fields: [clientId], references: [id])
@@ -175,27 +176,24 @@ model Task {
   @@index([sessionId])
   @@index([targetType, targetId])
 }
+// Config table removed: runtime config is now an in-memory struct built at
+// startup (server/mcp/mcp_server.js buildRuntimeConfig) from DOCS/VALUE_PROP.md
+// (identity) + precrime_config.json (LLM/runtime). This aligns PRECRIME with the
+// Leedz desktop schema contract, which also drops Config. Changes require a
+// server restart. See DOCS/wiki (config) for the rationale.
 
-model Config {
-  id                       String    @id @default(cuid())
-  companyName              String?
-  companyEmail             String?
-  businessDescription      String?
-  activeEntities           String?  // JSON: ["client"] or ["client","booking"]
-  defaultTrade             String?  // e.g., "Caricature Artist"
-  defaultBookingAction     String?  // "leedz_api" | "email_share" | "email_user"
-  marketplaceEnabled       Boolean  @default(false)
-  leadCaptureEnabled       Boolean  @default(false)
-  leedzEmail               String?
-  leedzSession             String?  // session JWT for createLeed MCP calls
-  signature                String?  // outreach email signature block, mirrored from VALUE_PROP.md
-  llmApiKey                String?
-  llmProvider              String?  // "anthropic" | "openai" | "openrouter"
-  llmModel                 String?  // model id, e.g. an OpenRouter model; pick the cheapest that performs
-  llmBaseUrl               String?
-  llmAnthropicVersion      String?
-  llmMaxTokens             Int?     @default(1024)
-  factletStaleDays         Int?     @default(180) // days before a factlet is stale
-  createdAt                DateTime @default(now())
-  updatedAt                DateTime @updatedAt
+// SquareConnection -- owned by the Leedz desktop client (INVOICER); durable Square
+// OAuth state. PRECRIME never reads or writes it, but it is declared here so the
+// unified shared SQLite database carries the table and the desktop's Prisma client
+// finds it. Mirrors the contract at INVOICER/client/DOCS/SQLITE_SCHEMA.md.
+model SquareConnection {
+  id           String   @id @default(cuid())
+  accessToken  String?
+  refreshToken String?
+  expiresAt    BigInt?
+  merchantId   String?
+  locationId   String?
+  state        String?
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
 }
