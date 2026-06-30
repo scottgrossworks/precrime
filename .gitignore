@@ -57,3 +57,9 @@ precrime_config.json
 
 # SQLite journal (transient, was leaking server/data/)
 *.sqlite-journal
+
+# Business data — peer source lists carry trade-specific keywords, never source
+PEER_SOURCES.json
+
+# last30days/ is a separate nested git repo and holds a live API key — never tracked here
+last30days/

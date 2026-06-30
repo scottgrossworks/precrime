@@ -253,7 +253,7 @@ if (fs.existsSync(mcpSrc)) {
 // value_prop, db, sourceStore, conductor). Without ALL of these the MCP server
 // crashes on startup ("Cannot find module") and the :5179 extension never connects.
 // Keep this list in sync with the require('./...') lines at the top of mcp_server.js.
-for (const mod of ['classification.js', 'value_prop.js', 'conductor.js', 'db.js', 'verify.js', 'sourceStore.js', 'dates.js', 'responses.js', 'runtime.js', 'find.js', 'share.js']) {
+for (const mod of ['classification.js', 'value_prop.js', 'conductor.js', 'db.js', 'verify.js', 'sourceStore.js', 'dates.js', 'responses.js', 'runtime.js', 'find.js', 'share.js', 'toolDefs.js', 'factlets.js', 'logging.js', 'sessionLog.js', 'recycler.js', 'judge.js', 'saveClient.js', 'factletMatch.js', 'sourceQueue.js']) {
   const src = path.join(PRECRIME, 'server', 'mcp', mod);
   if (fs.existsSync(src)) {
     copyFile(src, path.join(outputDir, 'server', 'mcp', mod));

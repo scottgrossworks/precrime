@@ -189,7 +189,12 @@ async function conductorLoop(cfg, hooks) {
                 try {
                     const r = (await runInProcess(t)) || {};
                     inprocHandled++;
-                    console.error(`[conductor] in-process done — ${t.type}: ${taskDesc(t)}${r.changed != null ? ` changed=${r.changed}` : ''}${r.hotCount != null ? ` hot=${r.hotCount}` : ''}`);
+                    // Prefer the handler's human-readable summary; fall back to the raw
+                    // counters only if a handler doesn't supply one.
+                    const detail = r.summary
+                        || `${r.changed != null ? `changed=${r.changed}` : ''}${r.hotCount != null ? ` hot=${r.hotCount}` : ''}`.trim()
+                        || taskDesc(t);
+                    console.error(`[conductor] in-process done — ${t.type}: ${detail}`);
                 } catch (e) {
                     console.error(`[conductor] in-process error — task=${t.id} type=${t.type}: ${e.message}`);
                     await conductorFailTask(t.id, `inproc_error: ${e.message}`);

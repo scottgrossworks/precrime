@@ -456,5 +456,73 @@ async function resolveEventDates(args = {}) {
 }
 
 
+// Normalize/validate every booking's dates on a save patch, IN PLACE. For each
+// booking: resolve raw source date text to ISO via resolveEventDatesLegacy (date-
+// only events default to 12:00 PM noon, flagged in notes), or validate any caller-
+// supplied startDate/endDate as strict ISO/epoch, derive endDate from duration,
+// and check end>start. Returns an array of failure descriptors (empty = all clean).
+// Pure: orchestrates this module's own primitives, no session/DB/IO of its own.
+// The caller owns audit logging of the returned failures.
+async function normalizeBookingDatesForSave(patch) {
+    if (!Array.isArray(patch.bookings)) return [];
+    const failures = [];
 
-module.exports = { isStrictDateValue, strictDateToDate, resolveEventDatesLegacy, zipToTimezone, wallClockInZoneToEpoch, formatIsoWithZone, resolveEventDates };
+    for (const b of patch.bookings) {
+        const rawDateText = b.dateText || b.rawDate || b.eventDateText || b.eventDatePlaintext ||
+            (!isStrictDateValue(b.startDate) ? b.startDate : null);
+
+        if (rawDateText) {
+            const sourceUrl = b.sourceUrl || patch.sourceUrl || patch.url || null;
+            if (!sourceUrl) {
+                failures.push({ kind: 'booking_date', title: b.title || null, dateText: rawDateText, reason: 'missing_sourceUrl_for_date_resolution' });
+                continue;
+            }
+            const resolved = await resolveEventDatesLegacy({
+                text: [rawDateText, b.startTime, b.endTime].filter(Boolean).join(' '),
+                sourceUrl,
+                defaultDurationHours: b.defaultDurationHours ?? b.duration,
+                defaultStartTime: true   // date-only events default to 12:00 PM noon (flagged below)
+            });
+            if (!resolved.ok) {
+                failures.push({ kind: 'booking_date', title: b.title || null, dateText: rawDateText, sourceUrl, reason: resolved.errors.join(',') });
+                continue;
+            }
+            b.startDate = resolved.startIso;
+            b.endDate = resolved.endIso;
+            if (!b.startTime) b.startTime = resolved.startIso.slice(11, 16);
+            if (!b.endTime) b.endTime = resolved.endIso.slice(11, 16);
+            if (b.duration === undefined) b.duration = Math.round((resolved.et - resolved.st) / 3600000 * 100) / 100;
+            if (resolved.timeDefaulted) {
+                // The source gave a date but no clock time; we used noon. Record it
+                // on the Booking so enrichment can nail down the real start time.
+                const note = '[start time defaulted to 12:00 PM noon — exact time unconfirmed; refine via enrichment]';
+                b.notes = b.notes ? `${b.notes}\n${note}` : note;
+            }
+            continue;
+        }
+
+        if (b.startDate && !isStrictDateValue(b.startDate)) {
+            failures.push({ kind: 'booking_date', title: b.title || null, dateText: String(b.startDate), reason: 'startDate_not_strict_iso_or_epoch' });
+        }
+        if (b.endDate && !isStrictDateValue(b.endDate)) {
+            failures.push({ kind: 'booking_date', title: b.title || null, dateText: String(b.endDate), reason: 'endDate_not_strict_iso_or_epoch' });
+        }
+        if (b.startDate && !b.endDate && b.duration !== undefined && isStrictDateValue(b.startDate)) {
+            const start = strictDateToDate(b.startDate).getTime();
+            const durationHours = Number(b.duration);
+            if (Number.isFinite(durationHours) && durationHours > 0 && durationHours <= 24) {
+                b.endDate = new Date(start + Math.round(durationHours * 3600000)).toISOString();
+            }
+        }
+        if (b.startDate && b.endDate && isStrictDateValue(b.startDate) && isStrictDateValue(b.endDate)) {
+            const start = strictDateToDate(b.startDate).getTime();
+            const end = strictDateToDate(b.endDate).getTime();
+            if (end <= start) failures.push({ kind: 'booking_date', title: b.title || null, dateText: `${b.startDate}..${b.endDate}`, reason: 'end_not_after_start' });
+        }
+    }
+
+    return failures;
+}
+
+
+module.exports = { isStrictDateValue, strictDateToDate, resolveEventDatesLegacy, zipToTimezone, wallClockInZoneToEpoch, formatIsoWithZone, resolveEventDates, normalizeBookingDatesForSave };
