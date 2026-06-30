@@ -67,15 +67,19 @@ function cold(reason) {
  * @param {object} client  - Client row (name, email, draftStatus, sentAt, ...)
  * @param {object} booking - Booking row (location, zip, startDate, startTime,
  *                           trade, title, description, shared, sharedAt, leedId)
- * @param {object} opts    - { factletCount, now, futureMinHours, genericEmailPrefixes }
+ * @param {object} opts    - { now, futureMinHours, genericEmailPrefixes, orgNameTokens,
+ *                            mode, defaultTrade }. mode is 'outreach' | 'marketplace';
+ *                            defaultTrade is the VALUE_PROP trade used to INFER a missing
+ *                            booking trade in outreach mode (see the trade gate below).
  */
 function classify(client, booking, opts) {
     const o = opts || {};
     const now = typeof o.now === 'number' ? o.now : Date.now();
     const futureMinHours = typeof o.futureMinHours === 'number' ? o.futureMinHours : 12;
-    const factletCount = typeof o.factletCount === 'number' ? o.factletCount : 0;
     const prefixes = o.genericEmailPrefixes || [];
     const orgTokens = o.orgNameTokens || [];
+    const mode = o.mode || 'outreach';            // 'outreach' (lower bar) | 'marketplace' (strict)
+    const defaultTrade = o.defaultTrade || '';    // VALUE_PROP trade, for outreach inference
 
     // ---- COLD: nothing to judge ----
     // Acted upon -> recycle to cold (can warm again next cycle).
@@ -83,8 +87,6 @@ function classify(client, booking, opts) {
     if (client && (client.draftStatus === 'sent' || client.sentAt)) return cold('acted_on_outreach');
     // Event already passed.
     if (booking && booking.startDate && new Date(booking.startDate).getTime() < now) return cold('event_passed');
-    // No intelligence accumulated yet.
-    if (factletCount <= 0) return cold('no_factlets');
 
     // ---- HOT PREREQUISITES (all required) -> otherwise BREWING ----
     // MANDATORY authentic contact: a real PERSON (not an org/team/role) with a
@@ -112,12 +114,28 @@ function classify(client, booking, opts) {
         else if (st < now + futureMinHours * 3600 * 1000) missing.push('start_date_not_future_enough');
 
         if (!nonEmpty(booking.startTime)) missing.push('start_time');
-        if (!nonEmpty(booking.trade)) missing.push('trade');
+        // Trade gate is OBJECTIVE-AWARE. MARKETPLACE posting needs an EXPLICIT,
+        // confirmed trade -- you cannot list a leed in the wrong category. But for
+        // OUTREACH the trade can be INFERRED from VALUE_PROP (it's what the seller
+        // sells); the client hasn't asked for it yet -- the outreach email is how you
+        // find out. So in outreach mode a missing booking.trade is satisfied by the
+        // inferable default and does NOT block. booking.trade stays empty, which the
+        // marketplace share path separately refuses: outreach-ready, NOT marketplace-
+        // ready, until the trade is confirmed (the reply / enrichment writes it).
+        const tradeInferable = mode === 'outreach' && nonEmpty(defaultTrade);
+        if (!nonEmpty(booking.trade) && !tradeInferable) missing.push('trade');
         if (!nonEmpty(booking.title) && !nonEmpty(booking.description)) missing.push('title');
     }
 
-    if (missing.length) return { state: 'brewing', missing };
-    return { state: 'hot_eligible', missing: [] };
+    // Decide on FIELDS + event timing ONLY -- no factlet dependency. A complete lead
+    // is hot_eligible; an incomplete one is brewing (a real future event worth working
+    // to fill the missing fields). How MUCH enrichment work to spawn is the planner's
+    // job (per-type Task budgets), NOT the promotion classifier's. Mixing those two is
+    // what produced the stale-factlet false-veto: a 60-day-old post un-promoting a
+    // still-future lead. The filled fields ARE the intelligence; a future event does
+    // not decay because the post that announced it aged out of the recency window.
+    if (missing.length === 0) return { state: 'hot_eligible', missing: [] };
+    return { state: 'brewing', missing };
 }
 
 module.exports = { classify, isGenericEmail, isOrgName };

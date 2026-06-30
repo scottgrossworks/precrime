@@ -16,6 +16,9 @@ const WORKER_SKILL_MAP = {
     ENRICH_CLIENT:       'enrichment-agent.md',
     SCRAPE_SOURCE:       'url-loop.md',
     FIND_CLIENT_SOURCES: 'find-client-sources.md',
+    DISCOVER_SOURCES:    'discover-sources.md',
+    DRILL_DOWN:          'drill-down.md',
+    LAST_30_DAYS:        'last-30-days.md',
     DRAFT_OUTREACH:      'outreach-drafter.md'
 };
 

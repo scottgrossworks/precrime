@@ -69,4 +69,11 @@ if (cfg.apiKeys) {
     // launcher env IS the config -- no last30days .env file needed.
     emit('SCRAPECREATORS_API_KEY', cfg.apiKeys.scrapecreators);
     emit('XAI_API_KEY',            cfg.apiKeys.xai);
+    // X via the free Bird backend uses browser session cookies, not the xAI key.
+    emit('AUTH_TOKEN',             cfg.apiKeys.auth_token);
+    emit('CT0',                    cfg.apiKeys.ct0);
+    // last30days only queries sources named here. Default enables all; keyless
+    // sources (reddit/youtube/hackernews) run free, keyed ones use the keys above.
+    emit('INCLUDE_SOURCES', (cfg.last30days && cfg.last30days.includeSources)
+        || 'reddit,youtube,hackernews,instagram,tiktok,x,threads');
 }

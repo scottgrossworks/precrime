@@ -62,7 +62,7 @@ precrime__pipeline({ action:"add_sources", entries:[
 ]})
 ```
 
-Server dedups on URL. Do NOT write `fb_sources.md` (seed only).
+Server dedups on URL. Do NOT write source files by hand -- use `add_sources` (the server is the sole writer; it appends to data/sources/).
 
 ## Step 4 -- Mark Source
 

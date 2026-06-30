@@ -29,9 +29,18 @@ Process ONE already-claimed SCRAPE_SOURCE task, then stop. Never call `claim_tas
 ### default web (directory, blog, website, reddit, fb, ig, x, unknown)
 `tavily__tavily_extract({ url })`. Fails → complete `failed`.
 From content, extract only VALUE_PROP-relevant:
-- Clients: business/person records (sparse company-only allowed).
+- Clients: business/person records (sparse company-only allowed). A vendor/planner/venue
+  profile with no specific dated event is a CLIENT.
 - Factlets: reusable evidence (event date, buying occasion, venue/budget/market/demand signal) — see `skills/shared/factlet-rules.md`.
-- Bookings: only on a plausible booking opportunity.
+- **Bookings: a SPECIFIC UPCOMING DATED EVENT IS a booking — capture it.** If the page
+  names a real event with a FUTURE date + location (a con, festival, fair, expo, gala,
+  fundraiser, school/corporate event, party, "upcoming events" calendar entry, etc.),
+  create ONE Booking per dated event following `skills/shared/booking-detect.md`
+  (trade + `dateText` verbatim from the page + location/zip + `sourceUrl`; the server
+  resolves the date). Do NOT require a separate RFP/inquiry — the dated event is the
+  signal. A page listing many events (a con schedule, a festival calendar) yields many
+  bookings. Event calendars and individual profiles are equally valuable: don't skip
+  either.
 - New Sources: URLs likely to reveal more clients/factlets.
 - Feeds: detect feed links (`rel="alternate"`, `/feed`, `/rss.xml`, `/atom.xml`, `?feed=`, anchor RSS/Subscribe/Atom) → save `{ url:"<feedUrl>", channel:"rss", subtype:"feed", discoveredFrom:"<scraped url>" }`.
 
@@ -39,7 +48,7 @@ From content, extract only VALUE_PROP-relevant:
 `channel`. Drop posts whose `signal` (e.g. reddit→upvotes) is below `floor`; convert the
 highest-engagement posts first. `floor:0` channels (rss/directory/blog/website) keep everything.
 
-Do NOT write seed files (e.g. `rss_sources.md`) at runtime — runtime queue writes go through `add_sources`.
+Do NOT write source files by hand at runtime — writes go through `add_sources` (server is sole writer; it appends to data/sources/<channel>.md).
 
 ## Step 2 — Save findings (judge:false)
 Per Client/Booking/Factlet group:

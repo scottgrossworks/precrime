@@ -55,15 +55,31 @@ Do not create client or booking. Log `LEAD_CAPTURE_OFF` and move on.
 
 The trade name MUST come from `precrime__trades()`. Do not invent, paraphrase, or guess trade names. If the detected service doesn't match any trade in the list, do not create a booking.
 
-## Speculative / Exhibitor Exclusion (replaces archived convention-leed-pipeline)
+## Booking vs Client — capture dated events
 
-A Booking record represents an EVENT THAT REQUIRES VALUE_PROP, not a contact who might one day need it. Do NOT create a Booking when the source only proves the entity exists in a venue with a date. Specifically, exclude:
+**A specific upcoming dated event IS a Booking.** When a page names a real EVENT with
+a future date and a location — a comic con, festival, fair, expo, gala, fundraiser,
+grand opening, school or corporate event, party, etc. — create ONE Booking per dated
+event, even if no contact is attached yet. The dated event is itself the demand
+signal; you do NOT need a separate RFP or inquiry to prove it. A contact-less booking
+stays `brewing` and the enrichment loop chases the organizer's contact later.
+- Use `dateText` = the verbatim date copied from the page, plus `location`/`zip` and
+  `sourceUrl` (the live page that proves the event). The server resolves the date.
+- The event's host/organizer becomes the CLIENT to pitch (create it via
+  classify-contact.md and attach the booking to it).
 
-- Convention or expo exhibitors at a venue/date (their booth IS their event; they are not booking entertainment).
-- Vendor directory listings, "businesses in [city]" lists, conference attendee rosters.
-- Past-event recaps (the event already happened; no future booking to fill).
-- Any source that does not name a SPECIFIC UPCOMING EVENT where VALUE_PROP would be hired.
+**Create a CLIENT (not a Booking)** for an entity with NO specific dated event:
+- A vendor / planner / venue / business profile (e.g. a wedding planner's page).
+- A vendor-directory or "businesses in [city]" listing; a conference attendee or
+  exhibitor record (they are attending, not hosting an event that needs VALUE_PROP).
+These are real prospects — the Booking appears later if a dated event for them surfaces.
+Individual profiles and event calendars are equally valuable: profiles become clients,
+dated events become bookings; capture both.
 
-For these cases, create the CLIENT (via classify-contact.md) with dossier notes capturing the encounter. Let the enrichment loop attach factlets. The booking only appears later, if and when actual demand evidence is found (RFP, inquiry, past purchase of VALUE_PROP at a recurring event, etc.).
+**Exclude entirely:** PAST events (already happened), and events with no plausible fit
+for the trade.
 
-The cost of a wrong Booking is that it pollutes the queue with no demand signal. The Judge will hold it at `brewing` rather than `hot`, but the cleaner path is to not create the Booking in the first place.
+The cost of a MISSED dated event (silently dropping a real upcoming event) is worse
+than a speculative one: the Judge holds a contact-less event at `brewing` until it is
+enriched, but a dropped event is a hot leed you never see. When a page lists dated
+events, capture them.

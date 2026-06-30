@@ -34,8 +34,14 @@ const parser = new Parser();
 // Single source of truth — never duplicate feed lists into JSON.
 // Format per line: <url> | <name> | <category>   (# comments ignored)
 function loadFeedsFromSkill() {
-  const SOURCES_PATH = join(__dirname, '../../skills/rss-factlet-harvester/rss_sources.md');
-  const raw = readFileSync(SOURCES_PATH, 'utf8');
+  // Source lists are deployment data now: data/sources/rss.md (was skills/...).
+  const SOURCES_PATH = join(__dirname, '../../data/sources/rss.md');
+  let raw;
+  try {
+    raw = readFileSync(SOURCES_PATH, 'utf8');
+  } catch {
+    return [];  // no feeds yet -- discovery will populate data/sources/rss.md
+  }
   const feeds = [];
   for (const line of raw.split(/\r?\n/)) {
     const trimmed = line.trim();
@@ -56,7 +62,7 @@ CONFIG.feeds = loadFeedsFromSkill();
 console.error('='.repeat(60));
 console.error('Pre-Crime RSS Scorer MCP Server');
 console.error('='.repeat(60));
-console.error(`Feeds loaded from rss_sources.md: ${CONFIG.feeds.length}`);
+console.error(`Feeds loaded from data/sources/rss.md: ${CONFIG.feeds.length}`);
 console.error(`Global keywords: ${CONFIG.keywords.global.length}`);
 console.error(`Relevance threshold: ${CONFIG.processing.relevanceThreshold} points`);
 console.error('='.repeat(60));
@@ -181,8 +187,8 @@ async function fetchFeed(feedConfig) {
 // When feedUrlOverride is a non-empty string, fetch ONLY that one feed and
 // score it with the global keyword list (per-feed keywords deprecated). Lets
 // the SCRAPE_SOURCE worker process one runtime-discovered feed at a time --
-// the Source table in SQLite is the runtime queue; rss_sources.md remains
-// seed-only and is imported at startup via pipeline.import_sources.
+// the runtime queue is the markdown-backed source store (data/sources/rss.md),
+// which the main server reads and is the sole writer to.
 async function getTopArticles(limit = 6, feedUrlOverride = null) {
   const startTime = Date.now();
   const allArticles = [];
@@ -268,7 +274,7 @@ async function getTopArticles(limit = 6, feedUrlOverride = null) {
     const threshold = CONFIG.processing.relevanceThreshold;
     console.error(`  ZERO_ARTICLES_DIAG: feeds=${diag.feedsFetched}/${diag.feedsTotal} fetched (${diag.feedsFailed} failed), items_scored=${diag.itemsSeen}, max_score=${diag.maxScoreSeen} (threshold=${threshold})`);
     if (diag.feedsTotal === 0) {
-      console.error(`  LIKELY CAUSE: no feeds configured. Add entries to skills/rss-factlet-harvester/rss_sources.md and restart.`);
+      console.error(`  LIKELY CAUSE: no feeds configured. Add entries to data/sources/rss.md and restart.`);
     } else if (diag.feedsFetched === 0) {
       console.error(`  LIKELY CAUSE: every feed failed to fetch. Check network, or feed URLs may have moved. See errors above.`);
     } else if (diag.itemsSeen === 0) {
@@ -321,7 +327,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       const d = articles._diag;
       const threshold = CONFIG.processing.relevanceThreshold;
       let cause;
-      if (d.feedsTotal === 0)           cause = 'no feeds configured (edit skills/rss-factlet-harvester/rss_sources.md)';
+      if (d.feedsTotal === 0)           cause = 'no feeds configured (edit data/sources/rss.md)';
       else if (d.feedsFetched === 0)    cause = `all ${d.feedsTotal} feeds failed to fetch`;
       else if (d.itemsSeen === 0)       cause = 'feeds fetched but produced no items (blacklist or recency filter rejected all)';
       else if (d.maxScoreSeen < threshold) cause = `threshold too high — top article scored ${d.maxScoreSeen} (threshold=${threshold}). Lower relevanceThreshold in rss_config.json.`;

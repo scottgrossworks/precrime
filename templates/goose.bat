@@ -262,6 +262,11 @@ if errorlevel 1 (
 set "PRECRIME_WORKER_BIN=%USERPROFILE%\.local\bin\goose.exe"
 set "PRECRIME_WORKER_ARGS=run"
 set "PRECRIME_WORKER_INST_FLAG=--instructions"
+:: TOKEN ECONOMY: scope each spawned worker to ONLY the MCP extensions its task type
+:: needs (conductor.js gooseExtArgs) via --no-profile + --with-*. Without this, every
+:: worker loads all 6 config extensions' tool schemas on EVERY turn (gmail/rss it never
+:: calls + the heavy precrime pipeline description). Unset to revert to full extensions.
+set "PRECRIME_GOOSE_EXT_SCOPE=1"
 :: Start in its OWN window (NOT /B). /B shares goose's console, and the conductor's
 :: log writes collide with goose's interactive TUI -> goose's stdout handle goes bad
 :: and it dies with "The parameter is incorrect. (os error 87)". A separate window
@@ -315,4 +320,4 @@ exit /b 0
 
 :launch
 echo  Mode: %PRECRIME_MODE%   Objective: %PRECRIME_OBJECTIVE%
-"%USERPROFILE%\.local\bin\goose.exe" run --system "Read %~dp0GOOSE.md once via developer__shell type, then act on the trigger message in THIS turn: route per GOOSE.md and execute the matched skill end to end, calling each tool it lists in order. The trigger carries choice=workflow or choice=hot — honor it and do NOT print a menu. Reading a file is NOT acting: run every wizard step (status, import_sources, the config and trade gates, then plan_tasks for the chosen path) without yielding until the skill's stop point. Stay terse." -t "%GOOSE_TRIGGER%" -s
+"%USERPROFILE%\.local\bin\goose.exe" run --system "You are the Pre-Crime orchestrator on Goose. Do NOT read files first, do NOT print a menu, do NOT explain. Your FIRST tool call THIS TURN is mandatory and is the ONLY thing you must do: if the trigger contains choice=hot, call precrime__pipeline with action=plan_tasks mode=hot_only objective=%PRECRIME_OBJECTIVE%; otherwise call precrime__pipeline with action=plan_tasks mode=workflow objective=%PRECRIME_OBJECTIVE%. Make that tool call immediately as your very first action. When it returns, reply with exactly one line: Queue seeded -- conductor running; call report_session for a summary. Then STOP. Never call claim_task, never dispatch worker skills, never poll or loop -- the Node conductor owns all dispatch from here." -t "%GOOSE_TRIGGER%" -s

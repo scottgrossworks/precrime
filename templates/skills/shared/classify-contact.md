@@ -7,7 +7,7 @@ INPUT: a person or organization found during scraping
 
 0. BUYER ARCHETYPE GATE (BLOCKING). Check the candidate against VALUE_PROP "WHO IS NOT A BUYER".
    - Matches a SOURCE archetype (convention organizer, venue, directory, etc.) ->
-       do NOT save as Client. Queue the candidate's URL into the Source table via
+       do NOT save as Client. Queue the candidate’s URL into the source list via
        precrime__pipeline({ action: "add_sources", ... }). Log and move on.
    - Matches a SKIP archetype (competitor, past-event recap, equipment reseller, etc.) ->
        do NOT save. Log and move on.

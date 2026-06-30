@@ -10,7 +10,9 @@
     "openrouter": "",
     "tavily": "",
     "scrapecreators": "",
-    "xai": ""
+    "xai": "",
+    "auth_token": "",
+    "ct0": ""
   },
   "llm": {
     "provider": "openrouter",

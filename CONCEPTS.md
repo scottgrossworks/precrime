@@ -27,7 +27,7 @@ The role that surfaces actionable results to the user and routes an approved act
 One unit of queued work carrying a type, a target, and a claim. A Task is claimed atomically by exactly one Worker, runs to a terminal state (done, failed, or cancelled), and is retained as an audit trail. A claim left stale beyond a timeout becomes reclaimable by another Worker.
 
 ### Source
-A dereferenceable place to scrape for prospects — a directory, feed, page, or social account. Sources form a work-stealing queue and carry lineage: a Source discovered while scraping another records where it came from, which is how discovery recurses.
+A dereferenceable place to scrape for prospects — a directory, feed, page, or social account. The source list lives in per-channel markdown files under `data/sources/` (deployment data, the single source of truth); the server loads them into an in-memory index at startup and is the sole writer. A Source found by `DISCOVER_SOURCES` or while scraping another (recursion) is appended via `add_sources`, which is how discovery grows the list.
 
 ### Factlet
 A reusable piece of demand evidence — an event date, buying occasion, budget clue, or market trend — captured independently of any single Client, then matched to the Clients it mentions. A Factlet is standalone: it is not owned by a Client and may inform several.
@@ -36,6 +36,8 @@ A reusable piece of demand evidence — an event date, buying occasion, budget c
 
 ### Client
 A prospective buyer record, a person or an organization. Sparse company-only Clients are allowed; enrichment fills in the named person and a direct contact later.
+
+A Client is *live* when it has a future-dated Booking and *dead* otherwise. Enrichment and source-finding only ever touch live Clients — that selective work, not deletion, is the pruning ("prune the work, not the data"), so a Client is never removed just for going dead.
 
 ### dossier
 The accumulated, timestamped intelligence about one Client, written as permanent facts plus dated signals. It is the Client's memory and the raw material from which outreach is drafted.
@@ -49,3 +51,9 @@ The marketplace term for a shareable Booking opportunity posted to the external 
 
 ### Booking status — cold / brewing / hot
 The three classification states of a Booking. *cold* = missing a mandatory qualification; *brewing* = qualified but not yet judged a market fit; *hot* = the Judge confirmed it is actionable. Workers may demote a Booking to cold or brewing; only the Judge sets hot, and acting on a hot Booking returns it to cold.
+
+### near-hot booking
+A live (future-dated) Booking that is only one or two hot prerequisites short of qualifying — e.g. it has everything but a confirmed event time, or but a direct decision-maker email. Closeness is measured by how few prerequisites are still missing; the planner ranks near-hot bookings ahead of routine work and actively drills down on them.
+
+### drill-down
+The research-only act of closing a near-hot Booking: a focused task that hunts the Booking's *specific* missing fields (a direct contact, an event date/time, a venue zip, a named decision-maker) using search/extract tools, then saves them so the Judge can promote it. Drill-down never contacts anyone — outreach stays a separate, user-approved step.

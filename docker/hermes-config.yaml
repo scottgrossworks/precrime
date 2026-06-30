@@ -1,0 +1,145 @@
+# Pre-Crime Hermes Configuration — Docker
+# Last updated: 2026-04-17
+
+model: google/gemini-2.5-flash
+providers: {openrouter}
+fallback_providers: []
+credential_pool_strategies: {}
+
+toolsets:
+- hermes-cli
+- terminal
+- file
+- web
+
+mcp_servers:
+  precrime-mcp:
+    command: "node"
+    args: ["/precrime/server/mcp/mcp_server.js"]
+    env:
+      DATABASE_URL: "file:/db/myproject.sqlite"
+    timeout: 120
+    connect_timeout: 60
+  precrime-rss:
+    command: "node"
+    args: ["/precrime/rss/rss-scorer-mcp/index.js"]
+    cwd: "/precrime/rss/rss-scorer-mcp"
+    timeout: 60
+    connect_timeout: 30
+
+agent:
+  max_turns: 500
+  gateway_timeout: 1800
+  restart_drain_timeout: 60
+  service_tier: ""
+  tool_use_enforcement: auto
+  gateway_timeout_warning: 900
+  gateway_notify_interval: 600
+  verbose: false
+  reasoning_effort: medium
+  personalities:
+    precrime: >
+      You are an agentic enrichment engine operator. You run the Pre-Crime
+      pipeline - enriching business contacts, scoring warmth, composing outreach
+      drafts, evaluating quality, and capturing gig opportunities as Bookings.
+      You have 19 MCP tools via precrime-mcp (Prisma 5, SQLite). You classify
+      harvested items into four paths (Factlet, Dossier, Lead Capture thin,
+      Lead Capture hot). You follow skill playbooks exactly. No fluff, no
+      filler. Execute the pipeline.
+
+terminal:
+  backend: local
+  cwd: /precrime
+  timeout: 180
+  persistent_shell: true
+  lifetime_seconds: 300
+  env_passthrough: []
+
+browser:
+  inactivity_timeout: 120
+  command_timeout: 30
+  record_sessions: false
+  allow_private_urls: false
+
+web:
+  backend: tavily
+
+checkpoints:
+  enabled: true
+  max_snapshots: 50
+
+file_read_max_chars: 100000
+
+compression:
+  enabled: true
+  threshold: 0.5
+  target_ratio: 0.2
+  protect_last_n: 20
+
+auxiliary:
+  compression:
+    provider: openrouter
+    model: google/gemini-2.5-flash
+    base_url: ""
+    api_key: ""
+    timeout: 120
+
+display:
+  compact: false
+  personality: precrime
+  resume_display: full
+  busy_input_mode: interrupt
+  bell_on_complete: false
+  show_reasoning: false
+  streaming: true
+  inline_diffs: true
+  show_cost: false
+  skin: default
+  tool_progress: all
+  background_process_notifications: all
+
+privacy:
+  redact_pii: false
+
+context:
+  engine: compressor
+
+memory:
+  memory_enabled: true
+  user_profile_enabled: true
+  memory_char_limit: 2200
+  user_char_limit: 1375
+  nudge_interval: 10
+  flush_min_turns: 6
+
+delegation:
+  max_iterations: 50
+  default_toolsets:
+  - terminal
+  - file
+  - web
+  - hermes-cli
+
+skills:
+  external_dirs: ["/precrime/skills"]
+  creation_nudge_interval: 15
+
+approvals:
+  mode: auto
+  timeout: 60
+
+security:
+  redact_secrets: true
+
+logging:
+  level: INFO
+  max_size_mb: 5
+  backup_count: 3
+
+network:
+  force_ipv4: false
+
+workspace_dir: /precrime/
+max_context_tokens: 65536
+
+_config_version: 18

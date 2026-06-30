@@ -59,6 +59,7 @@ The skill file is the source of truth for that skill, not your prior knowledge.
   - `SCRAPE_SOURCE` -> `__PROJECT_ROOT__/skills/url-loop.md`
   - `ENRICH_CLIENT` -> `__PROJECT_ROOT__/skills/enrichment-agent.md`
   - `APPLY_FACTLET` -> `__PROJECT_ROOT__/skills/apply-factlet.md`
+  - `DRILL_DOWN` -> `__PROJECT_ROOT__/skills/drill-down.md` (close a near-hot booking: find its specific missing fields; research-only, never contacts anyone)
   - `SHOW_HOT_LEEDZ` -> `__PROJECT_ROOT__/skills/show-hot-leedz.md`
 - **Server-handled types**: `SHARE_BOOKING`, `JUDGE_AFFECTED`, `DISCOVER_SOURCES`. The orchestrator (`headless_flow.md`) calls `share_booking` / `judge_affected` / `tavily_search`+`add_sources` and completes the Task itself -- no worker skill exists for these.
 - **Outreach Task**: `DRAFT_OUTREACH` -> dispatched through `__PROJECT_ROOT__/skills/outreach-drafter.md`. The Planner only schedules `DRAFT_OUTREACH` when objective is `outreach` or `hybrid`. The drafter composes via Gmail and (in headless) saves a Gmail draft rather than auto-sending unless explicitly told otherwise.
@@ -94,12 +95,12 @@ Call these names verbatim. Do not invent variants. Do not call `precrime_mcp__*`
   1. Initialization -- a required config field is missing (company, seller email, trade). Owned by `init-wizard.md`.
   2. Per-leed share/email/skip in `show-hot-leedz.md` and `Post this leed?` confirmation before `share_booking(mode:"post")`.
   3. Irreversible external action -- before sending outreach email, posting to any third party.
-  4. Destructive local action -- before deleting DB rows or overwriting a manually edited `_sources.md` seed file.
+  4. Destructive local action -- before deleting DB rows or overwriting a manually edited `data/sources/<channel>.md` source file.
   **NEVER ask, in any mode:** "which source next", "should I save this", "is this lead good enough", "more X or Y", "should I keep going", "should I extract this URL". Those are owned by `plan_tasks` and the Task limits in `precrime_config.json`.
 - **Tool-call honesty.** When you claim a tool call succeeded, you MUST quote the literal `result` payload from the response. No paraphrase, no summary. Especially for `precrime__pipeline({ action:"share_booking", mode:"post" })` -- the user audits CloudWatch and DynamoDB. Faking a success wastes their time and breaks trust.
 - **No parallel sub-agents.** Run everything sequentially. Past parallel runs burned $25 in 13.5 minutes with zero output.
 - **`Booking.status` is owned by Judge.** Workers never write `status` directly except for terminal operational states owned elsewhere (`shared` from `share_booking`, `cancelled`, `expired`). Workers pass `judge:false` to `pipeline.save`; the Planner then enqueues a `JUDGE_AFFECTED` Task from the completed Task's `output.clientIds` / `output.bookingIds`.
-- **Source lists** live in the DB Source table at runtime. `init-wizard.md` Step 1.5 calls `pipeline.import_sources` which reads every `_sources.md` and `discovered_directories.md` seed file and bulk-inserts new URLs. The Planner then enqueues `SCRAPE_SOURCE` Tasks. Never `echo url >> _sources.md` at runtime -- the markdown seed files are read once at startup.
+- **Source lists** are the single source of truth in `data/sources/<channel>.md` (deployment data; the server reads them into an in-memory index at startup and is the SOLE writer). Discovery (`DISCOVER_SOURCES`) and scrape-time recursion call `pipeline.add_sources`; the server appends to the markdown and dedups on URL. The Planner enqueues `SCRAPE_SOURCE` Tasks from the loaded sources. Never hand-edit the files mid-run -- runtime writes go through `add_sources`.
 - **Config is truth.** Interactive mode never re-asks a value that is already set.
 
 ---

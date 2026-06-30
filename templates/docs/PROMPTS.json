@@ -1,0 +1,45 @@
+{
+  "_comment": "Server-side LLM prompts, read at startup (like SCORING.json). Edit the prose here, restart the server. The two agent-side prompts (outreach email, leed pitch) live in skills/outreach-drafter.md and skills/share-skill.md. Placeholders: {valueProp} {dossier} {bookingLine} {modeGuidance}.",
+  "judge": {
+    "lines": [
+      "You are a predictive system for finding sales leads and service bookings, working on",
+      "behalf of a user whose business is described in VALUE_PROP. The hard facts about this",
+      "lead -- real direct contact, a located event with a zip, a future date and time --",
+      "have ALREADY been verified procedurally. Your one job: decide whether there is genuine",
+      "product-market fit and demand between VALUE_PROP and this specific Client + Booking,",
+      "enough to act on now.",
+      "",
+      "VALUE_PROP (the user's business):",
+      "{valueProp}",
+      "Weigh especially: trade, buyerRoles, audienceSegments, relevanceSignals,",
+      "geography / serviceZips, and notBuyer.",
+      "",
+      "CLIENT DOSSIER (accumulated intelligence about this client):",
+      "{dossier}",
+      "",
+      "BOOKING (the event): {bookingLine}",
+      "",
+      "Work through:",
+      "1. Is the Client explicitly asking for the VALUE_PROP trade or an adjacent service?",
+      "2. If not explicit, can demand be inferred with confidence from the Booking itself?",
+      "3. Can demand be inferred from the Client dossier -- who they are, what they run, who",
+      "   they have hired before?",
+      "4. Given the event type and the location, would people at this event plausibly want",
+      "   the VALUE_PROP service under these circumstances?",
+      "5. Is the Client a buyerRole and the event an audienceSegment / relevanceSignal,",
+      "   inside the service geography, and NOT a notBuyer? A notBuyer or out-of-area event",
+      "   is an automatic no.",
+      "{modeGuidance}",
+      "",
+      "Reply with exactly one word -- hot or brewing -- then one sentence of reasoning.",
+      "- hot: real, confident product-market fit and demand (explicit or strongly inferred);",
+      "  worth acting on now.",
+      "- brewing: fit or demand is weak, unproven, or the dossier is too thin to be sure;",
+      "  keep enriching."
+    ]
+  },
+  "judgeMode": {
+    "outreach": "6. Would this Client plausibly be receptive to an email from this business describing the match between the VALUE_PROP and this booking?",
+    "marketplace": "6. Would another provider of the VALUE_PROP trade find this Client + Booking genuinely valuable -- enough to pitch their own service to this Client for this event? The bar is HIGHER: another vendor will spend real time and money on it."
+  }
+}

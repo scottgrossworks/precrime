@@ -65,6 +65,25 @@ function copyFile(src, dst) {
   console.log(`  ✓ ${path.relative(outputDir, dst)}`);
 }
 
+// Recursively copy a directory, skipping noise (.git, venv, caches, scratch).
+// Returns the number of files copied so the caller can report / FATAL on empty.
+function copyDirFiltered(src, dst, skip = new Set()) {
+  let n = 0;
+  for (const entry of fs.readdirSync(src, { withFileTypes: true })) {
+    if (skip.has(entry.name)) continue;
+    const s = path.join(src, entry.name);
+    const d = path.join(dst, entry.name);
+    if (entry.isDirectory()) {
+      n += copyDirFiltered(s, d, skip);
+    } else if (entry.isFile()) {
+      mkdir(path.dirname(d));
+      fs.copyFileSync(s, d);
+      n++;
+    }
+  }
+  return n;
+}
+
 function substitute(content, tokens) {
   let out = content;
   for (const [k, v] of Object.entries(tokens)) {
@@ -230,10 +249,11 @@ if (fs.existsSync(mcpSrc)) {
   console.warn('    Copy server/mcp/mcp_server.js into the generated workspace manually.');
 }
 
-// 2.1 Local modules required by mcp_server.js at startup (require('./classification'),
-// require('./value_prop'), require('./conductor'), require('./db')).
-// Without these the MCP server crashes immediately on startup.
-for (const mod of ['classification.js', 'value_prop.js', 'conductor.js', 'db.js', 'verify.js']) {
+// 2.1 Local modules required by mcp_server.js at startup (classification, verify,
+// value_prop, db, sourceStore, conductor). Without ALL of these the MCP server
+// crashes on startup ("Cannot find module") and the :5179 extension never connects.
+// Keep this list in sync with the require('./...') lines at the top of mcp_server.js.
+for (const mod of ['classification.js', 'value_prop.js', 'conductor.js', 'db.js', 'verify.js', 'sourceStore.js', 'dates.js', 'responses.js', 'runtime.js', 'find.js', 'share.js']) {
   const src = path.join(PRECRIME, 'server', 'mcp', mod);
   if (fs.existsSync(src)) {
     copyFile(src, path.join(outputDir, 'server', 'mcp', mod));
@@ -390,6 +410,26 @@ if (fs.existsSync(toolsSrc)) {
   process.exit(1);
 }
 
+// 2h. Copy the last30days research tool (powers the LAST_30_DAYS worker via
+// `python last30days/skills/last30days/scripts/last30days.py`). Pure-stdlib
+// (pyproject dependencies = []), so no pip install — shipping the code is enough.
+// Copy only the skills/ subtree (the runnable script + lib); skip .git/venv/
+// caches/scratch/tests. FATAL if missing or empty — LAST_30_DAYS can't run without it.
+const l30Src = path.join(PRECRIME, 'last30days', 'skills');
+const l30Dst = path.join(outputDir, 'last30days', 'skills');
+if (fs.existsSync(l30Src)) {
+  const skip = new Set(['.git', 'venv', '.venv', '__pycache__', 'node_modules', 'TMP', '.pytest_cache']);
+  const copied = copyDirFiltered(l30Src, l30Dst, skip);
+  if (copied === 0) {
+    console.error('  ✗ FATAL: PRECRIME/last30days/skills/ is empty — LAST_30_DAYS will not run');
+    process.exit(1);
+  }
+  console.log(`  ✓ last30days/skills/ — ${copied} files (LAST_30_DAYS research tool)`);
+} else {
+  console.error(`  ✗ FATAL: PRECRIME/last30days/skills/ missing — LAST_30_DAYS worker cannot run`);
+  process.exit(1);
+}
+
 // 3. Copy blank template DB — schema is already applied, no prisma db push needed at runtime
 const dbFile = (manifest.deployment.dbFile || `data/${(manifest.deployment.name||'project').toLowerCase()}.sqlite`);
 const dbDest = path.join(outputDir, dbFile);
@@ -436,8 +476,8 @@ write(path.join(outputDir, 'server', 'mcp', 'mcp_server_config.json'), JSON.stri
 copyTemplate('mcp.json', '.mcp.json', tokens);
 
 // 6. Generate rss_config.json (merge base template + manifest keywords)
-// NOTE: feeds are loaded by the RSS server from skills/rss-factlet-harvester/rss_sources.md,
-// NOT from this JSON. Any `feeds` field here is ignored at runtime.
+// NOTE: feeds are loaded by the RSS server from data/sources/rss.md (deployment
+// data), NOT from this JSON. Any `feeds` field here is ignored at runtime.
 const baseRssCfgPath = path.join(TMPL, 'rss_config.json');
 let rssCfg = JSON.parse(fs.readFileSync(baseRssCfgPath, 'utf8'));
 const mc = manifest.rssConfig || {};
@@ -491,7 +531,7 @@ if (fs.existsSync(baseIgCfgPath)) {
 // by channel from headless_flow / init-wizard. fb/ig need an interactive browser
 // MCP; x has a Tavily fallback so it also runs headless. reddit needs no browser
 // (handled by url-loop's default web branch), so it has no SKILL.md.
-// demand-radar.md: option-B seeder -- runs last30days on VALUE_PROP topics and
+// last-30-days.md: LAST_30_DAYS seeder -- runs last30days on VALUE_PROP topics and
 // feeds add_sources + factlets (see DOCS/wiki/concepts/recursive-loop.md).
 //
 // Intentionally NOT packaged (orphaned by the new architecture; only legacy
@@ -505,24 +545,32 @@ console.log('\nSkill playbooks:');
   ['skills/headless_flow.md',                 'skills/headless_flow.md'],
   ['skills/url-loop.md',                      'skills/url-loop.md'],
   ['skills/find-client-sources.md',           'skills/find-client-sources.md'],
+  ['skills/discover-sources.md',              'skills/discover-sources.md'],
+  ['skills/drill-down.md',                    'skills/drill-down.md'],
   ['skills/enrichment-agent.md',              'skills/enrichment-agent.md'],
   ['skills/apply-factlet.md',                 'skills/apply-factlet.md'],
   ['skills/show-hot-leedz.md',                'skills/show-hot-leedz.md'],
   ['skills/share-skill.md',                   'skills/share-skill.md'],
   ['skills/outreach-drafter.md',              'skills/outreach-drafter.md'],
   ['skills/client-finder.md',                 'skills/client-finder.md'],
-  ['skills/demand-radar.md',                  'skills/demand-radar.md'],
+  ['skills/last-30-days.md',                  'skills/last-30-days.md'],
   // Browser-channel SCRAPE_SOURCE workers (dispatched by channel):
   ['skills/fb-factlet-harvester/SKILL.md',    'skills/fb-factlet-harvester/SKILL.md'],
   ['skills/ig-factlet-harvester/SKILL.md',    'skills/ig-factlet-harvester/SKILL.md'],
   ['skills/x-factlet-harvester/SKILL.md',     'skills/x-factlet-harvester/SKILL.md'],
-  // Source seed files (read once at startup by pipeline.import_sources):
-  ['skills/rss-factlet-harvester/rss_sources.md',       'skills/rss-factlet-harvester/rss_sources.md'],
-  ['skills/fb-factlet-harvester/fb_sources.md',         'skills/fb-factlet-harvester/fb_sources.md'],
-  ['skills/reddit-factlet-harvester/reddit_sources.md', 'skills/reddit-factlet-harvester/reddit_sources.md'],
-  ['skills/ig-factlet-harvester/ig_sources.md',         'skills/ig-factlet-harvester/ig_sources.md'],
-  ['skills/x-factlet-harvester/x_sources.md',           'skills/x-factlet-harvester/x_sources.md'],
-  ['skills/source-discovery/discovered_directories.md', 'skills/source-discovery/discovered_directories.md'],
+  // Source lists are DEPLOYMENT DATA, not skill content: ship EMPTY placeholders
+  // under data/sources/. Each deployment grows its own list (the server is the
+  // sole writer and appends discoveries); the build never ships business-specific
+  // sources and never overwrites a deployment's grown list. The runtime store
+  // (server/mcp/sourceStore.js) reads data/sources/<channel>.md.
+  ['data/sources/directory.md', 'data/sources/directory.md'],
+  ['data/sources/rss.md',       'data/sources/rss.md'],
+  ['data/sources/fb.md',        'data/sources/fb.md'],
+  ['data/sources/ig.md',        'data/sources/ig.md'],
+  ['data/sources/reddit.md',    'data/sources/reddit.md'],
+  ['data/sources/x.md',         'data/sources/x.md'],
+  ['data/sources/website.md',   'data/sources/website.md'],
+  ['data/sources/blog.md',      'data/sources/blog.md'],
   ['skills/shared/booking-detect.md',        'skills/shared/booking-detect.md'],
   ['skills/shared/classify-contact.md',      'skills/shared/classify-contact.md'],
   ['skills/shared/factlet-rules.md',         'skills/shared/factlet-rules.md'],
@@ -561,14 +609,12 @@ DEPLOYMENT READY — ${outputDir}
 ${'='.repeat(65)}
 
 Next steps:
-  1. Fill in DOCS/VALUE_PROP.md (drives draft quality)
+  1. Fill in DOCS/VALUE_PROP.md (drives draft quality + source discovery)
   2. Review and tune skill files in skills/
-  3. Add RSS feeds: skills/rss-factlet-harvester/rss_sources.md
-  4. Add Facebook pages: skills/fb-factlet-harvester/fb_sources.md
-  5. Add Reddit subreddits: skills/reddit-factlet-harvester/reddit_sources.md
-  6. Add Instagram accounts/hashtags: ig/ig_config.json
-  7. Add X/Twitter sources: skills/x-factlet-harvester/x_sources.md
-  8. Unzip on target machine → cd precrime → precrime
+  3. (Optional) Seed scrape sources by hand in data/sources/<channel>.md
+     (directory|rss|fb|ig|reddit|x|website|blog) -- one URL per line. These
+     grow automatically as DISCOVER_SOURCES + recursion find more.
+  4. Unzip on target machine → cd precrime → precrime
 
 ${'='.repeat(65)}
 `);

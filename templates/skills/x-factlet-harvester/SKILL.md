@@ -54,7 +54,7 @@ precrime__pipeline({ action:"add_sources", entries:[
 ]})
 ```
 
-Every save MUST pass `judge:false`. Do not write `Booking.status`. Do NOT write `x_sources.md`.
+Every save MUST pass `judge:false`. Do not write `Booking.status`. Do NOT write source files by hand -- use `add_sources` (server is sole writer).
 
 ## Step 4 -- Mark Source
 

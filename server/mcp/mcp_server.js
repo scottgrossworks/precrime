@@ -87,16 +87,7 @@ try {
 
 // Runtime/API config (Subproject 10). Optional file; loader returns defaults
 // if absent so the server still boots during the transition.
-const { loadPrecrimeConfig, applyApiKeysToProcessEnv } = require(path.resolve(__dirname, '..', 'config', 'precrime_config.js'));
-const PRECRIME_CONFIG = loadPrecrimeConfig();
-if (PRECRIME_CONFIG.fallbacks && PRECRIME_CONFIG.fallbacks.length) {
-    for (const note of PRECRIME_CONFIG.fallbacks) {
-        console.error(`[MCP] precrime_config fallback: ${note}`);
-    }
-}
-// Internal plumbing only: some node libs (openai, anthropic, tavily) read
-// process.env.X at import time. Hydrate from config. Not user-facing.
-applyApiKeysToProcessEnv(PRECRIME_CONFIG);
+const { PRECRIME_CONFIG, RUNTIME_CONFIG, VALUE_PROP, SCORING, PROMPTS } = require('./runtime');
 
 if (!process.env.DATABASE_URL || process.env.DATABASE_URL === 'file:' || process.env.DATABASE_URL === 'file:undefined') {
     console.error('[MCP] FATAL: DATABASE_URL is not set or is empty.');
@@ -141,7 +132,14 @@ if (!fs.existsSync(dbPath)) {
 // Prisma singleton lives in db.js (one instance shared with conductor.js).
 // DATABASE_URL is already set above -- db.js picks it up at require() time.
 const { prisma } = require('./db');
+// Markdown is the single source of truth for scrape sources. The store owns the
+// per-channel files + an ephemeral in-memory index and is the sole writer.
+const { createSourceStore } = require('./sourceStore');
+const sourceStore = createSourceStore({ root: PRECRIME_ROOT });
 const { startConductor, armConductor } = require('./conductor');
+const dates = require('./dates');
+const { isStrictDateValue, strictDateToDate, resolveEventDatesLegacy, zipToTimezone, wallClockInZoneToEpoch, formatIsoWithZone, resolveEventDates } = dates;
+const { looksLikeJson, createSuccessResponse, createErrorResponse, sendJsonRpcResponse, safeJson } = require('./responses');
 console.error(`[MCP] Database: ${dbPath}`);
 
 // ============================================================================
@@ -210,62 +208,6 @@ function summarizeToolArgs(args = {}) {
     return summary;
 }
 
-// ============================================================================
-// JSON-RPC RESPONSE UTILITIES
-// ============================================================================
-
-/**
- * Check if text looks like JSON (starts with { or [)
- */
-function looksLikeJson(text) {
-    const trimmed = text.trim();
-    return trimmed.startsWith('{') || trimmed.startsWith('[');
-}
-
-/**
- * Create successful JSON-RPC response
- */
-function createSuccessResponse(id, text) {
-    return {
-        jsonrpc: '2.0',
-        id: id,
-        result: {
-            content: [{
-                type: 'text',
-                text: text
-            }]
-        }
-    };
-}
-
-/**
- * Create JSON-RPC error response
- */
-function createErrorResponse(id, code, message) {
-    return {
-        jsonrpc: '2.0',
-        id: id,
-        error: {
-            code: code,
-            message: message
-        }
-    };
-}
-
-/**
- * Send JSON-RPC response to stdout
- */
-function sendJsonRpcResponse(response) {
-    process.stdout.write(JSON.stringify(response) + '\n');
-}
-
-/**
- * JSON.stringify with BigInt safety. Prisma returns BigInt for Int64 fields
- * (e.g. sharedAt). Standard JSON.stringify throws on BigInt.
- */
-function safeJson(obj) {
-    return JSON.stringify(obj, (key, val) => typeof val === 'bigint' ? Number(val) : val, 2);
-}
 
 // ============================================================================
 // MCP PROTOCOL HANDLERS
@@ -327,7 +269,7 @@ function handleToolsList(id) {
                         '',
                         'action="add_sources": Bulk-insert new source URLs discovered during scraping. REQUIRED entries[] -- non-empty array of { url, channel, subtype?, label?, category?, discoveredFrom? }. Channel must be one of the eight allowed values. URLs are normalized to canonical form (handle/tag inputs like "@account" or "r/sub" become full URLs). Returns { added, duplicates, invalid[] }. Dedup is on URL. THIS REPLACES every "echo line >> *_sources.md" shell command in every harvester and source-discovery skill.',
                         '',
-                        'action="import_sources": One-time migration. Reads every seed file (skills/source-discovery/discovered_directories.md, skills/*-factlet-harvester/*_sources.md) and bulk-loads them into the Source table. Idempotent (dedup on URL). Run once at first deploy of Pass 2, or whenever a seed file is hand-edited and you want it picked up. Returns per-channel counts.'
+                        'action="import_sources": DEPRECATED. Markdown is the single source of truth: the server reads data/sources/<channel>.md into an in-memory index at startup, so there is no separate import step. This action just re-reads those files and returns the live per-channel counts. There is no Source table.'
                     ].join('\n'),
                     inputSchema: {
                         type: 'object',
@@ -631,110 +573,12 @@ function isGenericEmail(email) {
 // =============================================================================
 // Single source of truth. Edit DOCS/SCORING.json (constants, gates, weights),
 // restart the server. Nothing in this JS file hardcodes a scoring number.
-const SCORING_POLICY_PATH = path.resolve(PRECRIME_ROOT, 'DOCS', 'SCORING.json');
-let SCORING;
-try {
-    SCORING = JSON.parse(fs.readFileSync(SCORING_POLICY_PATH, 'utf8'));
-} catch (e) {
-    console.error(`[MCP] FATAL: DOCS/SCORING.json missing or malformed: ${e.message}`);
-    process.exit(1);
-}
 
 const FACTLET_THRESHOLD = SCORING.factlet.threshold;
 const FACTLET_POINTS_PER = SCORING.factlet.pointsPerFreshFactlet;
 const DRAFT_THRESHOLD_CLIENT = SCORING.client.draftThreshold;
 GENERIC_EMAIL_PREFIXES = new Set(SCORING.booking.genericEmailPrefixes || []);
 
-// VALUE_PROP profile -- the user's business, parsed from DOCS/VALUE_PROP.md and fed
-// to the LLM judge so it can reason about product-market fit. Warn (not fatal) when
-// incomplete, mirroring the TRADE-gate philosophy: a thin VALUE_PROP yields weak
-// judgments, but the server should still boot.
-const VALUE_PROP_PATH = path.resolve(PRECRIME_ROOT, 'DOCS', 'VALUE_PROP.md');
-let VALUE_PROP = { trade: '' };
-try {
-    VALUE_PROP = valueProp.parse(fs.readFileSync(VALUE_PROP_PATH, 'utf8'));
-    const vpCheck = valueProp.validate(VALUE_PROP);
-    if (!vpCheck.ok) console.error(`[MCP] VALUE_PROP.md incomplete: missing ${vpCheck.missing.join(', ')}. Fill in DOCS/VALUE_PROP.md.`);
-} catch (e) {
-    console.error(`[MCP] VALUE_PROP.md missing or unreadable: ${e.message}`);
-}
-
-// ============================================================================
-// RUNTIME_CONFIG -- in-memory replacement for the retired SQLite Config table.
-// ============================================================================
-// Built ONCE at startup. Identity (companyName / companyEmail /
-// businessDescription / signature / defaultTrade) derives from DOCS/VALUE_PROP.md;
-// LLM + recycler settings come from precrime_config.json; the marketplace policy
-// defaults and the createLeed session JWT are derived here exactly as the former
-// server/sync-config.js produced them when it mirrored VALUE_PROP into Config.
-// Any change requires a server restart -- there is no live reconfigure. The
-// `configure` MCP action is retired (edit VALUE_PROP.md or precrime_config.json).
-const LEEDZ_TRADES = ["activity party","airbrush","baker","balloons","bartender","braider","car detailer","caricatures","caterer","concessions","dancer","decor","dj","drones","esthetician","event rentals","eyelashes","face painter","flowers","gaming trailer","hair","henna","inflatables","juggler","lighting","magician","makeup","massage","musician","nails","photo booth","photographer","restrooms","security","tennis","tent rental","trainer","valet","videographer","yoga"];
-
-function _matchLeedzTrade(vp) {
-    const explicit = String(vp.trade || '').trim().toLowerCase();
-    let matched = LEEDZ_TRADES.find(t => explicit === t || (explicit && explicit.includes(t)));
-    if (!matched) {
-        // Fallback only to product/seller masthead, never relevance examples.
-        const hay = `${String(vp.product || '')} ${String(vp.seller || '')}`.toLowerCase();
-        matched = LEEDZ_TRADES.find(t => hay.includes(t));
-    }
-    return matched || '';
-}
-
-function _generateLeedzSession(email) {
-    if (!email) return null;
-    const crypto = require('crypto');
-    const secret = '648373eeea08d422032db0d1e61a1bc096fe08dd2729ce611092c7a1af15d09c';
-    const b64url = (obj) => Buffer.from(JSON.stringify(obj)).toString('base64url');
-    const header  = b64url({ alg: 'HS256', typ: 'JWT' });
-    const payload = b64url({ email, type: 'session', exp: Math.floor(Date.now() / 1000) + 365 * 24 * 3600 });
-    const sig = crypto.createHmac('sha256', secret).update(`${header}.${payload}`).digest('base64url');
-    return `${header}.${payload}.${sig}`;
-}
-
-function buildRuntimeConfig(vp, pcfg) {
-    const companyName  = (vp.seller && !/\[YOUR/i.test(vp.seller)) ? vp.seller : '';
-    const companyEmail = (vp.email  && !/\[YOUR/i.test(vp.email))  ? vp.email  : '';
-    const pitch        = (vp.pitch  && !/\[YOUR|\[Describe|\[FILL/i.test(vp.pitch)) ? vp.pitch : '';
-    const llm  = pcfg.llm || {};
-    const keys = pcfg.apiKeys || {};
-    const provider = (llm.provider || 'anthropic');
-    return Object.freeze({
-        // identity -- DOCS/VALUE_PROP.md is the sole source
-        companyName,
-        companyEmail,
-        businessDescription: pitch,
-        signature:           vp.signature || '',
-        defaultTrade:        _matchLeedzTrade(vp),
-        // marketplace policy (marketplace-only deployment; matches former sync-config.js)
-        defaultBookingAction: 'leedz_api',
-        leadCaptureEnabled:   true,
-        marketplaceEnabled:   true,
-        activeEntities:       JSON.stringify(["client", "booking"]),
-        leedzEmail:           companyEmail,
-        leedzSession:         _generateLeedzSession(companyEmail),
-        // LLM -- precrime_config.json (apiKey resolves from apiKeys[provider])
-        llmProvider:          provider,
-        llmModel:             llm.model || '',
-        llmBaseUrl:           llm.baseUrl || '',
-        llmApiKey:            keys[provider] || '',
-        llmAnthropicVersion:  llm.anthropicVersion || '2023-06-01',
-        // recycler -- precrime_config.json
-        factletStaleDays:     (pcfg.recycler && pcfg.recycler.factletStaleDays) || 180
-    });
-}
-
-const RUNTIME_CONFIG = buildRuntimeConfig(VALUE_PROP, PRECRIME_CONFIG);
-
-// Server-side LLM prompts (DOCS/PROMPTS.json). Edit the prose, restart the server.
-const PROMPTS_PATH = path.resolve(PRECRIME_ROOT, 'DOCS', 'PROMPTS.json');
-let PROMPTS = { judge: { lines: [] }, judgeMode: {} };
-try {
-    PROMPTS = JSON.parse(fs.readFileSync(PROMPTS_PATH, 'utf8'));
-} catch (e) {
-    console.error(`[MCP] DOCS/PROMPTS.json missing or malformed: ${e.message}`);
-}
 
 
 function getFactletStaleDays() {
@@ -1016,17 +860,21 @@ async function computeBookingTargetScore(bookingId) {
     const cfg = RUNTIME_CONFIG;
     const staleDays = getFactletStaleDays();
 
-    // Live factlet count drives the COLD "no_factlets" gate and feeds the client
-    // enrichment score below.
+    // Live factlets feed the client enrichment/dossier signal below (components +
+    // computeClientScore). They no longer gate promotion: classify() decides
+    // hot/brewing/cold on fields + event timing only (the stale-factlet veto is gone).
     const liveFactlets = client ? await findLiveFactletsForClient(client, staleDays) : [];
     const fs = computeFactletStats(liveFactlets, staleDays, { booking, config: cfg });
 
     // Procedural classification first (deterministic, no LLM): cold / brewing /
     // hot_eligible. See DOCS/CLASSIFICATION.md and classification.js.
     const futureMinHours = (SCORING.classification && SCORING.classification.futureMinHours) ?? 12;
+    // Mode + default trade drive the objective-aware trade gate: outreach can INFER a
+    // missing booking trade from VALUE_PROP; marketplace requires an explicit one.
+    const mode = bookingActionToMode(cfg && cfg.defaultBookingAction);
+    const defaultTrade = (VALUE_PROP && VALUE_PROP.trade) || (cfg && cfg.defaultTrade) || '';
     const proc = classification.classify(client, booking, {
-        factletCount: fs.count,
-        futureMinHours,
+        futureMinHours, mode, defaultTrade,
         genericEmailPrefixes: (SCORING.booking && SCORING.booking.genericEmailPrefixes) || [],
         orgNameTokens: (SCORING.classification && SCORING.classification.orgNameTokens) || []
     });
@@ -1037,7 +885,6 @@ async function computeBookingTargetScore(bookingId) {
     // Only a procedurally hot-eligible leed reaches the LLM. judgeLeed is the sole
     // promote-gate to hot, judging product-market fit (mode-aware).
     if (proc.state === 'hot_eligible') {
-        const mode = bookingActionToMode(cfg && cfg.defaultBookingAction);
         const verdict = await judgeLeed(VALUE_PROP, (client && client.dossier) || '', booking, mode, cfg);
         status = verdict.state;          // 'hot' or 'brewing'
         reason = verdict.reason || reason;
@@ -1199,21 +1046,6 @@ const BROWSER_ONLY_CHANNELS = ['fb', 'ig', 'x'];
 const URL_VERIFY_TIMEOUT_MS = 10000;
 const URL_VERIFY_TEXT_LIMIT = 500000;
 const URL_VERIFY_CHANNELS = new Set(['directory', 'rss', 'blog', 'website']);
-const MONTHS = {
-    january: 1, jan: 1,
-    february: 2, feb: 2,
-    march: 3, mar: 3,
-    april: 4, apr: 4,
-    may: 5,
-    june: 6, jun: 6,
-    july: 7, jul: 7,
-    august: 8, aug: 8,
-    september: 9, sept: 9, sep: 9,
-    october: 10, oct: 10,
-    november: 11, nov: 11,
-    december: 12, dec: 12
-};
-const MONTH_PATTERN = Object.keys(MONTHS).sort((a, b) => b.length - a.length).join('|');
 
 function isHttpUrl(value) {
     return typeof value === 'string' && /^https?:\/\//i.test(value.trim());
@@ -1236,435 +1068,6 @@ function looksLikeHomepageRedirect(originalUrl, finalUrl) {
     const final = compactUrlForCompare(finalUrl);
     if (!original || !final) return false;
     return original.host === final.host && original.path !== '/' && final.path === '/';
-}
-
-
-function isStrictDateValue(value) {
-    if (value instanceof Date) return !Number.isNaN(value.getTime());
-    if (typeof value === 'number') return value > 1700000000000 && value < 2200000000000;
-    const s = String(value || '').trim();
-    if (!s) return false;
-    if (/^\d{13}$/.test(s)) return true;
-    return /^\d{4}-\d{2}-\d{2}(?:[T\s]\d{2}:\d{2}(?::\d{2}(?:\.\d{3})?)?(?:Z)?)?$/.test(s);
-}
-
-function strictDateToDate(value) {
-    if (value instanceof Date) return value;
-    if (typeof value === 'number' || /^\d{13}$/.test(String(value || '').trim())) {
-        return new Date(Number(value));
-    }
-    return new Date(String(value).trim());
-}
-
-function cleanDateText(text) {
-    return String(text || '')
-        .replace(/\b(\d{1,2})(st|nd|rd|th)\b/gi, '$1')
-        .replace(/[–—]/g, '-')
-        .replace(/\s+/g, ' ')
-        .trim();
-}
-
-function daysInMonthUtc(year, month) {
-    return new Date(Date.UTC(year, month, 0)).getUTCDate();
-}
-
-function validYmd(year, month, day) {
-    return year >= 2024 && year <= 2035 &&
-        month >= 1 && month <= 12 &&
-        day >= 1 && day <= daysInMonthUtc(year, month);
-}
-
-function parseTimeToken(hourRaw, minRaw, meridiemRaw, fallbackMeridiem) {
-    let hour = Number(hourRaw);
-    const minute = minRaw === undefined || minRaw === '' ? 0 : Number(minRaw);
-    const meridiem = (meridiemRaw || fallbackMeridiem || '').toLowerCase();
-    if (hour < 1 || hour > 23 || minute < 0 || minute > 59) return null;
-    if (meridiem) {
-        if (hour < 1 || hour > 12) return null;
-        if (meridiem === 'am') hour = hour === 12 ? 0 : hour;
-        if (meridiem === 'pm') hour = hour === 12 ? 12 : hour + 12;
-    }
-    return { hour, minute };
-}
-
-function extractTimeRange(text) {
-    const s = cleanDateText(text);
-    const range = s.match(/\b(\d{1,2})(?::(\d{2}))?\s*(am|pm|a\.m\.|p\.m\.)?\s*(?:-|to|until|through)\s*(\d{1,2})(?::(\d{2}))?\s*(am|pm|a\.m\.|p\.m\.)\b/i);
-    if (range) {
-        const endMeridiem = range[6].replace(/\./g, '').toLowerCase();
-        const startMeridiem = range[3] ? range[3].replace(/\./g, '').toLowerCase() : endMeridiem;
-        const start = parseTimeToken(range[1], range[2], startMeridiem);
-        const end = parseTimeToken(range[4], range[5], endMeridiem);
-        if (start && end) return { start, end, evidence: range[0] };
-    }
-
-    const single = s.match(/\b(?:at|from)?\s*(\d{1,2})(?::(\d{2}))?\s*(am|pm|a\.m\.|p\.m\.)\b/i);
-    if (single) {
-        const start = parseTimeToken(single[1], single[2], single[3].replace(/\./g, '').toLowerCase());
-        if (start) return { start, end: null, evidence: single[0] };
-    }
-
-    return null;
-}
-
-function extractDateParts(text) {
-    const s = cleanDateText(text);
-    const yearMatch = s.match(/\b(20\d{2})\b/);
-    if (!yearMatch) return { error: 'missing_year' };
-    const year = Number(yearMatch[1]);
-
-    let m = s.match(new RegExp(`\\b(${MONTH_PATTERN})\\s+(\\d{1,2})\\s*-\\s*(\\d{1,2})\\s*,?\\s*${year}\\b`, 'i'));
-    if (m) {
-        const month = MONTHS[m[1].toLowerCase()];
-        const startDay = Number(m[2]);
-        const endDay = Number(m[3]);
-        if (validYmd(year, month, startDay) && validYmd(year, month, endDay) && endDay >= startDay) {
-            return { year, startMonth: month, startDay, endMonth: month, endDay, evidence: m[0] };
-        }
-    }
-
-    m = s.match(new RegExp(`\\b(${MONTH_PATTERN})\\s+(\\d{1,2})\\s*,?\\s*${year}\\s*-\\s*(${MONTH_PATTERN})\\s+(\\d{1,2})\\s*,?\\s*${year}\\b`, 'i'));
-    if (m) {
-        const startMonth = MONTHS[m[1].toLowerCase()];
-        const startDay = Number(m[2]);
-        const endMonth = MONTHS[m[3].toLowerCase()];
-        const endDay = Number(m[4]);
-        if (validYmd(year, startMonth, startDay) && validYmd(year, endMonth, endDay)) {
-            return { year, startMonth, startDay, endMonth, endDay, evidence: m[0] };
-        }
-    }
-
-    m = s.match(new RegExp(`\\b(${MONTH_PATTERN})\\s+(\\d{1,2})\\s*,?\\s*${year}\\b`, 'i'));
-    if (m) {
-        const month = MONTHS[m[1].toLowerCase()];
-        const day = Number(m[2]);
-        if (validYmd(year, month, day)) {
-            return { year, startMonth: month, startDay: day, endMonth: month, endDay: day, evidence: m[0] };
-        }
-    }
-
-    m = s.match(/\b(\d{1,2})\/(\d{1,2})\/(20\d{2})\b/);
-    if (m) {
-        const month = Number(m[1]);
-        const day = Number(m[2]);
-        const numericYear = Number(m[3]);
-        if (validYmd(numericYear, month, day)) {
-            return { year: numericYear, startMonth: month, startDay: day, endMonth: month, endDay: day, evidence: m[0] };
-        }
-    }
-
-    return { error: 'no_supported_date_pattern' };
-}
-
-function leedzWallClockEpoch(year, month, day, hour, minute) {
-    return Date.UTC(year, month - 1, day, hour, minute, 0);
-}
-
-function monthNamesForProof(month) {
-    const full = Object.keys(MONTHS).find(k => MONTHS[k] === month && k.length > 3) || '';
-    const short = Object.keys(MONTHS).find(k => MONTHS[k] === month && k.length === 3) || '';
-    return [full, short].filter(Boolean);
-}
-
-// Legacy text-only date resolver. Internal-only. Still used by
-// normalizeBookingDatesForSave to keep older legacy save callers working.
-// The MCP `resolve_dates` action no longer exposes this path -- see
-// resolveEventDatesStructured below for the structured, tz-aware replacement.
-async function resolveEventDatesLegacy(args = {}) {
-    const text = cleanDateText(args.text || args.dateText || args.rawDate || '');
-    if (!text) return { ok: false, errors: ['missing_text'] };
-
-    const date = extractDateParts(text);
-    if (date.error) return { ok: false, errors: [date.error] };
-
-    const times = extractTimeRange(text);
-    const durationHours = args.defaultDurationHours === undefined ? null : Number(args.defaultDurationHours);
-    if (!times || !times.start) return { ok: false, errors: ['missing_start_time'] };
-
-    let endTime = times.end;
-    let explicitDuration = false;
-    if (!endTime && Number.isFinite(durationHours) && durationHours > 0 && durationHours <= 24) {
-        explicitDuration = true;
-    } else if (!endTime) {
-        return { ok: false, errors: ['missing_end_time_or_defaultDurationHours'] };
-    }
-
-    const st = leedzWallClockEpoch(date.year, date.startMonth, date.startDay, times.start.hour, times.start.minute);
-    let et = endTime
-        ? leedzWallClockEpoch(date.year, date.endMonth, date.endDay, endTime.hour, endTime.minute)
-        : st + Math.round(durationHours * 60 * 60 * 1000);
-    if (et <= st && endTime && date.startDay === date.endDay && date.startMonth === date.endMonth) {
-        et = leedzWallClockEpoch(date.year, date.endMonth, date.endDay + 1, endTime.hour, endTime.minute);
-    }
-    if (et <= st) return { ok: false, errors: ['end_not_after_start'] };
-    if (st < Date.now()) return { ok: false, errors: ['start_in_past'] };
-
-    const resolved = {
-        ok: true,
-        st,
-        et,
-        startIso: new Date(st).toISOString(),
-        endIso: new Date(et).toISOString(),
-        display: `${new Date(st).toISOString()} to ${new Date(et).toISOString()}`,
-        year: date.year,
-        startMonth: date.startMonth,
-        startDay: date.startDay,
-        endMonth: date.endMonth,
-        endDay: date.endDay,
-        evidence: {
-            date: date.evidence,
-            time: times.evidence,
-            explicitDuration
-        }
-    };
-
-    return resolved;
-}
-
-// ============================================================================
-// STRUCTURED DATE RESOLUTION (Phase 5)
-// ============================================================================
-// LLMs hand-computing st/et caused production bugs. The contract for the
-// MCP `resolve_dates` action is now structured-only: the caller passes
-// year/month/day/hour/minute/ampm for both start and end, plus an explicit
-// IANA timezone (or, in the future, a zip-to-tz map). The server computes
-// the offset for that wall-clock instant in that zone via Intl.DateTimeFormat
-// and returns canonical epoch ms.
-// No text parsing. No timezone smuggled in rawText. No epoch math by the LLM.
-// ============================================================================
-
-// IANA tz validation via Intl. Returns true iff Node accepts the zone.
-function isValidIanaTimezone(tz) {
-    if (typeof tz !== 'string' || !tz.trim()) return false;
-    try {
-        new Intl.DateTimeFormat('en-US', { timeZone: tz });
-        return true;
-    } catch (_) {
-        return false;
-    }
-}
-
-// Deterministic US ZIP -> IANA timezone resolver.
-// Used by share_booking to derive the marketplace event timezone from
-// Booking.zip at leed creation time. There is no user-configurable timezone.
-//
-// Coverage is by 3-digit ZIP prefix range. Boundaries are approximate at zone
-// edges (parts of FL panhandle, TN/KY/IN/MI splits, west TX, OR/ID border)
-// because zone lines do not follow ZIP3 ranges cleanly. The dominant zone for
-// each range wins. Returns an IANA name on a confident hit, null otherwise --
-// share_booking then refuses to post with error:"unresolved_location_timezone".
-function zipToTimezone(zip) {
-    if (zip == null) return null;
-    const z = String(zip).trim().slice(0, 5);
-    if (!/^\d{5}$/.test(z)) return null;
-    const n = parseInt(z.slice(0, 3), 10);
-
-    // Pacific
-    if (n >= 900 && n <= 961) return 'America/Los_Angeles';     // CA
-    if (n >= 970 && n <= 979) return 'America/Los_Angeles';     // OR
-    if (n >= 980 && n <= 994) return 'America/Los_Angeles';     // WA
-    if (n >= 889 && n <= 898) return 'America/Los_Angeles';     // NV (Pacific)
-    // Alaska + Hawaii
-    if (n >= 967 && n <= 968) return 'Pacific/Honolulu';        // HI (no DST)
-    if (n >= 995 && n <= 999) return 'America/Anchorage';       // AK
-
-    // Mountain
-    if (n >= 800 && n <= 831) return 'America/Denver';          // CO / WY
-    if (n >= 832 && n <= 838) return 'America/Denver';          // ID (most)
-    if (n >= 840 && n <= 847) return 'America/Denver';          // UT
-    if (n >= 850 && n <= 865) return 'America/Phoenix';         // AZ (no DST)
-    if (n >= 870 && n <= 884) return 'America/Denver';          // NM
-    if (n >= 590 && n <= 599) return 'America/Denver';          // MT
-
-    // Central
-    if (n >= 500 && n <= 528) return 'America/Chicago';         // IA
-    if (n >= 530 && n <= 549) return 'America/Chicago';         // WI
-    if (n >= 550 && n <= 567) return 'America/Chicago';         // MN
-    if (n >= 570 && n <= 577) return 'America/Chicago';         // SD
-    if (n >= 580 && n <= 588) return 'America/Chicago';         // ND
-    if (n >= 600 && n <= 629) return 'America/Chicago';         // IL
-    if (n >= 630 && n <= 658) return 'America/Chicago';         // MO
-    if (n >= 660 && n <= 679) return 'America/Chicago';         // KS
-    if (n >= 680 && n <= 693) return 'America/Chicago';         // NE
-    if (n >= 700 && n <= 714) return 'America/Chicago';         // LA
-    if (n >= 716 && n <= 729) return 'America/Chicago';         // AR
-    if (n >= 730 && n <= 749) return 'America/Chicago';         // OK
-    if (n >= 750 && n <= 799) return 'America/Chicago';         // TX (most; western edge actually Mountain)
-    if (n >= 350 && n <= 369) return 'America/Chicago';         // AL
-    if (n >= 386 && n <= 397) return 'America/Chicago';         // MS
-    if (n >= 370 && n <= 385) return 'America/Chicago';         // TN (most are Central)
-
-    // Eastern
-    if (n >= 1   && n <= 199) return 'America/New_York';        // Northeast (MA/NH/RI/CT/VT/ME/NY/NJ/PA/PR)
-    if (n >= 200 && n <= 268) return 'America/New_York';        // DC/MD/VA/WV
-    if (n >= 270 && n <= 289) return 'America/New_York';        // NC
-    if (n >= 290 && n <= 299) return 'America/New_York';        // SC
-    if (n >= 300 && n <= 319) return 'America/New_York';        // GA
-    if (n >= 320 && n <= 349) return 'America/New_York';        // FL (most; western Panhandle is Central — minority)
-    if (n >= 400 && n <= 427) return 'America/New_York';        // KY (most)
-    if (n >= 430 && n <= 459) return 'America/New_York';        // OH
-    if (n >= 460 && n <= 479) return 'America/Indiana/Indianapolis'; // IN (most observe Eastern)
-    if (n >= 480 && n <= 499) return 'America/Detroit';         // MI
-
-    return null;
-}
-
-// Compute the timezone offset (in minutes east of UTC) that applies to the
-// given UTC instant in the given IANA zone. Used iteratively to convert a
-// wall-clock-in-zone to a UTC epoch (handles DST). Algorithm:
-//   1. Treat (year,month,day,hour,minute) as if it were UTC -> guess epoch.
-//   2. Format that epoch in the target zone and read the offset.
-//   3. Subtract offset to get the true UTC epoch for the wall clock.
-function tzOffsetMinutes(utcEpochMs, timeZone) {
-    // Use the en-US 'longOffset' formatter to read the offset string (e.g.
-    // "GMT-07:00") that applies in the zone at that instant.
-    const fmt = new Intl.DateTimeFormat('en-US', {
-        timeZone,
-        timeZoneName: 'longOffset',
-        hour: 'numeric'
-    });
-    const parts = fmt.formatToParts(new Date(utcEpochMs));
-    const tzPart = parts.find(p => p.type === 'timeZoneName');
-    if (!tzPart) return 0;
-    const m = /GMT([+-])(\d{1,2})(?::(\d{2}))?/.exec(tzPart.value);
-    if (!m) return 0;
-    const sign = m[1] === '-' ? -1 : 1;
-    const h = parseInt(m[2], 10);
-    const mn = parseInt(m[3] || '0', 10);
-    return sign * (h * 60 + mn);
-}
-
-// Convert a wall-clock-in-zone to a UTC epoch ms. DST-safe via two passes:
-// the first pass guesses with the UTC offset of the naive timestamp; the
-// second pass corrects using the offset that actually applies at the guessed
-// instant. One re-correction is enough for any IANA zone.
-function wallClockInZoneToEpoch(year, month, day, hour, minute, timeZone) {
-    const naive = Date.UTC(year, month - 1, day, hour, minute, 0);
-    const off1 = tzOffsetMinutes(naive, timeZone);
-    const guess = naive - off1 * 60 * 1000;
-    const off2 = tzOffsetMinutes(guess, timeZone);
-    return naive - off2 * 60 * 1000;
-}
-
-// Render an ISO-8601 string with the supplied zone's offset, e.g.
-// "2026-06-10T21:30:00-07:00". The wall-clock fields are echoed verbatim.
-function formatIsoWithZone(year, month, day, hour, minute, timeZone, epochMs) {
-    const off = tzOffsetMinutes(epochMs, timeZone);
-    const sign = off >= 0 ? '+' : '-';
-    const absOff = Math.abs(off);
-    const oh = Math.floor(absOff / 60);
-    const om = absOff % 60;
-    const pad = (n, w) => String(n).padStart(w, '0');
-    return `${pad(year, 4)}-${pad(month, 2)}-${pad(day, 2)}T${pad(hour, 2)}:${pad(minute, 2)}:00${sign}${pad(oh, 2)}:${pad(om, 2)}`;
-}
-
-// Validate one structured date piece. Returns { ok, hour24, errors[] } where
-// hour24 is the canonical 0-23 hour computed from hour + optional ampm.
-function validateDatePart(label, part) {
-    const errors = [];
-    if (!part || typeof part !== 'object') {
-        errors.push(`${label}:missing`);
-        return { ok: false, errors };
-    }
-    const { year, month, day, hour, minute, ampm } = part;
-    if (!Number.isInteger(year) || year < 1970 || year > 9999) errors.push(`${label}.year:invalid`);
-    if (!Number.isInteger(month) || month < 1 || month > 12) errors.push(`${label}.month:invalid`);
-    if (!Number.isInteger(day) || day < 1 || day > 31) errors.push(`${label}.day:invalid`);
-    if (!Number.isInteger(minute) || minute < 0 || minute > 59) errors.push(`${label}.minute:invalid`);
-
-    let hour24 = null;
-    if (ampm === undefined || ampm === null || ampm === '') {
-        // 24-hour mode: hour must be 0..23
-        if (!Number.isInteger(hour) || hour < 0 || hour > 23) errors.push(`${label}.hour:invalid`);
-        else hour24 = hour;
-    } else {
-        const ap = String(ampm).trim().toUpperCase();
-        if (ap !== 'AM' && ap !== 'PM') {
-            errors.push(`${label}.ampm:invalid`);
-        } else if (!Number.isInteger(hour) || hour < 1 || hour > 12) {
-            errors.push(`${label}.hour:invalid_for_ampm`);
-        } else {
-            hour24 = (hour % 12) + (ap === 'PM' ? 12 : 0);
-        }
-    }
-
-    // Calendar validity: day-in-month using Date round-trip.
-    if (errors.length === 0) {
-        const d = new Date(Date.UTC(year, month - 1, day));
-        if (d.getUTCFullYear() !== year || d.getUTCMonth() !== month - 1 || d.getUTCDate() !== day) {
-            errors.push(`${label}.day:not_in_month`);
-        }
-    }
-
-    return { ok: errors.length === 0, errors, hour24 };
-}
-
-// New structured resolver. Used by MCP action `resolve_dates` and by
-// share_booking when assembling the marketplace payload.
-async function resolveEventDates(args = {}) {
-    const warnings = [];
-    const errors = [];
-
-    // 1. Reject anything that smuggles timezone in rawText only.
-    let timezone = typeof args.timezone === 'string' ? args.timezone.trim() : '';
-    const zip = typeof args.zip === 'string' ? args.zip.trim() : '';
-    if (!timezone) {
-        // Zip-to-tz lookup is not supported in this phase. The spec explicitly
-        // forbids inventing a zip-to-tz DB.
-        if (zip) {
-            errors.push('timezone:missing_zip_only_derivation_unsupported');
-        } else {
-            errors.push('timezone:missing');
-        }
-    } else if (!isValidIanaTimezone(timezone)) {
-        errors.push('timezone:not_iana');
-    }
-
-    // 2. Validate structured start/end. rawText is informational only.
-    const startV = validateDatePart('start', args.start);
-    const endV   = validateDatePart('end',   args.end);
-    errors.push(...startV.errors, ...endV.errors);
-
-    if (errors.length > 0) {
-        return { ok: false, errors };
-    }
-
-    // 3. Compute epoch ms using IANA-zone wall-clock conversion.
-    const startEpoch = wallClockInZoneToEpoch(
-        args.start.year, args.start.month, args.start.day,
-        startV.hour24, args.start.minute, timezone
-    );
-    const endEpoch = wallClockInZoneToEpoch(
-        args.end.year, args.end.month, args.end.day,
-        endV.hour24, args.end.minute, timezone
-    );
-
-    // 4. Overnight rule: end<=start with a different day field is accepted
-    // as overnight; same-day end<=start is rejected.
-    if (endEpoch <= startEpoch) {
-        const sameDay = args.start.year === args.end.year &&
-                        args.start.month === args.end.month &&
-                        args.start.day === args.end.day;
-        if (sameDay) {
-            return { ok: false, errors: ['end:not_after_start_same_day'] };
-        }
-        warnings.push('overnight_end_before_start');
-        // The structured `day` already encodes the next-day intent; if epochs
-        // still invert, the caller's day is wrong.
-        return { ok: false, errors: ['end:not_after_start_different_day'] };
-    }
-
-    return {
-        ok: true,
-        st: startEpoch,
-        et: endEpoch,
-        startIso: formatIsoWithZone(args.start.year, args.start.month, args.start.day, startV.hour24, args.start.minute, timezone, startEpoch),
-        endIso:   formatIsoWithZone(args.end.year,   args.end.month,   args.end.day,   endV.hour24,   args.end.minute,   timezone, endEpoch),
-        timezone,
-        zip: zip || null,
-        warnings,
-        sourceProof: args.sourceProof || null
-    };
 }
 
 
@@ -1758,71 +1161,31 @@ function inferSubtype(input, channel) {
 }
 
 async function pipelineNextSource(id, channel, maxAgeDays, sessionId) {
-    const ageDays = (typeof maxAgeDays === 'number' && maxAgeDays > 0) ? maxAgeDays : 30;
-    const cutoff = new Date(Date.now() - ageDays * 24 * 60 * 60 * 1000);
-    const claimTimeout = new Date(Date.now() - 10 * 60 * 1000); // 10-min stale claim
-
+    // Markdown-backed. Sources are assigned from the in-memory index; scrape-state
+    // is ephemeral (every run starts fresh, which is correct for demand-sensing),
+    // so maxAgeDays no longer gates re-scrape. Default excludes browser-only
+    // channels (fb/ig/x) unless one is explicitly requested.
     if (channel && !VALID_CHANNELS.has(channel)) {
         return createErrorResponse(id, -32602,
             `next_source: invalid channel "${channel}". Must be one of: ${[...VALID_CHANNELS].join(', ')}.`);
     }
-
     try {
-        // Find a candidate: unscraped + unclaimed, OR unscraped + stale claim, OR scrapedAt older than cutoff.
-        // When channel is not specified, default to excluding browser-only channels
-        // (fb / ig / x) -- those need real browsers and burn the loop via Tavily.
-        // Agents that explicitly want browser channels pass channel:"fb"/"ig"/"x".
-        const channelFilter = channel
-            ? { channel }
-            : { channel: { notIn: BROWSER_ONLY_CHANNELS } };
-
-        const where = {
-            AND: [
-                channelFilter,
-                {
-                    OR: [
-                        { scrapedAt: null, claimedAt: null },
-                        { scrapedAt: null, claimedAt: { lt: claimTimeout } },
-                        { scrapedAt: { lt: cutoff } }
-                    ]
-                }
-            ]
-        };
-
-        const candidate = await prisma.source.findFirst({
-            where,
-            orderBy: [{ scrapedAt: 'asc' }, { discoveredAt: 'asc' }]
-        });
-
-        if (!candidate) {
+        const claim = sourceStore.nextSource(channel);
+        if (claim.status !== 'CLAIMED') {
             return createSuccessResponse(id, JSON.stringify({
                 status: 'QUEUE_EMPTY',
                 channel: channel || 'any',
                 hint: 'Call pipeline.plan_tasks({mode:"workflow"}) to enqueue a DISCOVER_SOURCES Task, or seed via pipeline.add_sources, then retry.'
             }));
         }
-
-        // Claim it. The unique URL constraint means two agents racing will both see the same row,
-        // but only one update will win the natural ordering -- worst case the loser scrapes a
-        // freshly-claimed source and add_sources merges as duplicate.
-        await prisma.source.update({
-            where: { id: candidate.id },
-            data: {
-                claimedAt: new Date(),
-                claimedBy: sessionId || null
-            }
-        });
-
         return createSuccessResponse(id, JSON.stringify({
             status: 'CLAIMED',
-            id: candidate.id,
-            url: candidate.url,
-            channel: candidate.channel,
-            subtype: candidate.subtype,
-            label: candidate.label,
-            category: candidate.category,
-            discoveredFrom: candidate.discoveredFrom,
-            previouslyScrapedAt: candidate.scrapedAt
+            id: claim.url,            // markdown store has no row id; the URL is the key
+            url: claim.url,
+            channel: claim.channel,
+            subtype: claim.subtype,
+            label: claim.label,
+            category: claim.category
         }));
     } catch (err) {
         return createErrorResponse(id, -32603, `next_source failed: ${err.message}`);
@@ -1836,17 +1199,9 @@ async function pipelineMarkSource(id, url, scrapedAt, clientsFound, failedReason
 
     try {
         const markedAt = scrapedAt ? new Date(scrapedAt) : new Date();
-        const result = await prisma.source.updateMany({
-            where: { url },
-            data: {
-                scrapedAt: markedAt,
-                clientsFound: typeof clientsFound === 'number' ? clientsFound : 0,
-                failedReason: failedReason || null,
-                claimedAt: null,
-                claimedBy: null
-            }
-        });
-        if (result.count === 0) {
+        const cf = typeof clientsFound === 'number' ? clientsFound : 0;
+        const result = sourceStore.markSource(url, { clientsFound: cf, failedReason: failedReason || null });
+        if (result.status === 'NOT_FOUND') {
             return createErrorResponse(id, -32602, `mark_source: no source with url "${url}".`);
         }
 
@@ -1854,7 +1209,7 @@ async function pipelineMarkSource(id, url, scrapedAt, clientsFound, failedReason
         // from "agent scraped but URLs yielded no clients".
         await logSessionEvent(sessionId, 'source_marked', {
             url,
-            clientsFound: typeof clientsFound === 'number' ? clientsFound : 0,
+            clientsFound: cf,
             failed: !!failedReason
         });
 
@@ -1862,7 +1217,7 @@ async function pipelineMarkSource(id, url, scrapedAt, clientsFound, failedReason
             marked: true,
             url,
             scrapedAt: markedAt.toISOString(),
-            clientsFound: typeof clientsFound === 'number' ? clientsFound : 0,
+            clientsFound: cf,
             failedReason: failedReason || null
         }));
     } catch (err) {
@@ -1878,6 +1233,10 @@ async function pipelineAddSources(id, entries) {
 
     const results = { added: 0, duplicates: 0, invalid: [] };
 
+    // Validate + verify per entry here (so we keep the per-entry invalid[] reasons
+    // and URL verification), then hand the survivors to the store, which is the
+    // sole writer to the markdown files and owns dedup.
+    const verified = [];
     for (const e of entries) {
         if (!e || !e.url || !e.channel) {
             results.invalid.push({ entry: e, reason: 'missing url or channel' });
@@ -1899,116 +1258,39 @@ async function pipelineAddSources(id, entries) {
                 continue;
             }
         }
-        try {
-            await prisma.source.create({
-                data: {
-                    url,
-                    channel: e.channel,
-                    subtype: e.subtype || inferSubtype(e.url, e.channel),
-                    label: e.label || null,
-                    category: e.category || null,
-                    discoveredFrom: e.discoveredFrom || null
-                }
-            });
-            results.added++;
-        } catch (err) {
-            if (err.code === 'P2002') {
-                results.duplicates++;
-            } else {
-                results.invalid.push({ entry: e, reason: err.message });
-            }
-        }
+        verified.push({
+            url,
+            channel: e.channel,
+            subtype: e.subtype || inferSubtype(e.url, e.channel),
+            label: e.label || null,
+            category: e.category || null
+        });
+    }
+
+    try {
+        const stored = sourceStore.addSources(verified);
+        results.added += stored.added;
+        results.duplicates += stored.duplicates;
+        // stored.invalid should be 0 (entries were pre-validated); fold defensively.
+        if (stored.invalid) results.invalid.push({ reason: `store_rejected:${stored.invalid}` });
+    } catch (err) {
+        return createErrorResponse(id, -32603, `add_sources failed: ${err.message}`);
     }
 
     return createSuccessResponse(id, JSON.stringify(results));
 }
 
 async function pipelineImportSources(id) {
-    // Read all known seed files under skills/ and bulk-add to Source table.
-    // Idempotent: dedup on URL via add_sources logic.
-    const seedFiles = [
-        { rel: 'skills/source-discovery/discovered_directories.md', channel: 'directory', format: 'directory' },
-        { rel: 'skills/rss-factlet-harvester/rss_sources.md',       channel: 'rss',       format: 'rss' },
-        { rel: 'skills/fb-factlet-harvester/fb_sources.md',         channel: 'fb',        format: 'plain' },
-        { rel: 'skills/ig-factlet-harvester/ig_sources.md',         channel: 'ig',        format: 'handle' },
-        { rel: 'skills/reddit-factlet-harvester/reddit_sources.md', channel: 'reddit',    format: 'handle' },
-        { rel: 'skills/x-factlet-harvester/x_sources.md',           channel: 'x',         format: 'handle' }
-    ];
-
-    const summary = { byChannel: {}, total_added: 0, total_duplicates: 0, total_invalid: 0 };
-
-    for (const sf of seedFiles) {
-        const fullPath = path.resolve(PRECRIME_ROOT, sf.rel);
-        if (!fs.existsSync(fullPath)) {
-            summary.byChannel[sf.channel] = { missing: true };
-            continue;
-        }
-
-        const lines = fs.readFileSync(fullPath, 'utf8')
-            .split('\n')
-            .map(l => l.trim())
-            .filter(l => l && !l.startsWith('#'));
-
-        const entries = [];
-        for (const line of lines) {
-            if (sf.format === 'directory') {
-                const parts = line.split('|').map(p => p.trim());
-                if (!parts[0]) continue;
-                entries.push({
-                    url: parts[0],
-                    channel: 'directory',
-                    subtype: parts[1] || 'directory',
-                    category: parts[1] || null
-                });
-            } else if (sf.format === 'rss') {
-                const parts = line.split('|').map(p => p.trim());
-                if (!parts[0]) continue;
-                entries.push({
-                    url: parts[0],
-                    channel: 'rss',
-                    subtype: 'feed',
-                    label: parts[1] || null,
-                    category: parts[2] || null
-                });
-            } else if (sf.format === 'handle') {
-                entries.push({
-                    url: line,
-                    channel: sf.channel,
-                    subtype: inferSubtype(line, sf.channel)
-                });
-            } else { // plain
-                entries.push({ url: line, channel: sf.channel });
-            }
-        }
-
-        // Reuse add_sources logic by inlining it -- but we want per-file accounting.
-        let added = 0, duplicates = 0, invalid = 0;
-        for (const e of entries) {
-            const url = normalizeSourceUrl(e.url, e.channel);
-            if (!url) { invalid++; continue; }
-            try {
-                await prisma.source.create({
-                    data: {
-                        url,
-                        channel: e.channel,
-                        subtype: e.subtype || null,
-                        label: e.label || null,
-                        category: e.category || null
-                    }
-                });
-                added++;
-            } catch (err) {
-                if (err.code === 'P2002') duplicates++;
-                else invalid++;
-            }
-        }
-        summary.byChannel[sf.channel] = { added, duplicates, invalid, total_lines: lines.length };
-        summary.total_added += added;
-        summary.total_duplicates += duplicates;
-        summary.total_invalid += invalid;
-    }
-
-    return createSuccessResponse(id, JSON.stringify(summary, null, 2));
+    // DEPRECATED. Markdown is now the runtime source of truth: the store reads
+    // every channel file at startup, so there is no separate "import" step. Kept
+    // as a shim that re-reads the files and returns the live counts, so any
+    // caller still wired to import_sources keeps working instead of erroring.
+    const counts = sourceStore.load();
+    return createSuccessResponse(id, JSON.stringify({
+        deprecated: true,
+        note: 'Sources load from markdown at startup; import_sources just re-reads the files.',
+        loaded: counts
+    }, null, 2));
 }
 
 /**
@@ -2215,15 +1497,13 @@ async function pipelineWorkStatus(id) {
     const staleThreshold = new Date(Date.now() - STALE_HOURS * 60 * 60 * 1000);
     const CHANNELS = ['directory', 'rss', 'fb', 'reddit', 'ig', 'x', 'blog', 'website'];
 
-    // Source counts by channel
+    // Source counts by channel, from the markdown-backed store (in-memory).
+    // Scrape-state is ephemeral, so there is no cross-run "stale" bucket.
+    const storeByChannel = sourceStore.counts().byChannel;
     const sources = {};
     for (const ch of CHANNELS) {
-        const [ready, claimed, stale] = await Promise.all([
-            prisma.source.count({ where: { channel: ch, scrapedAt: null, claimedAt: null } }),
-            prisma.source.count({ where: { channel: ch, claimedAt: { not: null }, scrapedAt: null } }),
-            prisma.source.count({ where: { channel: ch, scrapedAt: { lt: staleThreshold } } })
-        ]);
-        sources[ch] = { ready, claimed, stale };
+        const c = storeByChannel[ch] || { ready: 0, claimed: 0 };
+        sources[ch] = { ready: c.ready || 0, claimed: c.claimed || 0, stale: 0 };
     }
 
     // Client counts
@@ -2429,16 +1709,17 @@ async function normalizeBookingDatesForSave(sessionId, patch) {
         if (rawDateText) {
             const sourceUrl = b.sourceUrl || patch.sourceUrl || patch.url || null;
             if (!sourceUrl) {
-                failures.push({ kind: 'booking_date', title: b.title || null, reason: 'missing_sourceUrl_for_date_resolution' });
+                failures.push({ kind: 'booking_date', title: b.title || null, dateText: rawDateText, reason: 'missing_sourceUrl_for_date_resolution' });
                 continue;
             }
             const resolved = await resolveEventDatesLegacy({
                 text: [rawDateText, b.startTime, b.endTime].filter(Boolean).join(' '),
                 sourceUrl,
-                defaultDurationHours: b.defaultDurationHours ?? b.duration
+                defaultDurationHours: b.defaultDurationHours ?? b.duration,
+                defaultStartTime: true   // date-only events default to 12:00 PM noon (flagged below)
             });
             if (!resolved.ok) {
-                failures.push({ kind: 'booking_date', title: b.title || null, sourceUrl, reason: resolved.errors.join(',') });
+                failures.push({ kind: 'booking_date', title: b.title || null, dateText: rawDateText, sourceUrl, reason: resolved.errors.join(',') });
                 continue;
             }
             b.startDate = resolved.startIso;
@@ -2446,14 +1727,20 @@ async function normalizeBookingDatesForSave(sessionId, patch) {
             if (!b.startTime) b.startTime = resolved.startIso.slice(11, 16);
             if (!b.endTime) b.endTime = resolved.endIso.slice(11, 16);
             if (b.duration === undefined) b.duration = Math.round((resolved.et - resolved.st) / 3600000 * 100) / 100;
+            if (resolved.timeDefaulted) {
+                // The source gave a date but no clock time; we used noon. Record it
+                // on the Booking so enrichment can nail down the real start time.
+                const note = '[start time defaulted to 12:00 PM noon — exact time unconfirmed; refine via enrichment]';
+                b.notes = b.notes ? `${b.notes}\n${note}` : note;
+            }
             continue;
         }
 
         if (b.startDate && !isStrictDateValue(b.startDate)) {
-            failures.push({ kind: 'booking_date', title: b.title || null, reason: 'startDate_not_strict_iso_or_epoch' });
+            failures.push({ kind: 'booking_date', title: b.title || null, dateText: String(b.startDate), reason: 'startDate_not_strict_iso_or_epoch' });
         }
         if (b.endDate && !isStrictDateValue(b.endDate)) {
-            failures.push({ kind: 'booking_date', title: b.title || null, reason: 'endDate_not_strict_iso_or_epoch' });
+            failures.push({ kind: 'booking_date', title: b.title || null, dateText: String(b.endDate), reason: 'endDate_not_strict_iso_or_epoch' });
         }
         if (b.startDate && !b.endDate && b.duration !== undefined && isStrictDateValue(b.startDate)) {
             const start = strictDateToDate(b.startDate).getTime();
@@ -2465,7 +1752,7 @@ async function normalizeBookingDatesForSave(sessionId, patch) {
         if (b.startDate && b.endDate && isStrictDateValue(b.startDate) && isStrictDateValue(b.endDate)) {
             const start = strictDateToDate(b.startDate).getTime();
             const end = strictDateToDate(b.endDate).getTime();
-            if (end <= start) failures.push({ kind: 'booking_date', title: b.title || null, reason: 'end_not_after_start' });
+            if (end <= start) failures.push({ kind: 'booking_date', title: b.title || null, dateText: `${b.startDate}..${b.endDate}`, reason: 'end_not_after_start' });
         }
     }
 
@@ -2658,6 +1945,8 @@ async function pipelineSave(id, clientId, patch, sessionId, judge, factletId) {
     if (dateFailures.length > 0) {
         await logSessionEvent(sessionId, 'save_failed', {
             error: 'bad_booking_date',
+            name: patch.company || patch.name || null,
+            source: patch.source || patch.sourceUrl || patch.url || null,
             failures: dateFailures
         });
         return createErrorResponse(id, -32602,
@@ -3052,362 +2341,14 @@ async function pipelineJudgeAffected(id, args) {
 // ============================================================================
 // SHARE BOOKING -- the only sanctioned marketplace posting path (Phase 5)
 // ============================================================================
-// share_booking is the ONLY normal way to push a Booking to the Leedz
-// marketplace. The LLM is not allowed to supply st/et. The MCP loads the
-// Booking, rescores via Judge, demands status==hot, then converts the Booking's
-// ALREADY-VERIFIED wall-clock dates (set + source-checked at enrichment) to a
-// tz-correct epoch -- it does NOT re-resolve or re-verify. mode:"draft" returns
-// the payload; mode:"post" posts to Leedz and persists leedId/sharedAt/status.
-// ============================================================================
-
-const LEEDZ_REMOTE_URL = 'https://jjz8op6uy4.execute-api.us-west-2.amazonaws.com/Leedz_Stage_1/mcp';
-
-// Look up the objective recorded on the most-recent active Session (falls back
-// to the most-recent finished Session within the last hour, so a freshly-closed
-// outreach run still blocks a stray share_booking call). Returns null if no
-// session has a recorded objective -- legacy / no-Planner callers stay
-// permissive so this gate is defense in depth, not a regression.
-async function getActiveSessionObjective() {
-    try {
-        const active = await prisma.session.findFirst({
-            where:   { status: 'active' },
-            orderBy: { startedAt: 'desc' }
-        });
-        const sess = active || await prisma.session.findFirst({
-            where: {
-                status:     { in: ['complete', 'abandoned'] },
-                finishedAt: { gte: new Date(Date.now() - 60 * 60 * 1000) }
-            },
-            orderBy: { finishedAt: 'desc' }
-        });
-        if (!sess || !sess.metadata) return null;
-        let meta;
-        try { meta = JSON.parse(sess.metadata); } catch (_) { return null; }
-        const obj = meta && meta.objective;
-        if (!obj || !VALID_OBJECTIVES.has(obj)) return null;
-        return obj;
-    } catch (_) {
-        return null;
-    }
-}
-
-const SHARE_DRAFT_LIMITS = { titleDraft: 120, dtDraft: 1000, rqDraft: 1000 };
-
-function normalizeShareTime(value) {
-    const raw = String(value || '').trim();
-    if (!raw) return null;
-    const m = raw.match(/\b(\d{1,2})(?::(\d{2}))?\s*(AM|PM)?\b/i);
-    if (!m) return null;
-    let hour = parseInt(m[1], 10);
-    const minute = m[2] ? parseInt(m[2], 10) : 0;
-    const ampm = m[3] ? m[3].toUpperCase() : null;
-    if (ampm === 'PM' && hour < 12) hour += 12;
-    if (ampm === 'AM' && hour === 12) hour = 0;
-    return `${String(hour).padStart(2, '0')}:${String(minute).padStart(2, '0')}`;
-}
-
-function validateShareDraftField(name, value, booking) {
-    if (value === undefined || value === null || value === '') return { ok: true, value: null };
-    if (typeof value !== 'string') return { ok: false, reason: `${name}:must_be_string` };
-
-    const text = value.trim().replace(/\s+/g, ' ');
-    if (!text) return { ok: true, value: null };
-    if (text.length > SHARE_DRAFT_LIMITS[name]) return { ok: false, reason: `${name}:too_long` };
-
-    if (name === 'titleDraft' && /[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}/i.test(text)) return { ok: false, reason: `${name}:contains_email` };
-    if (name === 'titleDraft' && /(?:\+?1[\s.-]?)?(?:\(?\d{3}\)?[\s.-]?)\d{3}[\s.-]?\d{4}\b/.test(text)) return { ok: false, reason: `${name}:contains_phone` };
-    if (/\b\d{10,13}\b/.test(text)) return { ok: false, reason: `${name}:contains_epoch_like_number` };
-    if (/\b(cn|em|ph|st|et|zp|lc|tn|pr|sh)\s*[:=]/i.test(text)) return { ok: false, reason: `${name}:looks_like_payload_field` };
-
-    const years = new Set([booking.startDate, booking.endDate]
-        .filter(Boolean)
-        .map(d => new Date(d).getFullYear()));
-    const yearHits = text.match(/\b(?:19|20)\d{2}\b/g) || [];
-    for (const y of yearHits) {
-        if (!years.has(parseInt(y, 10))) return { ok: false, reason: `${name}:unsupported_year_${y}` };
-    }
-
-    const monthNames = [
-        ['january', 'jan'], ['february', 'feb'], ['march', 'mar'], ['april', 'apr'],
-        ['may'], ['june', 'jun'], ['july', 'jul'], ['august', 'aug'],
-        ['september', 'sep', 'sept'], ['october', 'oct'], ['november', 'nov'], ['december', 'dec']
-    ];
-    const allowedMonths = new Set([booking.startDate, booking.endDate]
-        .filter(Boolean)
-        .map(d => new Date(d).getMonth()));
-    const lower = text.toLowerCase();
-    for (let i = 0; i < monthNames.length; i++) {
-        if (monthNames[i].some(m => new RegExp(`\\b${m}\\b`, 'i').test(lower)) && !allowedMonths.has(i)) {
-            return { ok: false, reason: `${name}:unsupported_month_${monthNames[i][0]}` };
-        }
-    }
-
-    const timeHits = text.match(/\b\d{1,2}(?::\d{2})?\s*(?:AM|PM|am|pm)\b/g) || [];
-    if (timeHits.length > 0) {
-        const allowedTimes = new Set([normalizeShareTime(booking.startTime), normalizeShareTime(booking.endTime)].filter(Boolean));
-        if (allowedTimes.size === 0) return { ok: false, reason: `${name}:time_claim_without_booking_time` };
-        for (const t of timeHits) {
-            if (!allowedTimes.has(normalizeShareTime(t))) return { ok: false, reason: `${name}:unsupported_time_${t}` };
-        }
-    }
-
-    return { ok: true, value: text };
-}
-
-function validateShareDrafts(args, booking) {
-    const out = {};
-    const errors = [];
-    for (const name of ['titleDraft', 'dtDraft', 'rqDraft']) {
-        const result = validateShareDraftField(name, args[name], booking);
-        if (!result.ok) errors.push(result.reason);
-        else if (result.value) out[name] = result.value;
-    }
-    return { ok: errors.length === 0, errors, drafts: out };
-}
-
-async function pipelineShareBooking(id, args) {
-    // 1. Forbid LLM-supplied epochs by name.
-    if (args.st !== undefined) {
-        return createErrorResponse(id, -32602,
-            'share_booking: forbidden input "st". The LLM is not allowed to supply marketplace epoch ms. ' +
-            'Provide structured start/end fields and let MCP compute st/et.');
-    }
-    if (args.et !== undefined) {
-        return createErrorResponse(id, -32602,
-            'share_booking: forbidden input "et". The LLM is not allowed to supply marketplace epoch ms. ' +
-            'Provide structured start/end fields and let MCP compute st/et.');
-    }
-
-    const bookingId = args.bookingId;
-    const mode      = args.mode;
-    if (!bookingId) return createErrorResponse(id, -32602, 'share_booking: bookingId required.');
-    if (mode !== 'draft' && mode !== 'post') {
-        return createErrorResponse(id, -32602, 'share_booking: mode must be "draft" or "post".');
-    }
-
-    // 1.5. Defense in depth -- if the active session's objective is 'outreach',
-    // refuse marketplace posting even if a caller bypasses the Planner. The
-    // Planner already declines to schedule SHARE_BOOKING under outreach; this
-    // gate catches direct calls (manual test scripts, stale interactive flows,
-    // a future skill that forgets the rule). Legacy sessions with no recorded
-    // objective fall through (helper returns null).
-    const activeObjective = await getActiveSessionObjective();
-    if (activeObjective === 'outreach') {
-        return createSuccessResponse(id, JSON.stringify({
-            mode,
-            posted: false,
-            error: 'share_booking_under_outreach_objective',
-            activeObjective,
-            hint: 'Active session objective is "outreach"; marketplace posting is disabled. Re-run with --marketplace or --hybrid.'
-        }, null, 2));
-    }
-
-    // 2. Load booking + client.
-    const booking = await prisma.booking.findUnique({ where: { id: bookingId } });
-    if (!booking) {
-        return createErrorResponse(id, -32602, `share_booking: bookingId not found: ${bookingId}`);
-    }
-    const client = await prisma.client.findUnique({ where: { id: booking.clientId } });
-    if (!client) {
-        return createErrorResponse(id, -32603, `share_booking: client not found for booking ${bookingId}`);
-    }
-
-    // 3. Rescore via the canonical Judge before publishing.
-    const judged = await judgeAffected({
-        clientIds:   [client.id],
-        bookingIds:  [booking.id],
-        reason:      'share_booking',
-        writeStatus: true
-    });
-    const fresh = await prisma.booking.findUnique({ where: { id: bookingId } });
-
-    if (fresh.status !== 'hot') {
-        return createSuccessResponse(id, JSON.stringify({
-            mode,
-            posted: false,
-            error: 'booking_not_hot',
-            currentStatus: fresh.status,
-            judgedStatus: fresh.status,
-            judgedChanged: judged.changed
-        }, null, 2));
-    }
-
-    // 3b. share-ready gate: client must have a real named contact + direct
-    // non-generic email. This is the contactGate flag set by computeClientScore.
-    if (!client.contactGate) {
-        return createSuccessResponse(id, JSON.stringify({
-            mode,
-            posted: false,
-            error: 'share_ready_gate_fail',
-            missing: ['client.contactGate'],
-            hint: 'Client must have a real named contact and a direct non-generic email before sharing. Enrich the Client and retry.'
-        }, null, 2));
-    }
-
-    // 3c. Booking must have a description (the marketplace listing requires it).
-    if (!fresh.description || !String(fresh.description).trim()) {
-        return createSuccessResponse(id, JSON.stringify({
-            mode,
-            posted: false,
-            error: 'share_ready_gate_fail',
-            missing: ['booking.description'],
-            hint: 'Booking must have a description before sharing. Add a description and retry.'
-        }, null, 2));
-    }
-
-    // 4. Derive timezone from Booking.zip. No user-supplied timezone path.
-    //    Booking.zip is mandatory for marketplace sharing; if missing or unmappable
-    //    we refuse to post with a clear non-posting response.
-    const cfg = RUNTIME_CONFIG;
-    if (!fresh.zip || !String(fresh.zip).trim()) {
-        return createSuccessResponse(id, JSON.stringify({
-            mode,
-            posted: false,
-            error: 'share_ready_gate_fail',
-            missing: ['booking.zip'],
-            hint: 'Booking must carry a 5-digit US zip before sharing. Enrich the Booking with location data and retry.'
-        }, null, 2));
-    }
-    const tz = zipToTimezone(fresh.zip);
-    if (!tz) {
-        return createSuccessResponse(id, JSON.stringify({
-            mode,
-            posted: false,
-            error: 'unresolved_location_timezone',
-            zip: String(fresh.zip),
-            hint: 'zipToTimezone() did not recognize this zip. Check the zip is a valid 5-digit US code. Non-US zips are not yet supported.'
-        }, null, 2));
-    }
-    // The Booking already carries verified wall-clock dates (set + source-checked
-    // at enrichment time via verify.js). Do NOT re-resolve or re-verify here -- just
-    // convert the stored wall-clock to a tz-correct marketplace epoch using the same
-    // DST-safe helper the resolver used. (Timezone derived from Booking.zip above.)
-    if (!fresh.startDate || !fresh.endDate) {
-        return createSuccessResponse(id, JSON.stringify({
-            mode,
-            posted: false,
-            error: 'missing_date_provenance',
-            missing: [!fresh.startDate ? 'startDate' : null, !fresh.endDate ? 'endDate' : null].filter(Boolean),
-            hint: 'Booking must carry startDate and endDate (set at enrichment) before sharing.'
-        }, null, 2));
-    }
-    const _sD = new Date(fresh.startDate), _eD = new Date(fresh.endDate);
-    const st = wallClockInZoneToEpoch(_sD.getUTCFullYear(), _sD.getUTCMonth() + 1, _sD.getUTCDate(), _sD.getUTCHours(), _sD.getUTCMinutes(), tz);
-    const et = wallClockInZoneToEpoch(_eD.getUTCFullYear(), _eD.getUTCMonth() + 1, _eD.getUTCDate(), _eD.getUTCHours(), _eD.getUTCMinutes(), tz);
-
-    const draftCheck = validateShareDrafts(args, fresh);
-    if (!draftCheck.ok) {
-        return createSuccessResponse(id, JSON.stringify({
-            mode,
-            posted: false,
-            error: 'unsafe_share_draft',
-            draftErrors: draftCheck.errors,
-            hint: 'Only titleDraft, dtDraft, and rqDraft may contain LLM prose. Do not include emails/phones in titleDraft. Do not include payload fields, epochs, or unsupported date/time claims.'
-        }, null, 2));
-    }
-
-    // 5. Build marketplace payload server-side from DB hard fields plus
-    // validated share-skill prose drafts: tn, ti, lc, dt, rq, st, et, zp,
-    // cn, em, ph, pr, sh.
-    const payload = {
-        tn: fresh.trade || '',
-        ti: draftCheck.drafts.titleDraft || fresh.title || '',
-        lc: fresh.location || '',
-        dt: draftCheck.drafts.dtDraft || fresh.description || fresh.notes || '',
-        rq: draftCheck.drafts.rqDraft || fresh.notes || '',
-        st: st,
-        et: et,
-        zp: fresh.zip || '',
-        cn: client.name || '',
-        em: client.email || '',
-        ph: client.phone || '',
-        pr: 0,
-        sh: '*'
-    };
-
-    const humanReadable = {
-        startDisplay: formatIsoWithZone(_sD.getUTCFullYear(), _sD.getUTCMonth() + 1, _sD.getUTCDate(), _sD.getUTCHours(), _sD.getUTCMinutes(), tz, st),
-        endDisplay:   formatIsoWithZone(_eD.getUTCFullYear(), _eD.getUTCMonth() + 1, _eD.getUTCDate(), _eD.getUTCHours(), _eD.getUTCMinutes(), tz, et),
-        timezone:     tz
-    };
-
-    if (mode === 'draft') {
-        return createSuccessResponse(id, JSON.stringify({
-            mode: 'draft',
-            bookingId:    fresh.id,
-            clientId:     client.id,
-            judgedStatus: fresh.status,
-            payload,
-            humanReadable
-        }, null, 2));
-    }
-
-    // mode === 'post': actually call the Leedz marketplace endpoint.
-    if (!cfg?.leedzSession) {
-        return createSuccessResponse(id, JSON.stringify({
-            mode: 'post',
-            posted: false,
-            error: 'leedz_not_configured',
-            hint: 'Config.leedzSession is empty. Run configure to set it before sharing.'
-        }, null, 2));
-    }
-
-    let leedzId = null;
-    let postError = null;
-    try {
-        const envelope = {
-            jsonrpc: '2.0',
-            id: 1,
-            method: 'tools/call',
-            params: {
-                name: 'createLeed',
-                arguments: { ...payload, cr: 'theleedz.com@gmail.com', email: 'false', session: cfg.leedzSession }
-            }
-        };
-        const res = await fetch(LEEDZ_REMOTE_URL, {
-            method: 'POST',
-            headers: { 'content-type': 'application/json' },
-            body: JSON.stringify(envelope)
-        });
-        if (!res.ok) throw new Error(`HTTP ${res.status}`);
-        const body = await res.json();
-        const txt = body?.result?.content?.[0]?.text;
-        try { leedzId = JSON.parse(txt)?.leedId || JSON.parse(txt)?.id || null; } catch (_) { leedzId = null; }
-    } catch (e) {
-        postError = String(e.message || e);
-    }
-
-    if (postError) {
-        return createSuccessResponse(id, JSON.stringify({
-            mode: 'post',
-            posted: false,
-            error: postError,
-            payload,
-            humanReadable
-        }, null, 2));
-    }
-
-    await prisma.booking.update({
-        where: { id: fresh.id },
-        data: {
-            shared:   true,
-            sharedTo: 'leedz_api',
-            sharedAt: BigInt(Date.now()),
-            leedId:   leedzId,
-            status:   'cold'
-        }
-    });
-
-    return createSuccessResponse(id, JSON.stringify({
-        mode: 'post',
-        posted: true,
-        leedzId,
-        bookingId: fresh.id,
-        clientId:  client.id,
-        payload,
-        humanReadable
-    }, null, 2));
-}
+// The whole share_booking path (gates, draft validation, payload build, Leedz
+// POST) lives in share.js. judgeAffected (the in-process Judge) + VALID_OBJECTIVES
+// are injected; VALID_OBJECTIVES is passed as a thunk because it is a const
+// declared further down this file than this wire-up point. See share.js.
+const { pipelineShareBooking } = require('./share').createShareHandlers({
+    judgeAffected,
+    getValidObjectives: () => VALID_OBJECTIVES,
+});
 
 // ============================================================================
 // TASK PLANNER -- procedural state machine for the new architecture
@@ -3419,9 +2360,11 @@ const _TASK_TYPE_LIMITS_DEFAULT = {
     DISCOVER_SOURCES: 1,
     SCRAPE_SOURCE:    5,
     APPLY_FACTLET:    5,
+    DRILL_DOWN:       3,   // concurrent near-hot drill-downs (reserved slice)
+    LAST_30_DAYS:     4,   // last30days seeder -- the search is deterministic Python (no LLM), so cap by CPU/RAM, not cost. Run several in parallel.
     FIND_CLIENT_SOURCES: 5,
     ENRICH_CLIENT:    10,
-    JUDGE_AFFECTED:   5,
+    JUDGE_AFFECTED:   25,  // in-process + cheap; let the proactive sweep (Stage 2b) drain eligible bookings fast
     SHOW_HOT_LEEDZ:   1,
     SHARE_BOOKING:    3,
     DRAFT_OUTREACH:   5
@@ -3438,9 +2381,11 @@ const _TASK_SESSION_BUDGETS_DEFAULT = {
     DISCOVER_SOURCES: 1,
     SCRAPE_SOURCE:    25,
     APPLY_FACTLET:    50,
+    DRILL_DOWN:       30,   // total near-hot drill-downs per session
+    LAST_30_DAYS:     12,   // total last30days seeds per session (cheap search; let it run)
     FIND_CLIENT_SOURCES: 25,
     ENRICH_CLIENT:    50,
-    JUDGE_AFFECTED:   50,
+    JUDGE_AFFECTED:   150,  // proactive sweep can queue every eligible booking in one session
     SHOW_HOT_LEEDZ:   1,
     SHARE_BOOKING:    10,
     DRAFT_OUTREACH:   25
@@ -3655,17 +2600,63 @@ async function getTerminalAppliedFactletIds() {
     return new Set(rows.map(r => r.targetId).filter(Boolean));
 }
 
+// Near-hot detection for the active drill-down stage. For each LIVE booking
+// (future-dated, not yet shared), compute the hot prerequisites it is still
+// missing via classify(). "near-hot" reflects the real FIELD gaps -- a dated
+// booking is its own demand signal, independent of accumulated factlets. Returns
+// bookings ranked by closeness (fewest missing) then urgency (soonest event);
+// hot_eligible bookings (nothing missing) are excluded.
+async function computeNearHotBookings() {
+    const now = Date.now();
+    const futureMinHours = (SCORING.classification && SCORING.classification.futureMinHours) ?? 12;
+    const opts = {
+        futureMinHours,
+        mode: bookingActionToMode(RUNTIME_CONFIG && RUNTIME_CONFIG.defaultBookingAction),
+        defaultTrade: (VALUE_PROP && VALUE_PROP.trade) || (RUNTIME_CONFIG && RUNTIME_CONFIG.defaultTrade) || '',
+        genericEmailPrefixes: (SCORING.booking && SCORING.booking.genericEmailPrefixes) || [],
+        orgNameTokens: (SCORING.classification && SCORING.classification.orgNameTokens) || []
+    };
+    const bookings = await prisma.booking.findMany({
+        where: {
+            status: { in: ['cold', 'brewing'] },
+            startDate: { gt: new Date() },
+            shared: false
+        },
+        include: { client: true }
+    });
+    const ranked = [];
+    for (const b of bookings) {
+        let proc;
+        try { proc = classification.classify(b.client, b, opts); } catch (_) { continue; }
+        const missing = (proc && proc.missing) || [];
+        if (proc && proc.state === 'hot_eligible') continue; // nothing missing
+        if (!missing.length) continue;
+        const daysToEvent = Math.max(0, Math.round((new Date(b.startDate).getTime() - now) / 86400000));
+        ranked.push({
+            bookingId: b.id, clientId: b.clientId,
+            missing, missingCount: missing.length,
+            startDate: b.startDate, daysToEvent
+        });
+    }
+    // Closeness first (fewest missing), then urgency (soonest event).
+    ranked.sort((a, b) => (a.missingCount - b.missingCount) || (a.daysToEvent - b.daysToEvent));
+    return ranked;
+}
+
 async function computeWorkflowIntakeState() {
     const staleDays = await getFactletStaleDays();
     const factletCutoff = new Date(Date.now() - staleDays * 24 * 60 * 60 * 1000);
-    const [liveFactlets, terminalAppliedFactletIds, claimableSources] = await Promise.all([
+    // Claimable sources come from the markdown-backed store (ready = unscraped
+    // & unclaimed this run), not the DB.
+    const claimableSources = Object.values(sourceStore.counts().byChannel)
+        .reduce((s, c) => s + (c.ready || 0), 0);
+    const [liveFactlets, terminalAppliedFactletIds] = await Promise.all([
         prisma.factlet.findMany({
             where: { createdAt: { gte: factletCutoff } },
             orderBy: { createdAt: 'desc' },
             select: { id: true }
         }),
-        getTerminalAppliedFactletIds(),
-        prisma.source.count({ where: { scrapedAt: null, claimedAt: null } })
+        getTerminalAppliedFactletIds()
     ]);
     const unprocessedFactletIds = liveFactlets
         .map(f => f.id)
@@ -4047,6 +3038,15 @@ async function pipelinePlanTasks(id, args) {
     if (mode === 'workflow' || mode === 'headless') {
         const suppressed = new Set();   // task types skipped this pass
 
+        // Current-demand hygiene: drop stale factlets before planning so the
+        // backlog reflects only LIVE demand and never re-animates old news.
+        try {
+            const _p = await pruneStaleFactlets();
+            if (_p.deleted) logInfo(`Planner pruned ${_p.deleted} stale factlet(s) before planning.`);
+        } catch (e) {
+            logInfo(`Planner factlet prune skipped: ${e.message}`);
+        }
+
         // ---------- Stage 2: JUDGE_AFFECTED for done worker output ----------
         // If any completed worker Task carries affected ids but has not been
         // judged yet, judge it first. While judge work is created OR already
@@ -4069,6 +3069,61 @@ async function pipelinePlanTasks(id, args) {
             if (cIds.length === 0 && bIds.length === 0) continue;
             judgeNeededInputs.push({ sourceTaskId: t.id, clientIds: cIds, bookingIds: bIds });
         }
+
+        // ---------- Stage 2b: PROACTIVE judge of eligible-but-unjudged bookings ----------
+        // The reactive scan above only judges a booking a worker JUST touched. A
+        // booking that became hot-eligible some OTHER way -- a noon-default start
+        // time, a manual backfill, an enrichment that updated the client but not the
+        // booking id -- would never be (re)judged and would sit cold forever despite
+        // meeting every gate. THIS is the hole behind "lots of eligible bookings, 0
+        // hot". Sweep future-dated, non-hot bookings that already clear the procedural
+        // gates (trade + zip + venue + a contact-gated client) and queue them for the
+        // same judge. Dedup by a judged-watermark: a booking is skipped if a finished
+        // JUDGE_AFFECTED already covered it AT OR AFTER its last change (updatedAt), so
+        // we judge each eligible booking once per change -- not on a loop. Bounded by
+        // the JUDGE_AFFECTED budget via the shared create loop below.
+        try {
+            const eligible = await prisma.booking.findMany({
+                where: {
+                    status:    { not: 'hot' },
+                    startDate: { gt: new Date() },
+                    startTime: { not: null },
+                    trade:     { not: null },
+                    zip:       { not: null },
+                    location:  { not: null },
+                    client:    { contactGate: true }
+                },
+                orderBy: { updatedAt: 'desc' },
+                take: 200,
+                select: { id: true, updatedAt: true }
+            });
+            if (eligible.length > 0) {
+                // Build bookingId -> latest finished-judge time from recent judge tasks.
+                const doneJudge = await prisma.task.findMany({
+                    where: { type: 'JUDGE_AFFECTED', status: 'done', NOT: { finishedAt: null } },
+                    orderBy: { finishedAt: 'desc' }, take: 1000,
+                    select: { input: true, finishedAt: true }
+                });
+                const lastJudged = new Map();
+                for (const j of doneJudge) {
+                    const inp = j.input ? safeJsonParse(j.input) : null;
+                    const bids = inp && Array.isArray(inp.bookingIds) ? inp.bookingIds : [];
+                    for (const bid of bids) {
+                        if (!lastJudged.has(bid) || lastJudged.get(bid) < j.finishedAt) lastJudged.set(bid, j.finishedAt);
+                    }
+                }
+                const alreadyQueued = new Set(judgeNeededInputs.flatMap(j => j.bookingIds || []));
+                for (const b of eligible) {
+                    if (alreadyQueued.has(b.id)) continue;
+                    const lj = lastJudged.get(b.id);
+                    if (lj && lj >= b.updatedAt) continue; // judged since last change -> skip
+                    judgeNeededInputs.push({ sourceTaskId: 'proactive_eligible', clientIds: [], bookingIds: [b.id] });
+                }
+            }
+        } catch (e) {
+            logInfo(`Proactive judge sweep skipped: ${e.message}`);
+        }
+
         let judgePlanned = 0;
         if (judgeNeededInputs.length > 0) {
             const ckJudge = await createBudget('JUDGE_AFFECTED');
@@ -4366,6 +3421,83 @@ async function pipelinePlanTasks(id, args) {
             }
         }
 
+        // ---------- Stage 4.5: DRILL_DOWN -- actively close near-hot bookings ----------
+        // Rank LIVE bookings by closeness (fewest missing hot prerequisites) then
+        // urgency (soonest event); schedule a research-only DRILL_DOWN that hunts a
+        // booking's SPECIFIC missing fields. Effort is tiered to closeness -- a booking
+        // one field from hot gets more attempts than one missing three. This stage does
+        // NOT suppress scrape/discovery: foundational input stages must keep running
+        // (docs/solutions/logic-errors/planner-priority-inversion-starves-source-stages.md).
+        if (!suppressed.has('DRILL_DOWN')) {
+            const ckDrillTop = await createBudget('DRILL_DOWN');
+            if (ckDrillTop.eff > 0) {
+                let nearHot = [];
+                try { nearHot = await computeNearHotBookings(); }
+                catch (e) { logInfo(`near-hot compute skipped: ${e.message}`); }
+                // Finish-one-leed mode: concentrate the budget on the single top booking.
+                if (args.focus === 'one_leed' && nearHot.length) nearHot = [nearHot[0]];
+                // Prior terminal DRILL_DOWN count per booking (tiered-cap decay).
+                const drillCounts = new Map();
+                const priorDrills = await prisma.task.groupBy({
+                    by: ['targetId'],
+                    where: { type: 'DRILL_DOWN', targetType: 'Booking', status: { in: TASK_TERMINAL_STATUSES } },
+                    _count: { targetId: true }
+                });
+                for (const r of priorDrills) if (r.targetId) drillCounts.set(r.targetId, r._count.targetId);
+                // Skip bookings already mid-drill (this session or open).
+                const openDrill = await prisma.task.findMany({
+                    where: { type: 'DRILL_DOWN', targetType: 'Booking',
+                        OR: [{ sessionId }, { status: { in: ['ready', 'claimed'] } }] },
+                    select: { targetId: true }
+                });
+                const skipB = new Set(openDrill.map(t => t.targetId).filter(Boolean));
+                // Tiered attempt cap by closeness: closer bookings earn more tries.
+                const capFor = (n) => n <= 1 ? 6 : (n <= 2 ? 3 : 1);
+                for (const nh of nearHot) {
+                    if ((await createBudget('DRILL_DOWN')).eff <= 0) break;
+                    if (skipB.has(nh.bookingId)) continue;
+                    if ((drillCounts.get(nh.bookingId) || 0) >= capFor(nh.missingCount)) continue;
+                    const row = await createTask('DRILL_DOWN', {
+                        targetType: 'Booking', targetId: nh.bookingId,
+                        input: { clientId: nh.clientId, missing: nh.missing, startDate: nh.startDate }
+                    });
+                    if (!row) break;
+                }
+            }
+
+            // Also drill BARE clients (e.g. discovery / social-discovery-refresh
+            // output): a client with NO contact AND no future booking cannot become a
+            // leed on its own. Try a research DRILL_DOWN to find a decision-maker
+            // contact + a bookable upcoming event. One attempt per client (skip any
+            // already drilled), newest first so fresh discoveries go first. Shares the
+            // DRILL_DOWN budget -- near-hot bookings above are served first.
+            if ((await createBudget('DRILL_DOWN')).eff > 0) {
+                const drilledClients = new Set((await prisma.task.findMany({
+                    where: { type: 'DRILL_DOWN', targetType: 'Client' },
+                    select: { targetId: true }
+                })).map(t => t.targetId).filter(Boolean));
+                const bareClients = await prisma.client.findMany({
+                    where: {
+                        contactGate: false,
+                        draftStatus: { not: 'sent' },
+                        bookings: { none: { startDate: { gt: new Date() } } }
+                    },
+                    orderBy: { createdAt: 'desc' },
+                    take: 50,
+                    select: { id: true }
+                });
+                for (const c of bareClients) {
+                    if ((await createBudget('DRILL_DOWN')).eff <= 0) break;
+                    if (drilledClients.has(c.id)) continue;
+                    const row = await createTask('DRILL_DOWN', {
+                        targetType: 'Client', targetId: c.id,
+                        input: { clientId: c.id, missing: ['client_email', 'booking'] }
+                    });
+                    if (!row) break;
+                }
+            }
+        }
+
         // ---------- Stage 5: client enrichment (FIND_CLIENT_SOURCES -> ENRICH_CLIENT) ----------
         // Enrichment mirrors discovery's two-stage shape:
         //   FIND_CLIENT_SOURCES (producer): a stale Client with no pending source
@@ -4430,6 +3562,13 @@ async function pipelinePlanTasks(id, args) {
                 for (const c of liveClients) {
                     if (clientWorkPlanned >= planCap) break;
                     if (skipC.has(c.id)) continue;
+                    // Stop re-chasing un-promotable live clients: once a client has used
+                    // its full FIND budget (MAX_FIND_PASSES passes) and still hasn't
+                    // promoted, more enrichment + re-judging just burns budget on the same
+                    // dead-end every run (the classic "12 stuck trade-show contacts" loop).
+                    // Skip it; its FIND history is retained ~taskRetentionDays, so it gets
+                    // a fresh window later in case a real decision-maker contact appears.
+                    if ((findPassCount.get(c.id) || 0) >= MAX_FIND_PASSES) continue;
                     const unconsumed = parseClientSourceSummaries(c.targetUrls)
                         .filter(e => e && e.url && e.consumed === false);
                     if (unconsumed.length) {
@@ -4454,10 +3593,12 @@ async function pipelinePlanTasks(id, args) {
                     }
                 }
             }
-            if (clientWorkPlanned > 0 || enrichOpen > 0 || findOpen > 0) {
-                suppressed.add('SCRAPE_SOURCE');
-                suppressed.add('DISCOVER_SOURCES');
-            }
+            // Client enrichment does NOT suppress scraping/discovery. Scraping fresh
+            // sources is the funnel's fuel and must run ALONGSIDE enrichment, not wait
+            // behind it -- otherwise a handful of un-promotable live clients (or a few
+            // stuck-claimed enrich tasks) starve SCRAPE_SOURCE/DISCOVER_SOURCES for the
+            // whole session, and no new demand ever enters. The Judge/Apply stages above
+            // still gate scrape correctly (don't scrape before judging existing evidence).
         }
 
         // ---------- Stage 6: SCRAPE_SOURCE ----------
@@ -4479,25 +3620,25 @@ async function pipelinePlanTasks(id, args) {
                     },
                     select: { targetId: true }
                 });
-                const skipIds = new Set(planned.map(p => p.targetId).filter(Boolean));
-                // In headless mode, fb/ig need an interactive browser (chrome-mcp)
-                // and cannot render via Tavily; excluding them here stops the Planner
-                // from emitting SCRAPE_SOURCE Tasks that can only cancel and then churn
-                // on every replan. x stays -- it has a Tavily site:x.com fallback that
-                // works headless. Interactive mode plans all channels normally.
-                const scrapeWhere = { scrapedAt: null, claimedAt: null };
-                if (mode === 'headless') scrapeWhere.channel = { notIn: ['fb', 'ig'] };
-                const sources = await prisma.source.findMany({
-                    where: scrapeWhere,
-                    orderBy: { discoveredAt: 'asc' },
-                    take: ckScrape.eff + skipIds.size
+                const skipUrls = planned.map(p => p.targetId).filter(Boolean);
+                // fb/ig cannot render via Tavily (url-loop) in ANY mode -- they need
+                // an interactive browser. Excluding them ALWAYS stops the Planner from
+                // emitting SCRAPE_SOURCE Tasks that only fail ("FB not viable") and churn
+                // every replan. (Earlier this was headless-only, so interactive runs
+                // leaked fb/ig scrape tasks -- the source of the FB failure spam.) x
+                // stays: it has a Tavily site:x.com fallback that works headless. Social
+                // demand (ig/tiktok/threads/x) comes through LAST_30_DAYS, not scraping.
+                // Sources come from the markdown-backed store (the URL is the key).
+                const sources = sourceStore.readySources({
+                    limit: ckScrape.eff,
+                    excludeChannels: ['fb', 'ig'],
+                    excludeUrls: skipUrls
                 });
                 for (const s of sources) {
                     if (scrapePlanned >= ckScrape.eff) break;
-                    if (skipIds.has(s.id)) continue;
                     const row = await createTask('SCRAPE_SOURCE', {
                         targetType: 'Source',
-                        targetId:   s.id,
+                        targetId:   s.url,
                         input: { url: s.url, channel: s.channel }
                     });
                     if (!row) break;
@@ -4519,6 +3660,22 @@ async function pipelinePlanTasks(id, args) {
             const ckDisc = await createBudget('DISCOVER_SOURCES');
             if (ckDisc.eff > 0) {
                 await createTask('DISCOVER_SOURCES', { targetType: 'none' });
+            }
+        }
+
+        // ---------- Stage 8: LAST_30_DAYS -- last30days seeder ----------
+        // Topic-driven demand sensing: runs the last30days CLI on VALUE_PROP buyer
+        // occasions and ingests high-score dated-event candidates as Clients +
+        // Factlets + Bookings + Sources (the event+contact pairing scraping rarely
+        // gets). The search itself is deterministic Python (no LLM), so it is cheap
+        // to run wide -- capped by CPU/RAM (TASK_TYPE_LIMITS.LAST_30_DAYS), not cost.
+        // Fires when the funnel needs fresh input; spawns a batch up to the limit so
+        // several run in parallel instead of one-at-a-time.
+        if (shouldPlanDiscovery) {
+            const want = TASK_TYPE_LIMITS.LAST_30_DAYS || 1;
+            for (let i = 0; i < want; i++) {
+                if ((await createBudget('LAST_30_DAYS')).eff <= 0) break;
+                if (!(await createTask('LAST_30_DAYS', { targetType: 'none' }))) break;
             }
         }
     }
@@ -4782,6 +3939,24 @@ async function pipelineTasks(id, args) {
 // Sessions, or dossier text. See DOCS/WHAT_I_LEARNED.md subproject 8.
 // ============================================================================
 
+// Delete Factlets older than the stale window. PreCrime is about CURRENT demand:
+// stale evidence is REMOVED, never re-animated. Shared by startup, the planner
+// cycle, and the recycler action so all three agree on one definition of "stale".
+// dryRun reports the count without deleting (used by the recycler action).
+async function pruneStaleFactlets({ dryRun = false, staleDays } = {}) {
+    const days = Number.isFinite(staleDays) ? staleDays : getFactletStaleDays();
+    const cutoff = new Date(Date.now() - days * 24 * 60 * 60 * 1000);
+    const stale = await prisma.factlet.findMany({
+        where: { createdAt: { lt: cutoff } },
+        select: { id: true }
+    });
+    const ids = stale.map(f => f.id);
+    if (!dryRun && ids.length > 0) {
+        await prisma.factlet.deleteMany({ where: { id: { in: ids } } });
+    }
+    return { deleted: ids.length, ids, cutoffIso: cutoff.toISOString() };
+}
+
 async function pipelineRecycler(id, args) {
     const dryRun              = args.dryRun !== false;  // default true
     // Precedence: explicit args > precrime_config.json > hardcoded defaults.
@@ -4851,19 +4026,14 @@ async function pipelineRecycler(id, args) {
         await prisma.task.deleteMany({ where: { id: { in: finishedIds } } });
     }
 
-    // 3. Stale Factlets -> delete. Factlet stands alone now (no join table),
-    // so we just delete the rows directly. Dossier text is untouched.
-    const staleFactlets = await prisma.factlet.findMany({
-        where: { createdAt: { lt: factletCutoff } },
-        select: { id: true }
-    });
-    const staleFactletIds = staleFactlets.map(f => f.id);
-    if (!dryRun && staleFactletIds.length > 0) {
-        try {
-            await prisma.factlet.deleteMany({ where: { id: { in: staleFactletIds } } });
-        } catch (e) {
-            warnings.push(`factlet delete failed: ${e.message}`);
-        }
+    // 3. Stale Factlets -> delete (via shared pruneStaleFactlets so startup,
+    // planner, and this action agree on one definition). Dossier text is untouched.
+    let staleFactletIds = [];
+    try {
+        const pruned = await pruneStaleFactlets({ dryRun, staleDays: factletStaleDays });
+        staleFactletIds = pruned.ids;
+    } catch (e) {
+        warnings.push(`factlet delete failed: ${e.message}`);
     }
 
     return createSuccessResponse(id, JSON.stringify({
@@ -4954,7 +4124,11 @@ function buildSummaryMarkdown(s) {
             const name  = c.name || '(no name)';
             const cid   = c.clientId || '(no id)';
             const score = (c.score === null || c.score === undefined) ? '?' : c.score;
-            lines.push(`- ${name} — clientId: \`${cid}\` — score: ${score}`);
+            // A score-0 save is a BARE client (no contact, no booking) -- it cannot
+            // become a leed without enrichment. Flag it so a partial "saved N" result
+            // is not mistaken for progress toward hot leedz.
+            const bare = !c.score ? ' — **bare: no contact/booking yet, needs enrichment to become a leed**' : '';
+            lines.push(`- ${name} — clientId: \`${cid}\` — score: ${score}${bare}`);
         }
     }
 
@@ -4962,9 +4136,33 @@ function buildSummaryMarkdown(s) {
         lines.push('');
         lines.push('**Failures:**');
         for (const f of s.failures) {
-            const name = f.name || f.id || '(unknown)';
+            const name = f.name || f.id || '(unnamed client)';
             const err  = f.error || '(no error message)';
-            lines.push(`- ${name} — ${err}`);
+            const src  = f.source ? `  [${f.source}]` : '';
+            lines.push(`- ${name} — ${err}${src}`);
+            // Per-booking date detail: which event, what date text was bad, why.
+            if (Array.isArray(f.failures)) {
+                for (const d of f.failures) {
+                    const ev   = d.title || '(untitled event)';
+                    const dt   = d.dateText ? ` date="${d.dateText}"` : '';
+                    const url  = d.sourceUrl ? ` src=${d.sourceUrl}` : '';
+                    const why  = d.reason ? ` — ${d.reason}` : '';
+                    lines.push(`    · ${ev}${dt}${url}${why}`);
+                }
+            }
+        }
+    }
+
+    // Per-task ground truth. The session-level Reason above is an INFERENCE; this
+    // block is what each worker actually reported (output.summary or error code).
+    // This is how you tell "judged, changed nothing" apart from "scrape crashed"
+    // apart from "no candidate clients" -- instead of one blanket guess.
+    if (Array.isArray(s.task_history) && s.task_history.length > 0) {
+        lines.push('');
+        lines.push('**Per-task outcomes:**');
+        for (const t of s.task_history) {
+            const why = t.reason ? ` — ${t.reason}` : '';
+            lines.push(`- ${t.type} [${t.status}]${why}`);
         }
     }
 
@@ -5211,15 +4409,25 @@ async function pipelineReportSession(id, sessionId, close) {
         if (!taskOutcomesByType[t.type]) taskOutcomesByType[t.type] = {};
         taskOutcomesByType[t.type][t.status] = (taskOutcomesByType[t.type][t.status] || 0) + 1;
     }
-    const taskHistory = sessionTasks.map(t => ({
-        id:         t.id,
-        type:       t.type,
-        status:     t.status,
-        targetType: t.targetType,
-        targetId:   t.targetId,
-        finishedAt: t.finishedAt ? t.finishedAt.toISOString() : null,
-        error:      t.error || null
-    }));
+    const taskHistory = sessionTasks.map(t => {
+        // Per-task ground truth: the worker wrote output.summary (done) or error
+        // (failed/cancelled). Surface it so the report says WHY each task saved
+        // nothing, instead of leaning only on the inferred session-level reason.
+        let outSummary = null;
+        try { outSummary = t.output ? (JSON.parse(t.output)?.summary || null) : null; } catch (_) { outSummary = null; }
+        return {
+            id:         t.id,
+            type:       t.type,
+            status:     t.status,
+            targetType: t.targetType,
+            targetId:   t.targetId,
+            finishedAt: t.finishedAt ? t.finishedAt.toISOString() : null,
+            error:      t.error || null,
+            // One field the reader can scan: failed/cancelled -> error code;
+            // done -> the worker's own summary; null only if the worker wrote neither.
+            reason:     t.error || outSummary || null
+        };
+    });
 
     const savedClients = successes.map(e => {
         try { return JSON.parse(e.payload); } catch { return { raw: e.payload }; }
@@ -5297,171 +4505,16 @@ async function pipelineReportSession(id, sessionId, close) {
 // FIND TOOL HANDLER
 // ============================================================================
 
-async function handleFind(id, params) {
-    const args = params.arguments || {};
-    const action = args.action;
-
-    logInfo(`find action=${action || '[missing]'} args=${JSON.stringify(summarizeToolArgs(args))}`);
-
-    // 3-min save-or-terminate watchdog -- find is read-only, always check.
-    const wd = await enforceSessionWatchdog(id);
-    if (wd.terminated) return wd.errorResponse;
-
-    switch (action) {
-        case 'clients':  return await findClients(id, args);
-        case 'bookings': return await findBookings(id, args);
-        case 'factlets': return await findFactlets(id, args);
-        case 'drafts':   return await findDrafts(id, args);
-        default:
-            return createErrorResponse(id, -32602, `Unknown find action: "${action}". Must be: clients, bookings, factlets, drafts.`);
-    }
-}
-
-async function findClients(id, args) {
-    const filters = args.filters || {};
-    const limit = args.limit || 10;
-    const useSummary = args.summary !== false;
-    let where = {};
-
-    if (filters.id) {
-        where.id = filters.id;
-    } else if (filters.search) {
-        where.OR = [
-            { name: { contains: filters.search } },
-            { email: { contains: filters.search } },
-            { company: { contains: filters.search } }
-        ];
-    } else {
-        if (filters.name)    where.name    = { contains: filters.name };
-        if (filters.email)   where.email   = filters.email;
-        // filters.company uses fuzzy contains for general search.
-        // Pass filters.exactCompany for dedup lookups that need exact (case-insensitive) match.
-        if (filters.exactCompany) where.company = filters.exactCompany; // exact, SQLite LIKE is case-insensitive
-        else if (filters.company) where.company = { contains: filters.company };
-        if (filters.segment) where.segment = { contains: filters.segment };
-    }
-
-    if (filters.draftStatus) where.draftStatus = filters.draftStatus;
-
-    if (filters.warmthScore !== undefined) {
-        where.warmthScore = parseInt(filters.warmthScore, 10);
-    } else if (filters.minWarmthScore !== undefined || filters.maxWarmthScore !== undefined) {
-        where.warmthScore = {};
-        if (filters.minWarmthScore !== undefined) where.warmthScore.gte = parseInt(filters.minWarmthScore, 10);
-        if (filters.maxWarmthScore !== undefined) where.warmthScore.lte = parseInt(filters.maxWarmthScore, 10);
-    }
-
-    const queryOpts = { where, take: limit, orderBy: { dossierScore: 'desc' } };
-
-    if (useSummary) {
-        queryOpts.select = {
-            id: true, name: true, company: true, segment: true,
-            email: true, phone: true, website: true,
-            dossierScore: true, contactGate: true, intelScore: true,
-            warmthScore: true, draftStatus: true, lastEnriched: true, source: true
-        };
-    }
-
-    const clients = await prisma.client.findMany(queryOpts);
-    return createSuccessResponse(id, JSON.stringify(clients, null, 2));
-}
-
-async function findBookings(id, args) {
-    const filters = args.filters || {};
-    const limit = args.limit || 20;
-    const where = {};
-
-    if (filters.id)     where.id     = filters.id;
-    if (filters.status) where.status = filters.status;
-    if (filters.trade)  where.trade  = filters.trade;
-    if (filters.shared !== undefined) where.shared = !!filters.shared;
-    if (filters.future === true) where.startDate = { gte: new Date() };
-    if (filters.startDateGte) {
-        where.startDate = Object.assign(where.startDate || {}, { gte: new Date(filters.startDateGte) });
-    }
-
-    if (filters.search) {
-        where.OR = [
-            { title:       { contains: filters.search } },
-            { description: { contains: filters.search } },
-            { notes:       { contains: filters.search } },
-            { location:    { contains: filters.search } }
-        ];
-    }
-
-    const bookings = await prisma.booking.findMany({
-        where,
-        orderBy: { createdAt: 'desc' },
-        take: limit,
-        include: {
-            client: {
-                select: { id: true, name: true, company: true, email: true, phone: true, segment: true }
-            }
-        }
-    });
-    return createSuccessResponse(id, safeJson(bookings));
-}
-
-async function findFactlets(id, args) {
-    const filters = args.filters || {};
-
-    if (filters.id) {
-        const factlet = await prisma.factlet.findUnique({ where: { id: filters.id } });
-        return createSuccessResponse(id, JSON.stringify(factlet ? [factlet] : [], null, 2));
-    }
-
-    // If clientId is provided, return live Factlets relevant to that client via
-    // cheap content/source overlap on name / company / website host. No join
-    // table -- there is no longer a per-link "applied" pointer to read.
-    if (filters.clientId) {
-        const client = await prisma.client.findUnique({ where: { id: filters.clientId } });
-        if (!client) {
-            return createErrorResponse(id, -32602, `findFactlets: no client with id "${filters.clientId}".`);
-        }
-        const staleDays = await getFactletStaleDays();
-        const factlets = await findLiveFactletsForClient(client, staleDays);
-        return createSuccessResponse(id, JSON.stringify(factlets, null, 2));
-    }
-
-    // Otherwise, global factlet query (queue checking)
-    if (!filters.sinceTimestamp) {
-        return createErrorResponse(id, -32602, 'factlets action requires filters.sinceTimestamp or filters.clientId.');
-    }
-
-    const factlets = await prisma.factlet.findMany({
-        where: { createdAt: { gt: new Date(filters.sinceTimestamp) } },
-        orderBy: { createdAt: 'asc' }
-    });
-    return createSuccessResponse(id, JSON.stringify(factlets, null, 2));
-}
-
-async function findDrafts(id, args) {
-    const limit = args.limit || 10;
-    const useSummary = args.summary !== false;
-    const filters = args.filters || {};
-
-    const where = { draftStatus: 'ready' };
-    if (filters.minScore !== undefined) {
-        where.dossierScore = { gte: parseInt(filters.minScore, 10) };
-    }
-
-    const queryOpts = {
-        where,
-        orderBy: { dossierScore: 'desc' },
-        take: limit
-    };
-
-    if (useSummary) {
-        queryOpts.select = {
-            id: true, name: true, company: true, segment: true,
-            email: true, dossierScore: true, contactGate: true,
-            warmthScore: true, draftStatus: true, lastEnriched: true
-        };
-    }
-
-    const clients = await prisma.client.findMany(queryOpts);
-    return createSuccessResponse(id, JSON.stringify(clients, null, 2));
-}
+// Read-only `find` tool handlers live in find.js. The five mcp_server-local
+// helpers below are injected; everything else (prisma, response builders) the
+// module pulls in itself. See find.js.
+const { handleFind } = require('./find').createFindHandlers({
+    logInfo,
+    summarizeToolArgs,
+    enforceSessionWatchdog,
+    getFactletStaleDays,
+    findLiveFactletsForClient,
+});
 
 // ============================================================================
 // TRADES TOOL HANDLER (unchanged from v1)
@@ -5601,36 +4654,6 @@ async function handleInputLine(line) {
 // next build cycle, but the safety net below means a stale DB still works.
 // ============================================================================
 
-async function ensureSourceTable() {
-    try {
-        await prisma.$executeRawUnsafe(`
-            CREATE TABLE IF NOT EXISTS Source (
-                id             TEXT PRIMARY KEY,
-                url            TEXT NOT NULL,
-                channel        TEXT NOT NULL,
-                subtype        TEXT,
-                label          TEXT,
-                category       TEXT,
-                scrapedAt      DATETIME,
-                claimedAt      DATETIME,
-                claimedBy      TEXT,
-                clientsFound   INTEGER NOT NULL DEFAULT 0,
-                failedReason   TEXT,
-                discoveredAt   DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
-                discoveredFrom TEXT
-            )
-        `);
-        await prisma.$executeRawUnsafe(`CREATE UNIQUE INDEX IF NOT EXISTS Source_url_key ON Source(url)`);
-        await prisma.$executeRawUnsafe(`CREATE INDEX IF NOT EXISTS Source_channel_idx ON Source(channel)`);
-        await prisma.$executeRawUnsafe(`CREATE INDEX IF NOT EXISTS Source_scrapedAt_idx ON Source(scrapedAt)`);
-        await prisma.$executeRawUnsafe(`CREATE INDEX IF NOT EXISTS Source_claimedAt_idx ON Source(claimedAt)`);
-        logInfo('Source table verified (CREATE IF NOT EXISTS).');
-    } catch (err) {
-        logError(`ensureSourceTable failed: ${err.message}`);
-        // Don't crash the server; old DBs without Source still work for non-source actions
-    }
-}
-
 async function ensureTaskTable() {
     try {
         await prisma.$executeRawUnsafe(`
@@ -5669,9 +4692,18 @@ async function startMcpServer() {
     logInfo(`Database: ${dbPath}`);
 
     // Run startup migrations before accepting any requests.
-    await ensureSourceTable().catch(e => logError(`Startup migration error: ${e.message}`));
     await ensureTaskTable().catch(e => logError(`Startup migration error: ${e.message}`));
     await cleanupOpenTasksOnStartup().catch(e => logError(`Startup recycler error: ${e.message}`));
+    await pruneStaleFactlets()
+        .then(r => { if (r.deleted) logInfo(`Startup recycler deleted ${r.deleted} stale factlet(s) (older than ${r.cutoffIso}).`); })
+        .catch(e => logError(`Startup factlet prune error: ${e.message}`));
+    // Load the markdown source files into the in-memory index (single source of truth).
+    try {
+        const sc = sourceStore.load();
+        logInfo(`SourceStore loaded ${sc.total} source(s) from markdown across ${Object.keys(sc.byChannel).length} channel(s).`);
+    } catch (e) {
+        logError(`SourceStore load error: ${e.message}`);
+    }
 
     const PORT = (PRECRIME_CONFIG.workers && PRECRIME_CONFIG.workers.port) || 5179;
     const HOST = '127.0.0.1';

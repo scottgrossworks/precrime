@@ -70,6 +70,25 @@ const sourcePath = path.resolve(sourceArg);
 const dryRun = hasArg('--dry-run');
 const inPlace = hasArg('--in-place');
 const requestedTarget = getArg('--target');
+// Deployment root whose skills/*_sources.md files receive the exported Source
+// rows (markdown is now the single source of truth). Default is derived from the
+// DB location -- a PRECRIME DB lives at <root>/data/<file>.sqlite -- so migrating
+// a deployed DB exports into THAT tree (the one whose skills/ the server reads),
+// not this repo. Pass --root to override. Falls back to this repo only when the
+// DB is not under a data/ dir.
+function defaultDeployRoot(dbPath) {
+  const parent = path.dirname(dbPath);
+  if (path.basename(parent).toLowerCase() === 'data') return path.dirname(parent);
+  return PRECRIME_ROOT;
+}
+const deployRoot = path.resolve(getArg('--root') || defaultDeployRoot(sourcePath));
+
+// The Source table is being removed: its rows are exported to markdown, and it
+// is NOT rebuilt as canonical NOR preserved as _legacy_. Matches any name in the
+// Source lineage (Source, _legacy_Source, _legacy__legacy_Source, ...).
+function isSourceLineage(tableName) {
+  return String(tableName || '').replace(/^(_legacy_)+/i, '').toLowerCase() === 'source';
+}
 
 if (!fs.existsSync(sourcePath) || !fs.statSync(sourcePath).isFile()) {
   fail('Source SQLite file not found: ' + sourcePath);
@@ -187,29 +206,9 @@ const CURRENT_SCHEMA = {
       'CREATE INDEX IF NOT EXISTS "SessionEvent_action_idx" ON "SessionEvent"("action")'
     ]
   },
-  Source: {
-    columns: [
-      ['id', 'TEXT', 'PRIMARY KEY'],
-      ['url', 'TEXT', 'NOT NULL'],
-      ['channel', 'TEXT', 'NOT NULL'],
-      ['subtype', 'TEXT', null],
-      ['label', 'TEXT', null],
-      ['category', 'TEXT', null],
-      ['scrapedAt', 'DATETIME', null],
-      ['claimedAt', 'DATETIME', null],
-      ['claimedBy', 'TEXT', null],
-      ['clientsFound', 'INTEGER', 'NOT NULL DEFAULT 0'],
-      ['failedReason', 'TEXT', null],
-      ['discoveredAt', 'DATETIME', 'NOT NULL DEFAULT CURRENT_TIMESTAMP'],
-      ['discoveredFrom', 'TEXT', null],
-    ],
-    indexes: [
-      'CREATE UNIQUE INDEX IF NOT EXISTS "Source_url_key" ON "Source"("url")',
-      'CREATE INDEX IF NOT EXISTS "Source_channel_idx" ON "Source"("channel")',
-      'CREATE INDEX IF NOT EXISTS "Source_scrapedAt_idx" ON "Source"("scrapedAt")',
-      'CREATE INDEX IF NOT EXISTS "Source_claimedAt_idx" ON "Source"("claimedAt")'
-    ]
-  },
+  // Source TABLE removed: scrape sources now live in per-channel markdown files
+  // (single source of truth). Existing Source rows are exported to markdown by
+  // exportSourcesToMarkdown() and the table is neither rebuilt nor preserved.
   Task: {
     columns: [
       ['id', 'TEXT', 'PRIMARY KEY'],
@@ -263,7 +262,8 @@ const TABLE_ALIASES = {
   booking: 'Booking', bookings: 'Booking', event: 'Booking', events: 'Booking',
   gig: 'Booking', gigs: 'Booking',
   factlet: 'Factlet', factlets: 'Factlet', facts: 'Factlet',
-  source: 'Source', sources: 'Source',
+  // source/sources intentionally removed -- the Source table is dropped and its
+  // rows are exported to markdown (see exportSourcesToMarkdown).
   session: 'Session', sessions: 'Session',
   sessionevent: 'SessionEvent', sessionevents: 'SessionEvent',
   task: 'Task', tasks: 'Task',
@@ -284,6 +284,29 @@ function main() {
 
   const sourceInfo = inspectSource(sourcePath);
   printPlan(sourceInfo);
+
+  // Export Source rows to markdown BEFORE dropping the table, so no productive
+  // source is lost (markdown is now the single source of truth).
+  const exported = exportSourcesToMarkdown(sourcePath, deployRoot, dryRun);
+  if (exported.total > 0) {
+    console.log(`\nSource -> markdown export (${dryRun ? 'dry-run, not written' : 'written'}) under ${deployRoot}:`);
+    console.log(`  ${exported.total} Source row(s): ${exported.added} new, ${exported.duplicates} already present, ${exported.invalid} invalid.`);
+    for (const [ch, n] of Object.entries(exported.byChannel)) console.log(`    ${ch}: ${n}`);
+    // SAFETY: never drop the Source table unless every row landed in markdown.
+    // Without this, a wrong --root silently exports nothing and the drop loses
+    // the sources (only a .bak would save them). Abort BEFORE migrateToTarget so
+    // the source DB is untouched.
+    if (!dryRun) {
+      const accounted = exported.added + exported.duplicates;
+      if (accounted < exported.total || exported.invalid > 0) {
+        fail(`Source export incomplete: only ${accounted}/${exported.total} row(s) landed in markdown ` +
+             `(invalid=${exported.invalid}) under ${deployRoot}. REFUSING to drop the Source table. ` +
+             `Pass --root <deployment-dir> (the tree whose skills/ the server reads). Your DB is unchanged.`);
+      }
+    }
+  } else {
+    console.log('\nNo Source rows to export (table empty or absent).');
+  }
 
   if (dryRun) {
     console.log('\nDry run complete. No files changed.');
@@ -325,6 +348,38 @@ function main() {
     console.log('\nWarnings:');
     for (const w of report.warnings) console.log('  - ' + w);
   }
+}
+
+// Read the Source table and append its rows to the per-channel markdown files
+// under deployRoot, reusing the runtime SourceStore so the line format + dedup
+// match exactly. Idempotent. Writes nothing when dryRun. Returns counts.
+function exportSourcesToMarkdown(srcPath, root, dry) {
+  const result = { total: 0, added: 0, duplicates: 0, invalid: 0, byChannel: {} };
+  const src = new Database(srcPath, { readonly: true, fileMustExist: true });
+  let rows = [];
+  try {
+    if (new Set(listTables(src)).has('Source')) {
+      rows = src.prepare('SELECT url, channel, subtype, label, category FROM "Source"').all();
+    }
+  } finally {
+    src.close();
+  }
+  result.total = rows.length;
+  if (!rows.length) return result;
+  for (const r of rows) result.byChannel[r.channel] = (result.byChannel[r.channel] || 0) + 1;
+  if (dry) return result;
+
+  // createSourceStore only needs fs/path; root is the deployment dir (holds skills/).
+  const { createSourceStore } = require(path.join(PRECRIME_ROOT, 'server', 'mcp', 'sourceStore'));
+  const store = createSourceStore({ root });
+  store.load();
+  const r = store.addSources(rows.map(s => ({
+    url: s.url, channel: s.channel, subtype: s.subtype, label: s.label, category: s.category
+  })));
+  result.added = r.added;
+  result.duplicates = r.duplicates;
+  result.invalid = r.invalid;
+  return result;
 }
 
 function migrateToTarget(srcPath, outPath, sourceInfo) {
@@ -422,11 +477,6 @@ function applyDefaults(table, row, sourceRow) {
     if (!row.content) row.content = sourceRow.content || sourceRow.title || JSON.stringify(sourceRow);
     if (!row.source) row.source = sourceRow.source || sourceRow.sourceUrl || 'legacy';
   }
-  if (table === 'Source') {
-    if (!row.url) row.url = `legacy://source/${encodeURIComponent(row.id)}`;
-    if (!row.channel) row.channel = 'website';
-    if (row.clientsFound === null || row.clientsFound === undefined) row.clientsFound = 0;
-  }
   if (table === 'Task') {
     if (!row.type) row.type = 'LEGACY_IMPORTED';
     if (!row.status) row.status = 'done';
@@ -510,6 +560,8 @@ function foldClientFactletsIntoDossiers(src, dst, sourceInfo, report) {
 
 function copyAllLegacyTables(src, dst, sourceInfo, report) {
   for (const table of sourceInfo.sourceTables) {
+    // Source lineage is exported to markdown and dropped -- no _legacy_ copy.
+    if (isSourceLineage(table)) continue;
     const legacyName = `_legacy_${sanitizeIdentifier(table)}`;
     const rows = src.prepare(`SELECT * FROM ${q(table)}`).all();
     const cols = sourceInfo.tables[table].columns;
@@ -549,11 +601,16 @@ function verifyMigration(srcPath, outPath, sourceInfo, report) {
     }
 
     for (const sourceTable of sourceInfo.sourceTables) {
+      if (isSourceLineage(sourceTable)) continue; // exported to markdown, dropped
       const legacyName = `_legacy_${sanitizeIdentifier(sourceTable)}`;
       if (!tables.has(legacyName)) throw new Error(`legacy preservation table missing: ${legacyName}`);
       const n = countRows(db, legacyName);
       const expected = sourceInfo.tables[sourceTable].rowCount;
       if (n !== expected) throw new Error(`${legacyName} row count mismatch: ${n} !== ${expected}`);
+    }
+    // Belt-and-suspenders: the Source table must be gone from the migrated DB.
+    if (tables.has('Source')) {
+      throw new Error('Source table must not exist in migrated DB (it is now markdown-only)');
     }
 
     for (const [table, counts] of Object.entries(report.canonicalRows)) {
@@ -594,7 +651,9 @@ function printPlan(info) {
   console.log('\nSource tables:');
   for (const table of info.sourceTables) {
     const canonical = matchCanonicalTable(table);
-    const mapped = canonical ? ` -> ${canonical}` : ' -> legacy copy only';
+    const mapped = isSourceLineage(table)
+      ? ' -> DROPPED (exported to markdown)'
+      : canonical ? ` -> ${canonical}` : ' -> legacy copy only';
     console.log(`  ${table}: ${info.tables[table].rowCount} row(s), ${info.tables[table].columns.length} col(s)${mapped}`);
   }
   console.log('\nActive target schema: ' + Object.keys(CURRENT_SCHEMA).join(', '));

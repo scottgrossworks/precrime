@@ -12,11 +12,65 @@ const { spawn } = require('child_process');
 const path = require('path');
 const fs = require('fs');
 const os = require('os');
-const { conductorGetReadyTasks, conductorGetReadyInProcessTasks, conductorClaimTask, conductorFailTask } = require('./db');
+const { conductorGetReadyTasks, conductorGetReadyInProcessTasks, conductorClaimTask, conductorFailTask, WORKER_SKILL_MAP } = require('./db');
 
 const PRECRIME_ROOT = path.resolve(__dirname, '..', '..');
 
 function sleep(ms) { return new Promise(r => setTimeout(r, ms)); }
+
+// Per-worker MCP extension scoping (GOOSE ONLY, opt-in via PRECRIME_GOOSE_EXT_SCOPE).
+// Every loaded extension re-sends its FULL tool schema on EVERY model turn -- a flat
+// per-turn token tax. By default goose loads all 6 config extensions (precrime,
+// tavily, rss, gmail, developer, tom) into every worker, even a DRILL_DOWN that only
+// needs precrime + tavily + shell. When the env flag is set, we spawn workers with
+// `--no-profile` (ZERO config extensions) and add back ONLY what the task type uses.
+// gmail (send) is never needed by a spawned worker; rss only by scraping; tavily only
+// by research types. Orchestrator-agnostic: goose.bat sets the flag; claude workers
+// (precrime.bat) leave it unset and keep their own tool scoping.
+const EXT_SCOPE = !!process.env.PRECRIME_GOOSE_EXT_SCOPE;
+function gooseExtArgs(taskType) {
+    const ext = s => `--with-extension "${s}"`;
+    const precrime  = '--with-streamable-http-extension "http://127.0.0.1:5179/mcp"';
+    const developer = '--with-builtin developer';
+    const tavily    = ext(`python ${path.join(PRECRIME_ROOT, 'tools', 'tavily_lean_mcp.py')}`);
+    const rss       = ext(`node ${path.join(PRECRIME_ROOT, 'rss', 'rss-scorer-mcp', 'index.js')}`);
+    const base = [precrime, developer];            // every worker: the pipeline tool + shell
+    switch (taskType) {
+        case 'SCRAPE_SOURCE':       return [...base, tavily, rss];
+        case 'DRILL_DOWN':
+        case 'ENRICH_CLIENT':
+        case 'FIND_CLIENT_SOURCES':
+        case 'DISCOVER_SOURCES':    return [...base, tavily];
+        case 'LAST_30_DAYS':
+        case 'APPLY_FACTLET':
+        case 'DRAFT_OUTREACH':      return base;   // no external research -- pipeline + shell only
+        default:                    return [...base, tavily];
+    }
+}
+
+// Short human-readable subject for a task, for log lines. Unique ids tell you
+// nothing; this says WHAT a task is working on -- the target record and, for
+// drill-downs, which fields it is chasing. Pure string-building, no DB hit.
+function taskDesc(task) {
+    let inp = {};
+    try { inp = task.input ? JSON.parse(task.input) : {}; } catch (_) {}
+    const tail = task.targetId ? task.targetId.slice(-6) : null;
+    switch (task.type) {
+        case 'DRILL_DOWN': {
+            const missing = Array.isArray(inp.missing) && inp.missing.length
+                ? ` missing=[${inp.missing.join(',')}]` : '';
+            const what = task.targetType === 'Client' ? 'client' : 'booking';
+            return `${what} ${tail}${missing}`;
+        }
+        case 'LAST_30_DAYS': return 'last30days demand scan (VALUE_PROP topics)';
+        case 'SCRAPE_SOURCE': return `source ${inp.url || inp.channel || tail || ''}`.trim();
+        case 'ENRICH_CLIENT':
+        case 'FIND_CLIENT_SOURCES': return `${task.targetType.toLowerCase()} ${tail || ''}`.trim();
+        case 'APPLY_FACTLET': return `factlet -> ${task.targetType.toLowerCase()} ${tail || ''}`.trim();
+        case 'DISCOVER_SOURCES': return 'find new scrape sources';
+        default: return task.targetId ? `${task.targetType} ${tail}` : task.targetType;
+    }
+}
 
 // ARMING GATE. The conductor loop boots with the MCP server (so workers can
 // connect the instant the port binds) but stays DORMANT — it claims nothing,
@@ -69,6 +123,22 @@ async function conductorLoop(cfg, hooks) {
         ? path.resolve(PRECRIME_ROOT, w.skillsRoot)
         : path.resolve(PRECRIME_ROOT, 'skills');
 
+    // Boot guard: every mapped worker skill must exist on disk NOW. A missing file
+    // means dispatch later fails with skill_file_missing — a wasted worker spawn and
+    // a failed Task. Catch a broken/partial deploy loudly at startup instead.
+    {
+        const gaps = Object.entries(WORKER_SKILL_MAP)
+            .filter(([, f]) => !fs.existsSync(path.resolve(skillsRoot, f)))
+            .map(([t, f]) => `${t} -> ${f}`);
+        if (gaps.length) {
+            console.error(`[conductor] SKILL GAP — missing worker skill file(s) under ${skillsRoot}:`);
+            gaps.forEach(g => console.error(`  ✗ ${g}`));
+            console.error('[conductor] those task types WILL fail. Fix deploy.js skill list + redeploy, then restart.');
+        } else {
+            console.error(`[conductor] skill check OK — all ${Object.keys(WORKER_SKILL_MAP).length} worker skills present.`);
+        }
+    }
+
     // Self-feed: when the ready queue empties and no workers are running, the
     // conductor calls hooks.replan() (the planner) to top up the queue — draining
     // the backlog across fresh sessions until the planner switches to enrichment +
@@ -119,7 +189,7 @@ async function conductorLoop(cfg, hooks) {
                 try {
                     const r = (await runInProcess(t)) || {};
                     inprocHandled++;
-                    console.error(`[conductor] in-process done — task=${t.id} type=${t.type}${r.changed != null ? ` changed=${r.changed}` : ''}${r.hotCount != null ? ` hot=${r.hotCount}` : ''}`);
+                    console.error(`[conductor] in-process done — ${t.type}: ${taskDesc(t)}${r.changed != null ? ` changed=${r.changed}` : ''}${r.hotCount != null ? ` hot=${r.hotCount}` : ''}`);
                 } catch (e) {
                     console.error(`[conductor] in-process error — task=${t.id} type=${t.type}: ${e.message}`);
                     await conductorFailTask(t.id, `inproc_error: ${e.message}`);
@@ -184,7 +254,10 @@ async function conductorLoop(cfg, hooks) {
                     const skillPrompt = workerInstFlag
                         ? `${workerInstFlag} "${tmpMd}"`
                         : `"Read the skill file at ${tmpMd} using the Read tool, then execute every instruction in it exactly. This is an automated PRECRIME worker task — use the precrime__pipeline MCP tools as the file directs. Do not ask for confirmation; proceed immediately."`;
-                    const cmdLine = `${workerBin} ${workerBaseArgs.join(' ')} ${skillPrompt}`;
+                    // Scope the worker to only the MCP extensions its task type needs
+                    // (goose only; see gooseExtArgs). Cuts the per-turn tool-schema tax.
+                    const extFlags = EXT_SCOPE ? ` --no-profile ${gooseExtArgs(task.type).join(' ')}` : '';
+                    const cmdLine = `${workerBin} ${workerBaseArgs.join(' ')}${extFlags} ${skillPrompt}`;
                     fs.writeFileSync(tmpBat,
                         `@echo off\r\n${cmdLine}\r\nexit /b %errorlevel%\r\n`,
                         'utf8');
@@ -230,7 +303,7 @@ async function conductorLoop(cfg, hooks) {
 
                 proc.on('exit', async (code) => {
                     clearTimeout(killTimer);
-                    const label = `${task.type} ${task.id.slice(-6)}`;
+                    const label = `${task.type}: ${taskDesc(task)}`;
                     // code 0 / null (SIGTERM) = worker finished via MCP complete_task.
                     // Nonzero = failed; surface the captured output so the cause is visible.
                     if (code !== 0 && code !== null) {
@@ -251,7 +324,7 @@ async function conductorLoop(cfg, hooks) {
                 });
 
                 active.set(task.id, { proc, killTimer });
-                console.error(`[conductor] spawned — task=${task.id} type=${task.type}`);
+                console.error(`[conductor] spawned — ${task.type}: ${taskDesc(task)}`);
 
                 if (spawnStaggerMs > 0 && tasks.indexOf(task) < tasks.length - 1) {
                     await sleep(spawnStaggerMs);

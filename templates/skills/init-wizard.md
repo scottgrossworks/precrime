@@ -20,17 +20,14 @@ precrime__pipeline({ action: "status" })
 
 Error -> STOP. Say: `Pipeline not connected. Re-run launcher.`
 
-## Step 1.5: Source table seed (always run, idempotent)
+## Step 1.5: Sources (no action needed)
 
-ALWAYS run this on every startup:
-
-```
-precrime__pipeline({ action: "import_sources" })
-```
-
-This reads every `_sources.md` and `discovered_directories.md` seed file and bulk-inserts new URLs into the Source table. Dedup is on URL, so re-running is cheap and safe. This is how the user adds new FB pages / RSS feeds / subreddits / IG handles between runs: they edit the relevant seed file, and Step 1.5 picks up the additions on the next launch.
-
-Do NOT skip this step "because nothing changed" -- the agent has no reliable way to know if the user edited a seed file since last run. The cost (one query per seed file) is trivial.
+Source lists are the single source of truth in `data/sources/<channel>.md` and are
+loaded into the server's in-memory index automatically at startup -- there is NO
+import step. The user adds sources by editing `data/sources/<channel>.md` (one URL
+per line) between runs; the server picks them up on the next launch. At runtime,
+`DISCOVER_SOURCES` and scrape-time recursion grow the list via `add_sources` (the
+server is the sole writer). Nothing to run here -- proceed.
 
 Returns `{ byChannel: { directory:{added,duplicates,...}, rss:{...}, ... }, total_added, total_duplicates, total_invalid }`.
 

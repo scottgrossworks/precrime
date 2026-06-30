@@ -1,0 +1,29 @@
+FROM ubuntu:24.04
+
+ENV DEBIAN_FRONTEND=noninteractive
+ENV HOME=/root
+ENV PATH="/root/.local/bin:/usr/local/bin:${PATH}"
+
+# System deps + Node 20
+RUN apt-get update && apt-get install -y \
+    curl git python3 python3-venv ca-certificates \
+    && curl -fsSL https://deb.nodesource.com/setup_20.x | bash - \
+    && apt-get install -y nodejs \
+    && rm -rf /var/lib/apt/lists/*
+
+# Install Claude Code CLI
+RUN npm install -g @anthropic-ai/claude-code
+
+# Bake global headless overrides into the image.
+# Claude Code reads ~/.claude/CLAUDE.md as the global instruction layer
+# before the project-level CLAUDE.md from the mounted volume.
+RUN mkdir -p /root/.claude
+COPY docker/CLAUDE.docker.md /root/.claude/CLAUDE.md
+
+# Entrypoint: same DB copy/sync pattern as Hermes — npm install + prisma generate + launch
+COPY docker/entrypoint.claude.sh /entrypoint.sh
+RUN chmod +x /entrypoint.sh
+
+WORKDIR /precrime
+
+ENTRYPOINT ["/entrypoint.sh"]

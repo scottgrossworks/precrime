@@ -107,41 +107,13 @@ model SessionEvent {
 }
 
 // ============================================================================
-// SOURCE -- the queue of dereferenceable discovery sources
+// SOURCE -- REMOVED. Scrape sources now live in per-channel markdown files
+// (skills/*-factlet-harvester/*_sources.md, skills/source-discovery/*.md) which
+// are the single source of truth. The server reads them into an in-memory index
+// at startup (server/mcp/sourceStore.js) and is the sole writer; pipeline
+// next_source/mark_source/add_sources operate on markdown, not a DB table.
+// Existing Source rows are exported to markdown by scripts/migrate-db.js.
 // ============================================================================
-// Replaces the markdown-as-queue pattern. Every URL the system might scrape
-// (directories, RSS feeds, FB pages, IG accounts/hashtags, subreddits, X
-// accounts/hashtags, blogs) lives here. Agents call pipeline.next_source to
-// pop one with an atomic claim, scrape it, then pipeline.mark_source to
-// release the claim and persist the result. New URLs found during a scrape
-// are added via pipeline.add_sources. _sources.md files become seed-only.
-//
-// The recursion arms in FOUNDATION.md route through this table:
-//   - source recursion: a scraped page reveals a new URL -> add_sources
-//   - claim timeout (10min) replaces the prior 3-min save-or-terminate
-//     watchdog for the URL queue specifically. If an agent dies mid-scrape,
-//     the row becomes claimable again.
-// ============================================================================
-
-model Source {
-  id             String    @id @default(cuid())
-  url            String    @unique             // canonical normalized URL
-  channel        String                         // directory|rss|fb|ig|reddit|x|blog|website
-  subtype        String?                        // page|group|account|hashtag|keyword|feed|subreddit
-  label          String?
-  category       String?
-  scrapedAt      DateTime?
-  claimedAt      DateTime?                      // for atomic claim (work-stealing)
-  claimedBy      String?                        // session_id holding the claim
-  clientsFound   Int       @default(0)
-  failedReason   String?
-  discoveredAt   DateTime  @default(now())
-  discoveredFrom String?                        // url of source that linked here (recursion lineage)
-
-  @@index([channel])
-  @@index([scrapedAt])
-  @@index([claimedAt])
-}
 
 // ============================================================================
 // TASK -- the unit of work for the new Planner/Worker/Judge architecture
