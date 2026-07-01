@@ -1,7 +1,7 @@
 // Run: node --test classification.test.js
 const { test } = require('node:test');
 const assert = require('node:assert');
-const { classify, isGenericEmail } = require('./classification');
+const { classify, isGenericEmail, classifyEventClass } = require('./classification');
 
 const HOUR = 3600 * 1000;
 const NOW = 1_750_000_000_000; // fixed reference time
@@ -19,18 +19,12 @@ function hotBooking() {
         title: 'Spring carnival', shared: false, sharedAt: null, leedId: null
     };
 }
-const opts = { factletCount: 3, now: NOW, futureMinHours: 12 };
+const opts = { now: NOW, futureMinHours: 12 };
 
 test('all prerequisites met -> hot_eligible', () => {
     const r = classify(hotClient(), hotBooking(), opts);
     assert.equal(r.state, 'hot_eligible');
     assert.deepEqual(r.missing, []);
-});
-
-test('zero factlets -> cold (no_factlets)', () => {
-    const r = classify(hotClient(), hotBooking(), { ...opts, factletCount: 0 });
-    assert.equal(r.state, 'cold');
-    assert.equal(r.reason, 'no_factlets');
 });
 
 test('already shared -> cold (acted_on_shared)', () => {
@@ -85,4 +79,41 @@ test('isGenericEmail defaults and overrides', () => {
     assert.equal(isGenericEmail('info@x.com'), true);
     assert.equal(isGenericEmail('jane@x.com'), false);
     assert.equal(isGenericEmail('news@x.com', ['news']), true);
+});
+
+// ---- classifyEventClass: direct | container -------------------------------
+
+test('classifyEventClass: trade-show / expo / convention -> container', () => {
+    assert.equal(classifyEventClass({ title: 'LA Auto Show 2026', description: 'Major consumer auto show at LACC' }), 'container');
+    assert.equal(classifyEventClass({ title: 'LA Comic Con 2026', description: 'Pop culture and cosplay convention' }), 'container');
+    assert.equal(classifyEventClass({ title: 'ADLM 2026 Clinical Lab Expo', description: 'Clinical lab medicine expo' }), 'container');
+    assert.equal(classifyEventClass({ title: 'Long Beach Expo Collectibles Show 2026', description: 'coins and memorabilia', location: 'Long Beach Convention Center' }), 'container');
+    assert.equal(classifyEventClass({ title: 'Spring Job Fair', description: 'employers recruiting' }), 'container');
+});
+
+test('classifyEventClass: festivals / fairs -> container', () => {
+    assert.equal(classifyEventClass({ title: 'Gloria Molina Grand Park Summer Block Party' }), 'container');
+    assert.equal(classifyEventClass({ title: 'FoodieLand Food Festival', description: 'Large food festival' }), 'container');
+    assert.equal(classifyEventClass({ title: 'Downtown Street Fair', description: 'vendors and music' }), 'container');
+    assert.equal(classifyEventClass({ title: 'Cinco de Mayo Fiesta' }), 'container');
+});
+
+test('classifyEventClass: tournaments / championships -> container (vendors + crowd, same as a trade show)', () => {
+    // A tournament at a convention center has the same vendors/crowd a trade show does.
+    assert.equal(classifyEventClass({ title: 'IBJJF World Championship 2026', description: 'jiu-jitsu tournament', location: 'Long Beach Convention Center' }), 'container');
+    assert.equal(classifyEventClass({ title: 'California Invitational Taekwondo Championship', location: 'Los Angeles Convention Center' }), 'container');
+    assert.equal(classifyEventClass({ title: 'LA Marathon 2026' }), 'container');
+    assert.equal(classifyEventClass({ title: 'SoCal Cup: The Showcase (Volleyball)' }), 'container');
+});
+
+test('classifyEventClass: direct is the default (single private host)', () => {
+    assert.equal(classifyEventClass({ title: 'Acme Corp holiday party', description: 'private company event' }), 'direct');
+    assert.equal(classifyEventClass({ title: 'Smith wedding reception' }), 'direct');
+    assert.equal(classifyEventClass({ title: 'Mateo 5th birthday party' }), 'direct');
+});
+
+test('classifyEventClass: empty/null is direct, never throws', () => {
+    assert.equal(classifyEventClass(null), 'direct');
+    assert.equal(classifyEventClass({}), 'direct');
+    assert.equal(classifyEventClass({ title: '', description: '', location: '' }), 'direct');
 });

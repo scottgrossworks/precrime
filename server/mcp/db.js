@@ -18,6 +18,7 @@ const WORKER_SKILL_MAP = {
     FIND_CLIENT_SOURCES: 'find-client-sources.md',
     DISCOVER_SOURCES:    'discover-sources.md',
     DRILL_DOWN:          'drill-down.md',
+    DRILL_CONTAINER:     'drill-container.md',   // any multi-vendor event: organizer + expand fitting vendors + marketplace prep
     LAST_30_DAYS:        'last-30-days.md',
     DRAFT_OUTREACH:      'outreach-drafter.md'
 };

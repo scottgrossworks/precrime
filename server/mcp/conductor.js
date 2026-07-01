@@ -38,6 +38,7 @@ function gooseExtArgs(taskType) {
     switch (taskType) {
         case 'SCRAPE_SOURCE':       return [...base, tavily, rss];
         case 'DRILL_DOWN':
+        case 'DRILL_CONTAINER':
         case 'ENRICH_CLIENT':
         case 'FIND_CLIENT_SOURCES':
         case 'DISCOVER_SOURCES':    return [...base, tavily];
@@ -62,6 +63,7 @@ function taskDesc(task) {
             const what = task.targetType === 'Client' ? 'client' : 'booking';
             return `${what} ${tail}${missing}`;
         }
+        case 'DRILL_CONTAINER': return `container ${tail} -> organizer+vendors`;
         case 'LAST_30_DAYS': return 'last30days demand scan (VALUE_PROP topics)';
         case 'SCRAPE_SOURCE': return `source ${inp.url || inp.channel || tail || ''}`.trim();
         case 'ENRICH_CLIENT':
@@ -175,7 +177,7 @@ async function conductorLoop(cfg, hooks) {
         // or hot action suppresses APPLY_FACTLET / enrichment / discovery, so they
         // must reach terminal before the next replan or the pipeline deadlocks. Runs
         // synchronously in-process (no worker spawn), using the server's LLM.
-        let inprocHandled = 0;
+        let stateChanged = false;   // did an in-process task actually change GATING state?
         if (runInProcess) {
             let inproc = [];
             try {
@@ -188,7 +190,13 @@ async function conductorLoop(cfg, hooks) {
                 if (!(await conductorClaimTask(t.id, workerId))) continue;
                 try {
                     const r = (await runInProcess(t)) || {};
-                    inprocHandled++;
+                    // JUDGE_AFFECTED can promote/demote bookings (changes the gating state the
+                    // planner reads). SHOW_HOT_LEEDZ is a read-only presenter -- it changes
+                    // NOTHING, so it must NOT trigger an immediate replan. Treating it as a
+                    // state change caused a tight spin: replan -> SHOW_HOT_LEEDZ -> budget
+                    // exhausted -> session closed -> replan ... with no cooldown breather,
+                    // whenever any hot booking sat unacted (see the container backlog).
+                    if (t.type === 'JUDGE_AFFECTED') stateChanged = true;
                     // Prefer the handler's human-readable summary; fall back to the raw
                     // counters only if a handler doesn't supply one.
                     const detail = r.summary
@@ -200,9 +208,11 @@ async function conductorLoop(cfg, hooks) {
                     await conductorFailTask(t.id, `inproc_error: ${e.message}`);
                 }
             }
-            // We just changed gating state (judge/hot cleared) — let the next replan
-            // fire immediately rather than waiting out the cooldown.
-            if (inprocHandled > 0) lastReplanAt = 0;
+            // Only when a JUDGE_AFFECTED actually changed gating state do we let the next
+            // replan fire immediately (skip the cooldown) -- there may be fresh hot work to
+            // act on. A bare SHOW_HOT_LEEDZ pass changes nothing, so it falls through to the
+            // normal idle cooldown instead of spinning.
+            if (stateChanged) lastReplanAt = 0;
         }
 
         const slots = maxWorkers - active.size;

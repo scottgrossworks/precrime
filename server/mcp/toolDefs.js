@@ -23,7 +23,7 @@ const TOOL_DEFS = [
                         '',
                         'action="delete": Permanently remove a record. Pass target ("booking" | "client" | "factlet") and id. For target="client", any attached bookings and factlet links are removed too (cascade). Returns { deleted: true, target, id, cascadedBookings, cascadedFactlets }. Use this when the user says "delete this booking", "remove this client", "drop this factlet", or any imperative removal.',
                         '',
-                        'action="rescore": Re-classify every booking to cold / brewing / hot (procedural gates + LLM judge). Use after editing DOCS/CLASSIFICATION.md policy or DOCS/SCORING.json knobs. Pass scope="all" (default), scope="hot" to sanity-check the current hot queue, or scope=<clientId> to limit to one client. Returns counts: rescored, changed, before/after status distribution.',
+                        'action="rescore": Re-classify every booking to cold / brewing / hot (procedural gates + LLM judge). Use after editing DOCS/CLASSIFICATION.md policy or DOCS/SCORING.json knobs. Pass scope="all" (default), scope="hot" to sanity-check the current hot queue, or scope=<clientId> to limit to one client. Add procedural=true for a TOKEN-FREE demote-only sweep (gates only, no LLM) -- e.g. {scope:"hot", procedural:true} cheaply scrubs legacy mis-scored hot leedz. Returns counts: rescored, changed, before/after status distribution.',
                         '',
                         'action="resolve_dates": STRUCTURED-ONLY. Server-side date validation + tz-aware epoch math. Required: start { year, month, day, hour, minute, ampm? }, end { year, month, day, hour, minute, ampm? }, timezone (IANA, e.g. "America/Los_Angeles"). Optional: zip (echoed only -- zip-to-tz derivation NOT supported), rawText (informational evidence only -- timezone smuggled inside rawText is REJECTED), sourceProof. The LLM is forbidden from computing epoch ms; it must only extract the structured fields. Returns { ok, st, et, startIso, endIso, timezone, zip, warnings } on success, or { ok:false, errors:[fieldName:reason] } on failure.',
                         '',
@@ -192,6 +192,10 @@ const TOOL_DEFS = [
                             scope: {
                                 type: 'string',
                                 description: 'For action=rescore only. "all" (default) re-classifies every booking. "hot" sanity-checks only the current hot queue. Or pass a clientId to re-classify one client only. Use after editing DOCS/CLASSIFICATION.md or DOCS/SCORING.json.'
+                            },
+                            procedural: {
+                                type: 'boolean',
+                                description: 'For action=rescore only. When true, run a TOKEN-FREE procedural rescore: deterministic gates only (no LLM), DEMOTE-ONLY. Scrubs legacy/mis-scored leedz that no longer pass the gates (event passed, missing field, generic/org contact) down to brewing/cold; never promotes to hot. Pair with scope="hot" to cheaply clean the hot backlog. Default false (full re-judge, which spends tokens on the LLM fit-gate).'
                             },
                             entity: {
                                 type: 'string',

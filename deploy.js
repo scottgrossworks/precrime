@@ -547,6 +547,7 @@ console.log('\nSkill playbooks:');
   ['skills/find-client-sources.md',           'skills/find-client-sources.md'],
   ['skills/discover-sources.md',              'skills/discover-sources.md'],
   ['skills/drill-down.md',                    'skills/drill-down.md'],
+  ['skills/drill-container.md',               'skills/drill-container.md'],
   ['skills/enrichment-agent.md',              'skills/enrichment-agent.md'],
   ['skills/apply-factlet.md',                 'skills/apply-factlet.md'],
   ['skills/show-hot-leedz.md',                'skills/show-hot-leedz.md'],

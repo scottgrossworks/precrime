@@ -138,4 +138,73 @@ function classify(client, booking, opts) {
     return { state: 'brewing', missing };
 }
 
-module.exports = { classify, isGenericEmail, isOrgName };
+// ============================================================================
+// EVENT-CLASS DETECTOR -- direct | container
+// ============================================================================
+// Orthogonal to classify(): classify() asks "is this booking's CONTACT/FIELD set
+// complete enough to be hot?"; this asks "is this a single prospect or a crowd?".
+//   - direct    -> a single private host hires us for THEIR event (wedding, birthday,
+//                  company party, gala). The booking IS the opportunity. Existing flow.
+//   - container -> a PUBLIC / multi-vendor / competitive event (convention, expo, trade
+//                  show, festival, fair, tournament, championship, comic-con, marathon).
+//                  The opportunity is the ORGANIZER, the VENDORS/EXHIBITORS, and/or the
+//                  crowd -- NOT the event's subject. We don't care about taekwondo any
+//                  more than nursing at an AMA expo; what matters is that vendors/booths/
+//                  a crowd exist. Routed to DRILL_CONTAINER, which then judges VALUE_PROP
+//                  FIT (via VALUE_PROP's RELEVANCE SIGNALS) before working it.
+// This is a deliberately GENEROUS structural pre-filter, NOT a fit judgment: any public
+// gathering is a container CANDIDATE; the worker's LLM fit gate does the real filtering
+// (a roofing expo and a comic con are both containers here -- the worker decides which is
+// worth pursuing, and which vendors within). Over-inclusion is cheap (worker bails on
+// no-fit); under-inclusion loses leads. Pure + deterministic (no DB, no LLM), matched on
+// lowercased title+description+location. No persisted field -- recomputed on the fly, no
+// migration. NOTE: a convention-center VENUE is a valid container signal now -- a
+// championship at a convention center has the same vendors/crowd a trade show does, so we
+// do NOT strip the venue name (the event TYPE never mattered, only that it gathers a crowd).
+
+// Substring phrases (multi-word) + whole-word tokens (single words, matched on word
+// boundaries so "con" never matches "control"). Together they cover trade-shows, expos,
+// conferences, festivals, fairs, and competitive/public gatherings.
+const CONTAINER_PHRASES = [
+    'trade show', 'comic con', 'fan expo', 'fan fest', 'auto show', 'boat show',
+    'home show', 'gift show', 'business expo', 'job fair', 'career fair',
+    'exhibit hall', 'exhibitor hall', 'street fair', 'block party', 'food fest',
+    'food festival', 'night market', 'art walk', 'county fair', 'state fair',
+    'craft fair', 'farmers market', 'music festival', 'film festival',
+    'arts festival', 'world cup', 'grand prix'
+];
+const CONTAINER_WORDS = [
+    // trade-show / convention family
+    'expo', 'convention', 'exhibitor', 'exhibitors', 'exhibition', 'booth', 'booths',
+    'fairplex', 'conference', 'symposium', 'tradeshow', 'congress', 'convocation',
+    // festival / fair family
+    'festival', 'carnival', 'parade', 'fest', 'fiesta', 'powwow', 'jubilee', 'fair',
+    // competitive / public-gathering family
+    'tournament', 'championship', 'championships', 'invitational', 'classic', 'cup',
+    'marathon', 'regatta', 'games', 'rally', 'showcase'
+];
+
+function _hasWord(text, word) {
+    return new RegExp(`\\b${word}\\b`, 'i').test(text);
+}
+
+/**
+ * Classify a booking's event-class from its text. Returns 'direct' | 'container'.
+ * A container is any public / multi-vendor / competitive event (the worker then judges
+ * VALUE_PROP fit). Empty/absent text -> 'direct' (never throws).
+ *
+ * @param {object} booking - Booking row (title, description, location)
+ * @returns {'direct'|'container'}
+ */
+function classifyEventClass(booking) {
+    if (!booking) return 'direct';
+    const text = `${booking.title || ''} ${booking.description || ''} ${booking.location || ''}`
+        .toLowerCase().replace(/\s+/g, ' ').trim();
+    if (!text) return 'direct';
+    const isContainer =
+        CONTAINER_PHRASES.some(p => text.includes(p)) ||
+        CONTAINER_WORDS.some(w => _hasWord(text, w));
+    return isContainer ? 'container' : 'direct';
+}
+
+module.exports = { classify, isGenericEmail, isOrgName, classifyEventClass };

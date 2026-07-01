@@ -36,6 +36,14 @@ Fold only facts about THIS client into the dossier; invent nothing. Format:
 - Dedup: don't append a fact already covered; rewrite a line only if the summary is sharper/newer.
 - Use today's date for new dated lines unless the summary states an explicit date.
 - Set `email`/`phone` ONLY if the summary states a direct, non-generic one. No factlets/bookings here.
+- **SYNERGY (container vendors only — `client.source` starts with `container:`):** this client
+  arrived from a container drill-down (convention/expo/festival/fair/tournament) already carrying a thin
+  inherited booking. Scan the summary for
+  evidence of a fit between THIS exhibitor and the seller's service (read VALUE_PROP's RELEVANCE SIGNALS):
+  have they used a service like ours before — e.g. a photo booth / caricaturist / entertainer at a prior
+  booth or event? Do they draw the kind of crowd our service serves? If so, record it as a prominent
+  `[PERMANENT] synergy: <specific evidence>` line — this is the strongest warm signal the Judge reads,
+  so make it concrete and verifiable from the summary. Invent NOTHING; no evidence → add no synergy line.
 - Mark the source consumed: in `targetUrls` (JSON array) set the entry whose `url` matches to
   `consumed:true`, leave all others unchanged (no match → leave as-is).
 

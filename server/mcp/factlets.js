@@ -367,12 +367,33 @@ async function computeBookingTargetScore(bookingId) {
     };
 }
 
+// Token-free procedural state for a booking: just the deterministic classify() gates
+// (real future date, venue+zip, real NAMED non-generic contact, not acted-on), with NO
+// LLM call and NO DB write. Returns the procedural verdict
+//   { state: 'cold' | 'brewing' | 'hot_eligible', missing[] }.
+// Caller passes the already-loaded booking + its client (avoids a fetch). This is the
+// cheap half of computeBookingTargetScore -- the procedural rescore uses it to DEMOTE
+// hot bookings that no longer pass the gates (legacy/mis-scored cleanup) without paying
+// for the LLM promote-judge. It never returns 'hot' (only the LLM promotes hot_eligible).
+function classifyBookingProcedural(booking, client) {
+    const cfg = RUNTIME_CONFIG;
+    const futureMinHours = (SCORING.classification && SCORING.classification.futureMinHours) ?? 12;
+    const mode = bookingActionToMode(cfg && cfg.defaultBookingAction);
+    const defaultTrade = (VALUE_PROP && VALUE_PROP.trade) || (cfg && cfg.defaultTrade) || '';
+    return classification.classify(client, booking, {
+        futureMinHours, mode, defaultTrade,
+        genericEmailPrefixes: (SCORING.booking && SCORING.booking.genericEmailPrefixes) || [],
+        orgNameTokens: (SCORING.classification && SCORING.classification.orgNameTokens) || []
+    });
+}
+
 module.exports = {
     isGenericEmail,
     getFactletStaleDays,
     findLiveFactletsForClient,
     computeClientScore,
     computeBookingTargetScore,
+    classifyBookingProcedural,
     bookingActionToMode,
     factletMentionsValueProp,
     collectValuePropDemandTerms,

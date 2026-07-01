@@ -152,6 +152,7 @@ const {
     findLiveFactletsForClient,
     computeClientScore,
     computeBookingTargetScore,
+    classifyBookingProcedural,
     bookingActionToMode,
     factletMentionsValueProp,
     collectValuePropDemandTerms,
@@ -240,7 +241,7 @@ async function handlePipeline(id, params) {
         case 'tasks':          return await pipelineTasks(id, args);
         case 'recycler':       return await pipelineRecycler(id, args);
         case 'delete':         return await pipelineDelete(id, args.target, args.id);
-        case 'rescore':        return await pipelineRescore(id, args.scope || 'all');
+        case 'rescore':        return await pipelineRescore(id, args.scope || 'all', args.procedural === true);
         case 'resolve_dates':  return createSuccessResponse(id, JSON.stringify(await resolveEventDates(args), null, 2));
         case 'share_booking':  return await pipelineShareBooking(id, args);
         case 'dismiss_booking': return await pipelineDismissBooking(id, args);
@@ -341,7 +342,7 @@ async function pipelineDelete(id, target, recordId) {
  *
  * Returns a summary: count of bookings touched, before/after status counts.
  */
-async function pipelineRescore(id, scope) {
+async function pipelineRescore(id, scope, procedural = false) {
     let where = {};
     if (scope === 'hot') {
         where = { status: 'hot' };
@@ -350,14 +351,45 @@ async function pipelineRescore(id, scope) {
         where = { clientId: scope };
     }
 
-    const bookings = await prisma.booking.findMany({ where, select: { id: true, status: true } });
-
     // Snapshot counters: before/after status distribution + single changed total.
     const before = {};
     const after  = {};
     const bump = (m, k) => { m[k] = (m[k] || 0) + 1; };
     let changed = 0;
     const errors = [];
+
+    // --- Token-free PROCEDURAL rescore: deterministic gates only, NO LLM. ---
+    // Re-runs classify() over the scoped bookings and DEMOTES any that no longer pass the
+    // gates (event passed, missing field, generic/org contact, already acted-on) -> cold /
+    // brewing. It NEVER promotes (only the LLM judge mints 'hot'), so a still-qualifying hot
+    // leed (hot_eligible) is left exactly as-is. This is the cheap legacy-backlog cleanup:
+    // pass procedural:true to scrub mis-scored hot leedz without spending a single token.
+    if (procedural) {
+        const rows = await prisma.booking.findMany({ where, include: { client: true } });
+        for (const b of rows) {
+            bump(before, b.status || 'unknown');
+            try {
+                const proc = classifyBookingProcedural(b, b.client);
+                // hot_eligible -> keep current status (do NOT auto-promote to hot here).
+                // Otherwise the procedural verdict (cold|brewing) becomes the new status.
+                const next = proc.state === 'hot_eligible' ? b.status : proc.state;
+                if (next !== b.status) {
+                    await prisma.booking.update({ where: { id: b.id }, data: { status: next } });
+                    changed++;
+                }
+                bump(after, next);
+            } catch (e) {
+                errors.push({ id: b.id, msg: e.message });
+                bump(after, b.status || 'unknown');
+            }
+        }
+        return createSuccessResponse(id, JSON.stringify({
+            rescored: rows.length, mode: 'procedural', tokenFree: true,
+            changed, before, after, errors
+        }, null, 2));
+    }
+
+    const bookings = await prisma.booking.findMany({ where, select: { id: true, status: true } });
 
     for (const b of bookings) {
         bump(before, b.status || 'unknown');
@@ -711,6 +743,7 @@ const _TASK_TYPE_LIMITS_DEFAULT = {
     SCRAPE_SOURCE:    5,
     APPLY_FACTLET:    5,
     DRILL_DOWN:       3,   // concurrent near-hot drill-downs (reserved slice)
+    DRILL_CONTAINER:  3,   // concurrent container drills (organizer + vendor expansion; heavier, conservative)
     LAST_30_DAYS:     4,   // last30days seeder -- the search is deterministic Python (no LLM), so cap by CPU/RAM, not cost. Run several in parallel.
     FIND_CLIENT_SOURCES: 5,
     ENRICH_CLIENT:    10,
@@ -732,6 +765,7 @@ const _TASK_SESSION_BUDGETS_DEFAULT = {
     SCRAPE_SOURCE:    25,
     APPLY_FACTLET:    50,
     DRILL_DOWN:       30,   // total near-hot drill-downs per session
+    DRILL_CONTAINER:  20,   // total container drills per session (tune after first live run)
     LAST_30_DAYS:     12,   // total last30days seeds per session (cheap search; let it run)
     FIND_CLIENT_SOURCES: 25,
     ENRICH_CLIENT:    50,
@@ -1699,6 +1733,45 @@ async function pipelinePlanTasks(id, args) {
                         input: { clientId: c.id, missing: ['client_email', 'booking'] }
                     });
                     if (!row) break;
+                }
+            }
+        }
+
+        // ---------- Stage 4.6: DRILL_CONTAINER -- work multi-vendor events ----------
+        // A convention / expo / festival / fair / tournament is not a single prospect; it
+        // is a CONTAINER -- a public, multi-vendor event whose opportunity is the ORGANIZER,
+        // the VENDORS/EXHIBITORS, and/or the crowd, NOT the event's subject (we don't care
+        // about taekwondo any more than nursing at an AMA expo). classifyEventClass() labels
+        // each LIVE booking; anything classified 'container' routes to ONE DRILL_CONTAINER
+        // worker that judges VALUE_PROP fit, finds the organizer, expands any vendor/exhibitor
+        // list into fitting leedz, and preps a marketplace listing. Detection runs over ALL live bookings,
+        // INCLUDING hot ones: a container can be field-complete (hot_eligible) yet still need
+        // working -- the presenter demotion keeps it out of the sellable list. One attempt per
+        // booking (skip any with a prior DRILL_CONTAINER). Does NOT suppress lower stages
+        // (same priority-inversion rule as Stage 4.5).
+        {
+            if ((await createBudget('DRILL_CONTAINER')).eff > 0) {
+                const priorContainer = new Set((await prisma.task.findMany({
+                    where: { type: 'DRILL_CONTAINER', targetType: 'Booking' },
+                    select: { targetId: true }
+                })).map(t => t.targetId).filter(Boolean));
+                // LIVE bookings: future-dated, not yet acted on. Include client id for inheritance.
+                const liveBookings = await prisma.booking.findMany({
+                    where: { startDate: { gt: new Date() }, shared: false },
+                    select: { id: true, clientId: true, title: true, description: true,
+                        location: true, zip: true, startDate: true, startTime: true }
+                });
+                for (const b of liveBookings) {
+                    const cls = classification.classifyEventClass(b);
+                    if (cls === 'direct') continue;          // single private host -> normal flow
+                    if (priorContainer.has(b.id)) continue;
+                    if ((await createBudget('DRILL_CONTAINER')).eff <= 0) break;
+                    await createTask('DRILL_CONTAINER', {
+                        targetType: 'Booking', targetId: b.id,
+                        input: { clientId: b.clientId, containerContext: {
+                            title: b.title, location: b.location, zip: b.zip,
+                            startDate: b.startDate, startTime: b.startTime } }
+                    });
                 }
             }
         }
