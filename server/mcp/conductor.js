@@ -12,7 +12,7 @@ const { spawn } = require('child_process');
 const path = require('path');
 const fs = require('fs');
 const os = require('os');
-const { conductorGetReadyTasks, conductorGetReadyInProcessTasks, conductorClaimTask, conductorFailTask, WORKER_SKILL_MAP } = require('./db');
+const { conductorGetReadyTasks, conductorGetReadyInProcessTasks, conductorClaimTask, conductorFailTask, conductorFailIfClaimed, WORKER_SKILL_MAP } = require('./db');
 
 const PRECRIME_ROOT = path.resolve(__dirname, '..', '..');
 
@@ -30,7 +30,13 @@ function sleep(ms) { return new Promise(r => setTimeout(r, ms)); }
 const EXT_SCOPE = !!process.env.PRECRIME_GOOSE_EXT_SCOPE;
 function gooseExtArgs(taskType) {
     const ext = s => `--with-extension "${s}"`;
-    const precrime  = '--with-streamable-http-extension "http://127.0.0.1:5179/mcp"';
+    // Use localhost, NOT 127.0.0.1: goose derives the extension name (and thus every tool's
+    // function-call name) from this URL host. "127.0.0.1" sanitizes to "127_0_0_1_5179_mcp",
+    // which STARTS WITH A DIGIT -- and Gemini/OpenRouter reject function names that don't start
+    // with a letter or underscore, 400ing EVERY worker's first LLM call so it dies before doing
+    // anything (the months-long "0 saves / workers exit without completing" bug). "localhost"
+    // sanitizes to "localhost_5179_mcp" (starts with a letter) -> valid names -> workers run.
+    const precrime  = '--with-streamable-http-extension "http://localhost:5179/mcp"';
     const developer = '--with-builtin developer';
     const tavily    = ext(`python ${path.join(PRECRIME_ROOT, 'tools', 'tavily_lean_mcp.py')}`);
     const rss       = ext(`node ${path.join(PRECRIME_ROOT, 'rss', 'rss-scorer-mcp', 'index.js')}`);
@@ -63,7 +69,10 @@ function taskDesc(task) {
             const what = task.targetType === 'Client' ? 'client' : 'booking';
             return `${what} ${tail}${missing}`;
         }
-        case 'DRILL_CONTAINER': return `container ${tail} -> organizer+vendors`;
+        case 'DRILL_CONTAINER': {
+            const t = inp.containerContext && inp.containerContext.title;
+            return `container "${t || tail}" -> organizer+vendors`;
+        }
         case 'LAST_30_DAYS': return 'last30days demand scan (VALUE_PROP topics)';
         case 'SCRAPE_SOURCE': return `source ${inp.url || inp.channel || tail || ''}`.trim();
         case 'ENRICH_CLIENT':
@@ -164,7 +173,7 @@ async function conductorLoop(cfg, hooks) {
     // 'NONE (positional prompt)' = claude-style; any '--flag' = file-passed (e.g. goose).
     const _flagDesc = workerInstFlag === '' ? 'NONE (positional prompt)' : workerInstFlag;
     console.error(`[conductor] worker config — bin=${workerBin} baseArgs=[${workerBaseArgs.join(' ')}] instFlag=${_flagDesc}`);
-    console.error(`[conductor] self-feed ${replan ? `ENABLED (idle replan cooldown ${idleReplanCooldownMs}ms)` : 'DISABLED (no replan hook)'}; in-process exec ${runInProcess ? 'ENABLED (JUDGE_AFFECTED, SHOW_HOT_LEEDZ)' : 'DISABLED'}`);
+    console.error(`[conductor] self-feed ${replan ? `ENABLED (idle replan cooldown ${idleReplanCooldownMs}ms)` : 'DISABLED (no replan hook)'}; in-process exec ${runInProcess ? 'ENABLED (JUDGE_AFFECTED, SHOW_HOT_LEEDZ, LAST_30_DAYS)' : 'DISABLED'}`);
     console.error('[conductor] DORMANT — waiting for RUN_WORKFLOW (plan_tasks) before claiming/dispatching');
 
     while (true) {
@@ -276,9 +285,11 @@ async function conductorLoop(cfg, hooks) {
                     fs.writeFileSync(tmpBat,
                         `@echo off\r\n${cmdLine}\r\nexit /b %errorlevel%\r\n`,
                         'utf8');
-                    // GUARD: log the actual command so a wrong flag (e.g. an unexpected
-                    // --instructions on a claude worker) shows up here, not as a crash.
-                    console.error(`[conductor] batch → task=${task.id} cmd=${cmdLine.slice(0, 160)}${cmdLine.length > 160 ? '…' : ''}`);
+                    // Raw command only when debugging (PRECRIME_DEBUG_CMD); otherwise the
+                    // readable "spawned — <type>: <desc>" line below is all a human needs.
+                    if (process.env.PRECRIME_DEBUG_CMD) {
+                        console.error(`[conductor] cmd task=${task.id.slice(-6)}: ${cmdLine.slice(0, 160)}${cmdLine.length > 160 ? '…' : ''}`);
+                    }
                     proc = spawn('cmd.exe', ['/c', tmpBat], {
                         env:   { ...process.env, PRECRIME_TASK_ID: task.id },
                         stdio: ['ignore', 'pipe', 'pipe']
@@ -326,7 +337,20 @@ async function conductorLoop(cfg, hooks) {
                         console.error(`[conductor] FAILED — ${label} exit=${code}: ${why}`);
                         await conductorFailTask(task.id, `exit_${code}: ${why.slice(0, 140)}`);
                     } else {
-                        console.error(`[conductor] DONE — ${label}`);
+                        // Exit 0 is SUPPOSED to mean the worker called complete_task. But if the
+                        // task is STILL 'claimed', the worker exited WITHOUT completing it (ran out
+                        // of turns, silently errored, skipped the final call). Finalize it as failed
+                        // instead of leaving it a zombie until the 10-min stale-reclaim -- otherwise
+                        // it churns: claimed -> reclaimed -> retried -> exits-without-complete, forever.
+                        const orphaned = await conductorFailIfClaimed(task.id, 'worker_exited_without_complete_task');
+                        if (orphaned) {
+                            // Surface the worker's own stdout/stderr so we can SEE why it exited
+                            // without completing (bad provider/key, MCP connect fail, no turns, etc).
+                            const why = outTail.replace(/\s+/g, ' ').trim().slice(-400) || '(no worker output captured)';
+                            console.error(`[conductor] ORPHAN — ${label}: exited 0, never completed. worker said: ${why}`);
+                        } else {
+                            console.error(`[conductor] DONE — ${label}`);
+                        }
                     }
                     active.delete(task.id);
                 });

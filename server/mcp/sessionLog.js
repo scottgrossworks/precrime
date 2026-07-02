@@ -51,6 +51,8 @@ function buildSummaryMarkdown(s) {
         headline = `Session complete -- ${s.task_completions || 0} Task(s), no new saves`;
     } else if (s.actually_saved < (s.requested ?? Infinity)) {
         headline = `Session under target -- saved ${s.actually_saved} of ${requestedStr} requested`;
+    } else if ((s.worker_saved_clients || 0) + (s.worker_saved_bookings || 0) > 0) {
+        headline = `Session complete -- workers saved ${s.worker_saved_clients || 0} client(s) + ${s.worker_saved_bookings || 0} booking(s)`;
     } else {
         headline = `Session complete -- saved ${s.actually_saved}`;
     }
@@ -59,9 +61,8 @@ function buildSummaryMarkdown(s) {
     lines.push('');
     lines.push(`- Workflow: \`${s.workflow}\``);
     lines.push(`- Requested: ${requestedStr}`);
-    lines.push(`- Save attempts: ${s.save_attempts ?? 0}`);
-    lines.push(`- Actually saved: ${s.actually_saved}`);
-    lines.push(`- Failed: ${s.failed}`);
+    lines.push(`- Saved by workers: ${s.worker_saved_clients ?? 0} client(s), ${s.worker_saved_bookings ?? 0} booking(s)`);
+    lines.push(`- Saved by orchestrator (direct): ${s.actually_saved} (attempts: ${s.save_attempts ?? 0}, failed: ${s.failed})`);
     if (s.task_total !== undefined) lines.push(`- Tasks: ${s.task_completions || 0} completed of ${s.task_total}`);
     lines.push(`- Status: ${s.status}`);
     if (s.reason) lines.push(`- Reason: ${s.reason}`);
@@ -387,6 +388,24 @@ async function pipelineReportSession(id, sessionId, close) {
         try { return JSON.parse(e.payload); } catch { return { raw: e.payload }; }
     });
 
+    // REAL saves made by spawned WORKER processes. Workers write straight to the DB and
+    // report the affected ids in their complete_task output -- but they never carry the
+    // orchestrator's session_id, so the save_success EVENT count above is ~always 0 for an
+    // autonomous workflow run. That made every autonomous session read "0 saves" even when
+    // workers minted dozens of leedz. Count the workers' actual output ids instead.
+    const workerClientIds = new Set();
+    const workerBookingIds = new Set();
+    for (const t of sessionTasks) {
+        if (t.status !== 'done' || !t.output) continue;
+        try {
+            const out = JSON.parse(t.output);
+            (out.clientIds  || []).forEach(x => x && workerClientIds.add(x));
+            (out.bookingIds || []).forEach(x => x && workerBookingIds.add(x));
+        } catch (_) { /* skip unparseable output */ }
+    }
+    const workerSavedClients  = workerClientIds.size;
+    const workerSavedBookings = workerBookingIds.size;
+
     // Honest status. Distinguish:
     //   - agent did literally nothing                 -> failed_no_data
     //   - agent scraped sources but URLs yielded zero -> scraped_no_clients (NOT a failure)
@@ -401,8 +420,13 @@ async function pipelineReportSession(id, sessionId, close) {
         honestStatus = 'failed_no_data';
         reason = 'no_save_attempts and no_sources_marked -- agent ran the workflow but did nothing';
     } else if (attempts.length === 0 && marks.length === 0 && terminalTaskCount > 0) {
-        honestStatus = 'completed_no_new_evidence';
-        reason = `${terminalTaskCount} Task(s) reached terminal status with 0 saves -- valid Task workflow result when evidence is duplicate, irrelevant, or judge-only`;
+        if (workerSavedClients > 0 || workerSavedBookings > 0) {
+            honestStatus = 'complete';
+            reason = `${terminalTaskCount} Task(s) done; workers saved ${workerSavedClients} client(s) + ${workerSavedBookings} booking(s) (out-of-band, so the session save_success events read 0).`;
+        } else {
+            honestStatus = 'completed_no_new_evidence';
+            reason = `${terminalTaskCount} Task(s) reached terminal status with 0 saves -- valid Task workflow result when evidence is duplicate, irrelevant, or judge-only`;
+        }
     } else if (attempts.length === 0 && marks.length > 0) {
         honestStatus = 'scraped_no_clients';
         const cf = marks.reduce((s, m) => { try { return s + (JSON.parse(m.payload).clientsFound || 0); } catch { return s; } }, 0);
@@ -424,6 +448,8 @@ async function pipelineReportSession(id, sessionId, close) {
         requested: session.targetCount,
         save_attempts: attempts.length,
         actually_saved: successes.length,
+        worker_saved_clients: workerSavedClients,
+        worker_saved_bookings: workerSavedBookings,
         failed: failures.length,
         saved_clients: savedClients,
         failures: failureList,

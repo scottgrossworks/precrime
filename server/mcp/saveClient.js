@@ -16,6 +16,22 @@ const { isGenericEmail } = require('./factlets');
 const { normalizeBookingDatesForSave } = require('./dates');
 const { judgeAffected } = require('./judge');
 const { logSessionEvent } = require('./sessionLog');
+const { VALUE_PROP } = require('./runtime');
+
+// A client with NO booking can never be enriched or promoted (both require a future
+// booking), so it sits as a permanent zombie. Every NEW client is therefore born with a
+// SEED booking -- a placeholder future date + the VALUE_PROP trade -- so it always enters
+// the funnel; the drill/enrich workers then replace the placeholder with the real event.
+function buildSeedBooking() {
+    const start = new Date(Date.now() + 90 * 24 * 60 * 60 * 1000); // +90d placeholder
+    return {
+        trade: (VALUE_PROP && VALUE_PROP.trade) || null,
+        startDate: start,
+        title: '(seed) awaiting real event',
+        source: 'seed:booking-at-creation',
+        notes: 'Auto-created stub so the client enters the enrichment/drill funnel. Drill replaces this with the real event.'
+    };
+}
 
 function createSaveHandler(deps) {
     const { isHttpUrl } = deps;
@@ -263,6 +279,13 @@ async function pipelineSave(id, clientId, patch, sessionId, judge, factletId) {
                 });
                 clientId = created.id;
                 existing = created;
+                // Booking-at-creation: if the caller supplied no booking, seed one so this
+                // new client never becomes a bookingless zombie. The upsert loop below picks
+                // it up from patch.bookings.
+                if (!Array.isArray(patch.bookings) || patch.bookings.length === 0) {
+                    patch.bookings = [buildSeedBooking()];
+                    await logSessionEvent(sessionId, 'seed_booking_created', { clientId, company: patch.company || patch.name });
+                }
             } catch (err) {
                 await logSessionEvent(sessionId, 'save_failed', { name: patch.name, error: err.message, attemptedPatch: patch });
                 return createErrorResponse(id, -32602, `client.create failed: ${err.message}`);

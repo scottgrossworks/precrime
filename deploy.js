@@ -263,6 +263,19 @@ for (const mod of ['classification.js', 'value_prop.js', 'conductor.js', 'db.js'
   }
 }
 
+// 2.1a Copy server/mcp/workers/ (procedural in-process workers). mcp_server.js requires
+// ./workers/last30daysTopics and ./workers/Last30DaysWorker for the in-process LAST_30_DAYS
+// path; without them the server crashes on startup. Whole dir so future workers ship too.
+const workersSrc = path.join(PRECRIME, 'server', 'mcp', 'workers');
+const workersDst = path.join(outputDir, 'server', 'mcp', 'workers');
+if (fs.existsSync(workersSrc)) {
+  const wn = copyDirFiltered(workersSrc, workersDst);
+  console.log(`  + server/mcp/workers/ (${wn} file(s))`);
+} else {
+  console.error('  ✗ FATAL: server/mcp/workers/ missing — mcp_server.js requires it and will not start');
+  process.exit(1);
+}
+
 // 2a. Copy gmail MCP server (mcp_gmail.js + gmail_mcp_config.json).
 // Provides gmail_send tool. Receives OAuth token from Chrome extension on port 3001.
 const gmailSrc    = path.join(PRECRIME, 'server', 'mcp', 'mcp_gmail.js');

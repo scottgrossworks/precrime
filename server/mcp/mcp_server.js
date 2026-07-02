@@ -95,7 +95,8 @@ const dbPath = process.env.DATABASE_URL.replace(/^file:/, '');
 
 // Prisma singleton lives in db.js (one instance shared with conductor.js).
 // DATABASE_URL is already set above -- db.js picks it up at require() time.
-const { prisma } = require('./db');
+const { prisma, createTaskRow } = require('./db');
+const { nextTopic } = require('./workers/last30daysTopics');   // deterministic LAST_30_DAYS topic rotation
 // Markdown is the single source of truth for scrape sources. The store owns the
 // per-channel files + an ephemeral in-memory index and is the sole writer.
 const { createSourceStore } = require('./sourceStore');
@@ -744,7 +745,7 @@ const _TASK_TYPE_LIMITS_DEFAULT = {
     APPLY_FACTLET:    5,
     DRILL_DOWN:       3,   // concurrent near-hot drill-downs (reserved slice)
     DRILL_CONTAINER:  3,   // concurrent container drills (organizer + vendor expansion; heavier, conservative)
-    LAST_30_DAYS:     4,   // last30days seeder -- the search is deterministic Python (no LLM), so cap by CPU/RAM, not cost. Run several in parallel.
+    LAST_30_DAYS:     1,   // SERIALIZED: concurrent last30days python workers collide on a shared file ("being used by another process" / exit 1). One at a time until the script uses per-run isolation.
     FIND_CLIENT_SOURCES: 5,
     ENRICH_CLIENT:    10,
     JUDGE_AFFECTED:   25,  // in-process + cheap; let the proactive sweep (Stage 2b) drain eligible bookings fast
@@ -1105,6 +1106,18 @@ async function runInProcessTask(task) {
         });
         return { type: task.type, hotCount, summary };
     }
+    if (task.type === 'LAST_30_DAYS') {
+        // Procedural (zero-model) worker: runs the last30days CLI, parses/filters its JSON in
+        // Node, saves high-score survivors as Clients, and queues DRILL_DOWN. See
+        // server/mcp/workers/Last30DaysWorker.js. pipelineSave is injected (its home is
+        // saveClient.js with DI); createTaskRow/prisma the worker imports from ./db directly.
+        const { run } = require('./workers/Last30DaysWorker');
+        const r = await run(task, { pipelineSave });
+        await pipelineCompleteTask('inproc-l30d', {
+            taskId: task.id, status: r.status || 'done', output: r.output || {}, error: r.error
+        });
+        return { type: task.type, summary: r.summary };
+    }
     // Unknown in-process type — fail it so it cannot loop forever.
     await pipelineCompleteTask('inproc-unknown', { taskId: task.id, status: 'failed', error: `no in-process handler for ${task.type}` });
     return { type: task.type, error: 'no_handler' };
@@ -1213,16 +1226,9 @@ async function pipelinePlanTasks(id, args) {
     async function createTask(type, fields) {
         const ck = await createBudget(type);
         if (ck.eff <= 0) return null;
-        const row = await prisma.task.create({
-            data: {
-                type,
-                status:     'ready',
-                sessionId:  sessionId,
-                targetType: fields.targetType || 'none',
-                targetId:   fields.targetId   || null,
-                input:      fields.input ? JSON.stringify(fields.input) : null
-            }
-        });
+        // Raw insert lives in db.createTaskRow (the shared primitive); this wrapper keeps the
+        // budget gate + session accounting, which is the session-scoped state a closure owns.
+        const row = await createTaskRow(type, { ...fields, sessionId });
         created.push({ id: row.id, type, targetType: row.targetType, targetId: row.targetId });
         counts[type] = (counts[type] || 0) + 1;
         sessionCreatedSoFar[type] = (sessionCreatedSoFar[type] || 0) + 1;
@@ -1953,7 +1959,9 @@ async function pipelinePlanTasks(id, args) {
             const want = TASK_TYPE_LIMITS.LAST_30_DAYS || 1;
             for (let i = 0; i < want; i++) {
                 if ((await createBudget('LAST_30_DAYS')).eff <= 0) break;
-                if (!(await createTask('LAST_30_DAYS', { targetType: 'none' }))) break;
+                // Topic is chosen deterministically in Node (nextTopic rotates a buyer-occasion
+                // list), NOT by the model at runtime. The worker reads it from task.input.topic.
+                if (!(await createTask('LAST_30_DAYS', { targetType: 'none', input: { topic: nextTopic() } }))) break;
             }
         }
     }

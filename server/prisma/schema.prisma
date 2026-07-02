@@ -10,7 +10,7 @@ datasource db {
 model Client {
   id             String    @id @default(cuid())
   name           String
-  email          String?   @unique
+  email          String?   // NOT unique: a valid shared inbox (e.g. inquiries@acme.com) may legitimately belong to two clients
   phone          String?
   company        String?
   website        String?

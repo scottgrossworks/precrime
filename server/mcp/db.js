@@ -19,8 +19,9 @@ const WORKER_SKILL_MAP = {
     DISCOVER_SOURCES:    'discover-sources.md',
     DRILL_DOWN:          'drill-down.md',
     DRILL_CONTAINER:     'drill-container.md',   // any multi-vendor event: organizer + expand fitting vendors + marketplace prep
-    LAST_30_DAYS:        'last-30-days.md',
     DRAFT_OUTREACH:      'outreach-drafter.md'
+    // LAST_30_DAYS moved to IN_PROCESS_TYPES: it now runs as a procedural (zero-model)
+    // in-process worker (server/mcp/workers/Last30DaysWorker.js), not a spawned goose skill.
 };
 
 const WORKER_TYPES = Object.keys(WORKER_SKILL_MAP);
@@ -31,7 +32,7 @@ const WORKER_TYPES = Object.keys(WORKER_SKILL_MAP);
 // the planner when left pending, so the conductor must drain them. SHARE_BOOKING
 // is intentionally EXCLUDED — it posts to the external Leedz marketplace and must
 // stay an explicit, user-driven action, never auto-run by the conductor.
-const IN_PROCESS_TYPES = ['JUDGE_AFFECTED', 'SHOW_HOT_LEEDZ'];
+const IN_PROCESS_TYPES = ['JUDGE_AFFECTED', 'SHOW_HOT_LEEDZ', 'LAST_30_DAYS'];
 
 // Poll for ready Tasks that have a worker skill. Returns rows with an extra
 // `skillFile` field. Ordered by createdAt ASC (oldest first).
@@ -76,12 +77,49 @@ async function conductorFailTask(taskId, reason) {
     } catch (_) {}
 }
 
+// Finalize a task ONLY if it is still 'claimed' -- i.e. the worker process exited but
+// never called complete_task, leaving the task orphaned. The where-clause guards status,
+// so a task the worker DID complete (now 'done'/'failed') is left untouched. Returns true
+// if it actually finalized a stuck task. This stops workers that exit-without-completing
+// from parking a task in 'claimed' until the 10-min stale-reclaim sweep -- the zombie loop.
+async function conductorFailIfClaimed(taskId, reason) {
+    try {
+        const r = await prisma.task.updateMany({
+            where: { id: taskId, status: 'claimed' },
+            data:  { status: 'failed', error: String(reason), finishedAt: new Date() }
+        });
+        return r.count > 0;
+    } catch (_) { return false; }
+}
+
+// Raw Task-row insert -- the persistence PRIMITIVE, callable from any module (the planner's
+// createTask wrapper, procedural workers). Stateless: no budget gate, no session accounting
+// (the planner's createTask owns those). `fields`: { sessionId?, targetType?, targetId?, input? };
+// `input` is JSON-stringified when it is an object. Returns the created row.
+async function createTaskRow(type, fields) {
+    const f = fields || {};
+    return prisma.task.create({
+        data: {
+            type,
+            status:     'ready',
+            sessionId:  f.sessionId || null,
+            targetType: f.targetType || 'none',
+            targetId:   f.targetId   || null,
+            input:      f.input != null
+                ? (typeof f.input === 'string' ? f.input : JSON.stringify(f.input))
+                : null
+        }
+    });
+}
+
 module.exports = {
     prisma,
     WORKER_SKILL_MAP,
     IN_PROCESS_TYPES,
+    createTaskRow,
     conductorGetReadyTasks,
     conductorGetReadyInProcessTasks,
     conductorClaimTask,
-    conductorFailTask
+    conductorFailTask,
+    conductorFailIfClaimed
 };

@@ -8,6 +8,11 @@ triggers:
   - LAST_30_DAYS worker
 ---
 
+<!-- DEPRECATED (2026-07-01): LAST_30_DAYS now runs IN-PROCESS as a procedural (zero-model)
+     worker — server/mcp/workers/Last30DaysWorker.js — dispatched via the conductor's
+     runInProcess hook, NOT as a spawned goose worker. This skill is retained for reference
+     only and is no longer in WORKER_SKILL_MAP, so nothing dispatches it. Do not delete. -->
+
 # last-30-days — LAST_30_DAYS worker (last30days seeder)
 
 Process ONE already-claimed LAST_30_DAYS task: sense fresh demand with the external

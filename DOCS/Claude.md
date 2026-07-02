@@ -31,7 +31,7 @@ turn vague instructions into verifiable success criteria before writing a single
 - Understand what exists BEFORE adding anything
 
 ### RULE: REUSE, NEVER DUPLICATE
-- If a class exists in globals.css, USE IT - never reimplement it
+- If a class exists in the current codebase, USE IT - never reimplement it
 - If a pattern exists in the codebase, COPY IT - never reinvent it
 - If a function exists, CALL IT - never rewrite it
 - Duplication = immediate failure
