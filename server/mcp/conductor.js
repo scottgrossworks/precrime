@@ -28,6 +28,23 @@ function sleep(ms) { return new Promise(r => setTimeout(r, ms)); }
 // by research types. Orchestrator-agnostic: goose.bat sets the flag; claude workers
 // (precrime.bat) leave it unset and keep their own tool scoping.
 const EXT_SCOPE = !!process.env.PRECRIME_GOOSE_EXT_SCOPE;
+
+// Injected at the END of EVERY spawned worker's instructions (one place -> system-wide).
+// A worker is an automated tool-caller, not a chat assistant. Every token the model EMITS
+// is appended to the transcript and RE-BILLED as input on every later turn (the 5A+4B+...
+// accumulation), so terse output shrinks all downstream turns too. goose exposes no
+// per-call max_tokens knob, so this instruction IS the cap. The worker model (gemini-flash)
+// is non-reasoning, so there is no hidden chain-of-thought to suppress.
+const OUTPUT_DISCIPLINE = `
+
+---
+## OUTPUT DISCIPLINE (system — overrides any verbosity implied above)
+You are an automated PRECRIME worker, not a chat assistant. Minimize output tokens:
+- Emit ONLY tool calls, then a single one-line final status. No narration, no "Now I will…", no preamble, no restating the task or plan.
+- Do not think out loud in text. Decide, call the tool, move on.
+- Keep every tool argument minimal — a clause, not sentences. Put no prose in a field beyond what that field requires.
+- Never re-read or re-summarize a prior tool result; it is already in your context.`;
+
 function gooseExtArgs(taskType) {
     const ext = s => `--with-extension "${s}"`;
     // Use localhost, NOT 127.0.0.1: goose derives the extension name (and thus every tool's
@@ -36,7 +53,12 @@ function gooseExtArgs(taskType) {
     // with a letter or underscore, 400ing EVERY worker's first LLM call so it dies before doing
     // anything (the months-long "0 saves / workers exit without completing" bug). "localhost"
     // sanitizes to "localhost_5179_mcp" (starts with a letter) -> valid names -> workers run.
-    const precrime  = '--with-streamable-http-extension "http://localhost:5179/mcp"';
+    // ?scope=<taskType> lets the server (tools/list) advertise a PRUNED pipeline schema for
+    // this worker (see toolDefs.js scopedToolDefs). The derived goose extension name already
+    // isn't "precrime" (it's host-derived, e.g. localhost_5179_mcp) and workers map tools by
+    // semantics, so appending the query is safe; the host still starts with a letter so the
+    // function-name-must-start-with-a-letter rule (see host note above) still holds.
+    const precrime  = `--with-streamable-http-extension "http://localhost:5179/mcp?scope=${taskType}"`;
     const developer = '--with-builtin developer';
     const tavily    = ext(`python ${path.join(PRECRIME_ROOT, 'tools', 'tavily_lean_mcp.py')}`);
     const rss       = ext(`node ${path.join(PRECRIME_ROOT, 'rss', 'rss-scorer-mcp', 'index.js')}`);
@@ -168,6 +190,20 @@ async function conductorLoop(cfg, hooks) {
     // startup race where both create a planning session simultaneously.
     let lastReplanAt = Date.now();
 
+    // ---- Circuit breakers (stop a runaway loop from burning credits) ----
+    // haltReason, once set, freezes the conductor: no in-process LLM, no worker spawn, no
+    // replan. In-flight workers finish; then it idles until the process is restarted. Trips on
+    // (a) OpenRouter credit exhaustion (403 "key limit exceeded"), (b) a session closing on
+    // budget_exhausted (stop churning new sessions), (c) a per-run worker/time ceiling.
+    let haltReason = null;
+    let haltLogged = false;
+    let workersSpawned = 0;
+    let firstSpawnAt = 0;
+    const maxWorkersPerRun = Number.isFinite(w.maxWorkersPerRun) ? w.maxWorkersPerRun : 150;
+    const maxRunMs = Number.isFinite(w.maxRunMs) ? w.maxRunMs : 15 * 60 * 1000;
+    // LLM provider says credits/quota are gone -> every worker will 403; stop immediately.
+    const CREDIT_EXHAUSTED_RE = /key limit exceeded|insufficient.*credit|quota.*exceeded|billing.*(hard|limit)/i;
+
     console.error(`[conductor] ready — pollMs=${pollMs} maxWorkers=${maxWorkers} hungKillMs=${hungWorkerKillMs}`);
     // GUARD: log the resolved worker config so the active orchestrator is never ambiguous.
     // 'NONE (positional prompt)' = claude-style; any '--flag' = file-passed (e.g. goose).
@@ -180,6 +216,17 @@ async function conductorLoop(cfg, hooks) {
         // Dormant until armed. No claim, no spawn, no self-feed before the user
         // (or a headless launch) actually starts the workflow. See armConductor().
         if (!armed) { await sleep(pollMs); continue; }
+
+        // Circuit breaker tripped: freeze ALL new work (in-process LLM, worker spawn, replan).
+        // Let any in-flight workers finish, then idle. Restart the process to resume.
+        if (haltReason) {
+            if (!haltLogged) {
+                console.error(`[conductor] HALTED — ${haltReason}. No new workers/judges/replans; ${active.size} in-flight will finish. Restart to resume.`);
+                haltLogged = true;
+            }
+            await sleep(pollMs);
+            continue;
+        }
 
         // Execute in-process tasks FIRST (JUDGE_AFFECTED → promotes bookings to hot;
         // SHOW_HOT_LEEDZ → marks them ready). These GATE the planner: a pending judge
@@ -256,6 +303,30 @@ async function conductorLoop(cfg, hooks) {
                     await conductorFailTask(task.id, 'skill_file_missing');
                     continue;
                 }
+                // Inject the ALREADY-CLAIMED task packet at the TOP of the worker's
+                // instructions so the worker does NOT spend turn 1 calling get_task (that
+                // first turn is the most-multiplied term in the 5A+4B+... re-billing). The
+                // conductor already holds the full task row (conductorGetReadyTasks returns
+                // {...r}); the packet shape mirrors the get_task response so skills read the
+                // same fields. task.input may arrive as a JSON string or an object -- handle
+                // both. Then append the system-wide terse-output directive (both spawn paths
+                // below inherit these via skillContent).
+                let _taskInput = task.input;
+                if (typeof _taskInput === 'string') {
+                    try { _taskInput = JSON.parse(_taskInput); } catch (_) { _taskInput = {}; }
+                }
+                if (!_taskInput || typeof _taskInput !== 'object') _taskInput = {};
+                const _packet = {
+                    id: task.id, type: task.type, targetType: task.targetType,
+                    targetId: task.targetId, sessionId: task.sessionId, input: _taskInput
+                };
+                // Append (do NOT prepend) so the skill's YAML frontmatter stays at the top
+                // for goose's --instructions parser. Packet + terse directive both ride the
+                // end of the instructions (recency position, strong for instruction-following).
+                skillContent = skillContent +
+                    '\n\n## ASSIGNED TASK — do NOT call get_task; this IS your task packet\n' +
+                    '```json\n' + JSON.stringify(_packet, null, 2) + '\n```' +
+                    OUTPUT_DISCIPLINE;
 
                 // On Windows, npm CLI wrappers (.cmd files such as 'claude') cannot be
                 // directly spawned by Node's spawn — CreateProcess only finds .exe files.
@@ -330,6 +401,11 @@ async function conductorLoop(cfg, hooks) {
                 proc.on('exit', async (code) => {
                     clearTimeout(killTimer);
                     const label = `${task.type}: ${taskDesc(task)}`;
+                    // Credit/quota exhaustion: the provider 403'd the worker's LLM. Every future
+                    // worker will do the same, so trip the breaker instead of spawning more.
+                    if (!haltReason && CREDIT_EXHAUSTED_RE.test(outTail)) {
+                        haltReason = 'openrouter credits/quota exhausted (LLM 403 key limit)';
+                    }
                     // code 0 / null (SIGTERM) = worker finished via MCP complete_task.
                     // Nonzero = failed; surface the captured output so the cause is visible.
                     if (code !== 0 && code !== null) {
@@ -365,6 +441,16 @@ async function conductorLoop(cfg, hooks) {
                 active.set(task.id, { proc, killTimer });
                 console.error(`[conductor] spawned — ${task.type}: ${taskDesc(task)}`);
 
+                // Per-run backstop: cap total workers and wall-clock so no loop can run away
+                // unattended. Trips the breaker after the current batch; in-flight finish.
+                workersSpawned++;
+                if (!firstSpawnAt) firstSpawnAt = Date.now();
+                if (!haltReason && workersSpawned >= maxWorkersPerRun) {
+                    haltReason = `worker ceiling reached (${workersSpawned} workers this run)`;
+                } else if (!haltReason && Date.now() - firstSpawnAt >= maxRunMs) {
+                    haltReason = `run-time ceiling reached (${Math.round((Date.now() - firstSpawnAt) / 60000)} min)`;
+                }
+
                 if (spawnStaggerMs > 0 && tasks.indexOf(task) < tasks.length - 1) {
                     await sleep(spawnStaggerMs);
                 }
@@ -383,6 +469,13 @@ async function conductorLoop(cfg, hooks) {
                 try {
                     const r = (await replan()) || {};
                     console.error(`[conductor] replan — created=${r.createdTotal || 0} backlog=${r.backlogRemaining} strategy=${r.strategy}${r.sessionClosed ? ` sessionClosed(${r.closeReason})` : ''}`);
+                    // Budget exhausted = this session hit its creation cap. Do NOT immediately
+                    // open a fresh session and re-create the same work (the churn that burned
+                    // credits). Halt self-feed; the user restarts to run another session.
+                    if (r.sessionClosed && /budget_exhausted/i.test(r.closeReason || '')) {
+                        haltReason = `session budget exhausted (${r.closeReason})`;
+                        continue;
+                    }
                     if ((r.createdTotal || 0) > 0) continue; // dispatch new tasks now
                 } catch (e) {
                     console.error('[conductor] replan error:', e.message);

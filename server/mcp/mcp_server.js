@@ -127,15 +127,18 @@ function handleInitialize(id) {
     };
 }
 
-const { TOOL_DEFS } = require('./toolDefs');
+const { TOOL_DEFS, scopedToolDefs } = require('./toolDefs');
 
-function handleToolsList(id) {
-    logInfo(`Handling tools/list request (${TOOL_DEFS.length} tools)`);
+function handleToolsList(id, scope) {
+    // scope comes from ?scope=<taskType> on the worker's connection URL (set by the
+    // conductor per task type). No/unknown scope => full TOOL_DEFS (orchestrator, claude).
+    const tools = scopedToolDefs(scope);
+    logInfo(`Handling tools/list request (${tools.length} tools${scope ? `, scope=${scope}` : ''})`);
     return {
         jsonrpc: '2.0',
         id: id,
         result: {
-            tools: TOOL_DEFS
+            tools: tools
         }
     };
 }
@@ -153,6 +156,7 @@ const {
     findLiveFactletsForClient,
     computeClientScore,
     computeBookingTargetScore,
+    gateContainerVendor,
     classifyBookingProcedural,
     bookingActionToMode,
     factletMentionsValueProp,
@@ -234,14 +238,31 @@ async function handlePipeline(id, params) {
         case 'get_config':     return await pipelineGetConfig(id, args);
         case 'get_task':       return await pipelineGetTask(id, args);
         case 'next':           return await pipelineNext(id, args.entity || 'client', args.criteria || {}, args.dossierLimit, args.factletLimit);
-        case 'save':           return await pipelineSave(id, args.id, args.patch || {}, args.session_id || null, args.judge !== false, args.factletId || null);
+        case 'save': {
+            const saveRes = await pipelineSave(id, args.id, args.patch || {}, args.session_id || null, args.judge !== false, args.factletId || null);
+            // Half B: fold the terminal complete_task INTO this save to delete a whole worker
+            // turn (the trailing complete_task round-trip). On a SUCCESSFUL save, if the worker
+            // passed `completeTask`, mark the task terminal now (reuse pipelineCompleteTask).
+            // Multi-save workers pass completeTask ONLY on their FINAL save. If the save errored,
+            // do NOT complete — the worker's sad path calls complete_task explicitly. Sequential,
+            // not one transaction: if complete fails, the task stays claimed and the conductor's
+            // hung-worker timeout reaps it (existing safety net).
+            if (args.completeTask && !(saveRes && saveRes.error)) {
+                const ct = args.completeTask;
+                const ctRes = await pipelineCompleteTask(id, {
+                    taskId: ct.taskId, status: ct.status || 'done', output: ct.output, error: ct.error
+                });
+                if (ctRes && ctRes.error) logWarn(`save+completeTask: complete failed for task ${ct.taskId}: ${ctRes.error.message || ctRes.error}`);
+            }
+            return saveRes;
+        }
         case 'judge_affected': return await pipelineJudgeAffected(id, args);
         case 'plan_tasks':     return await pipelinePlanTasks(id, args);
         case 'claim_task':     return await pipelineClaimTask(id, args);
         case 'complete_task':  return await pipelineCompleteTask(id, args);
         case 'tasks':          return await pipelineTasks(id, args);
         case 'recycler':       return await pipelineRecycler(id, args);
-        case 'delete':         return await pipelineDelete(id, args.target, args.id);
+        case 'delete':         return await pipelineDelete(id, args.target, args.id, args.confirm === true || args.force === true);
         case 'rescore':        return await pipelineRescore(id, args.scope || 'all', args.procedural === true);
         case 'resolve_dates':  return createSuccessResponse(id, JSON.stringify(await resolveEventDates(args), null, 2));
         case 'share_booking':  return await pipelineShareBooking(id, args);
@@ -280,12 +301,24 @@ const { isHttpUrl, pipelineNextSource, pipelineMarkSource, pipelineAddSources, p
  * Returns { deleted: true, target, id, cascadedBookings }.
  * Returns -32602 if target is missing/unknown or the record doesn't exist.
  */
-async function pipelineDelete(id, target, recordId) {
+async function pipelineDelete(id, target, recordId, confirm = false) {
     if (!target) {
         return createErrorResponse(id, -32602, `delete requires target ("booking" | "client" | "factlet").`);
     }
     if (!recordId) {
         return createErrorResponse(id, -32602, `delete requires id (the record to remove).`);
+    }
+
+    // Guard destructive deletes. The user's standing rule: NEVER delete bookings/clients in
+    // interactive mode -- to clear a hot leed from the queue, DEMOTE it with dismiss_booking
+    // (shared+cold, permanent skip, no data loss). delete is permanent (and delete client
+    // cascade-removes every booking). Refuse unless the caller passes confirm:true.
+    if ((target === 'booking' || target === 'client') && !confirm) {
+        const alt = target === 'booking'
+            ? 'To hide a hot leed use action=dismiss_booking with bookingId or bookingIds[] (demotes without deleting).'
+            : 'Deleting a client also deletes ALL its bookings. To hide leedz use action=dismiss_booking, not delete.';
+        return createErrorResponse(id, -32602,
+            `Refusing to DELETE ${target} "${recordId}" -- destructive and permanent. ${alt} To truly delete, re-issue with confirm:true.`);
     }
 
     try {
@@ -1326,6 +1359,7 @@ async function pipelinePlanTasks(id, args) {
             const eligible = await prisma.booking.findMany({
                 where: {
                     status:    { not: 'hot' },
+                    shared:    false,                  // dismissed/shared bookings are DEAD -- never re-judge
                     startDate: { gt: new Date() },
                     startTime: { not: null },
                     trade:     { not: null },
@@ -1698,10 +1732,41 @@ async function pipelinePlanTasks(id, args) {
                 const skipB = new Set(openDrill.map(t => t.targetId).filter(Boolean));
                 // Tiered attempt cap by closeness: closer bookings earn more tries.
                 const capFor = (n) => n <= 1 ? 6 : (n <= 2 ? 3 : 1);
+                // Two-tier container fit-gate. Vendor bookings minted by a DRILL_CONTAINER
+                // worker carry source="container:<id>". Before we spend an EXPENSIVE spawned
+                // DRILL_DOWN worker chasing that vendor's email, run the CHEAP in-process gate
+                // (gateContainerVendor -> judgeContainerFit, ~24 tokens): would this vendor
+                // plausibly buy VALUE_PROP at this event? Only a YES earns the drill. A genuine
+                // NO dismisses the booking cold (never re-drills; the client stays revivable via
+                // a new booking). Gate-infra failure (no key / llm down) fails CLOSED on spend --
+                // skip the drill this round but do NOT dismiss. Batch-fetch the metadata once.
+                const nhMeta = new Map();
+                const nhIds = nearHot.map(n => n.bookingId).filter(Boolean);
+                if (nhIds.length) {
+                    for (const r of await prisma.booking.findMany({
+                        where: { id: { in: nhIds } },
+                        select: { id: true, source: true, title: true,
+                            client: { select: { company: true, name: true } } }
+                    })) nhMeta.set(r.id, r);
+                }
                 for (const nh of nearHot) {
                     if ((await createBudget('DRILL_DOWN')).eff <= 0) break;
                     if (skipB.has(nh.bookingId)) continue;
                     if ((drillCounts.get(nh.bookingId) || 0) >= capFor(nh.missingCount)) continue;
+                    const meta = nhMeta.get(nh.bookingId);
+                    if (meta && typeof meta.source === 'string' && meta.source.startsWith('container:')) {
+                        const company = (meta.client && (meta.client.company || meta.client.name)) || null;
+                        const gate = await gateContainerVendor(company, meta.title);
+                        if (!gate.fit) {
+                            if (gate.decided) {
+                                await prisma.booking.update({ where: { id: nh.bookingId },
+                                    data: { shared: true, sharedTo: 'unfit_vendor',
+                                        sharedAt: BigInt(Date.now()), status: 'cold' } }).catch(() => {});
+                            }
+                            logInfo(`container fit-gate: skip drill — ${company || '(no company)'} @ ${meta.title || '(event)'} [${gate.decided ? 'dismissed' : 'deferred'}]: ${gate.reason}`);
+                            continue;
+                        }
+                    }
                     const row = await createTask('DRILL_DOWN', {
                         targetType: 'Booking', targetId: nh.bookingId,
                         input: { clientId: nh.clientId, missing: nh.missing, startDate: nh.startDate }
@@ -1765,9 +1830,15 @@ async function pipelinePlanTasks(id, args) {
                 const liveBookings = await prisma.booking.findMany({
                     where: { startDate: { gt: new Date() }, shared: false },
                     select: { id: true, clientId: true, title: true, description: true,
-                        location: true, zip: true, startDate: true, startTime: true }
+                        location: true, zip: true, startDate: true, startTime: true, source: true }
                 });
                 for (const b of liveBookings) {
+                    // Exhibitor bookings CREATED by a container drill inherit the event's title +
+                    // location, so classifyEventClass() would re-label each one 'container' and
+                    // drill it again -> exponential fan-out (the San Diego Comic-Con loop that
+                    // burned credits). They carry source="container:<id>" and are already-expanded
+                    // DIRECT leads -- never re-expand them as containers.
+                    if (typeof b.source === 'string' && b.source.startsWith('container:')) continue;
                     const cls = classification.classifyEventClass(b);
                     if (cls === 'direct') continue;          // single private host -> normal flow
                     if (priorContainer.has(b.id)) continue;
@@ -1834,9 +1905,15 @@ async function pipelinePlanTasks(id, args) {
             if (windowSize > 0) {
                 const liveClients = await prisma.client.findMany({
                     where: {
+                        // A client is LIVE only if it has a non-dismissed future booking. A
+                        // dismissed booking (shared=true) is a DEAD opportunity and must not keep
+                        // its client on the enrichment treadmill (that dead-booking enrichment was
+                        // a real cost leak). The CLIENT revives the moment a NEW booking (or a
+                        // factlet that creates one) lands -- that new booking is shared=false.
                         bookings: { some: {
                             startDate: { gt: new Date() },
-                            status: { in: ['cold', 'brewing', 'hot'] }
+                            status: { in: ['cold', 'brewing', 'hot'] },
+                            shared: false
                         } }
                     },
                     orderBy: [{ lastEnriched: 'asc' }],   // stalest live client first
@@ -2317,14 +2394,14 @@ function handleResourcesList(id) {
     return { jsonrpc: '2.0', id: id, result: { resources: [] } };
 }
 
-async function processJsonRpcRequest(request) {
+async function processJsonRpcRequest(request, scope) {
     const { id, method, params } = request;
 
     switch (method) {
         case 'initialize':
             return handleInitialize(id);
         case 'tools/list':
-            return handleToolsList(id);
+            return handleToolsList(id, scope);
         case 'tools/call':
             return await handleToolCall(id, params);
         case 'prompts/list':
@@ -2431,7 +2508,11 @@ async function startMcpServer() {
         req.on('end', async () => {
             try {
                 const request = JSON.parse(body);
-                const response = await processJsonRpcRequest(request);
+                // Per-worker tool scoping: the conductor appends ?scope=<taskType> to a
+                // worker's MCP URL; tools/list uses it to advertise a pruned pipeline schema.
+                let scope = null;
+                try { scope = new URL(req.url, 'http://localhost').searchParams.get('scope'); } catch (_) {}
+                const response = await processJsonRpcRequest(request, scope);
 
                 // Echo or issue Mcp-Session-Id per Streamable HTTP spec.
                 const sessionId = req.headers['mcp-session-id'] ||

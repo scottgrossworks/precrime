@@ -11,7 +11,7 @@ const TOOL_DEFS = [
                 {
                     name: 'pipeline',
                     description: [
-                        'Pre-Crime workflow operations. One tool, fifteen actions: status, configure, next, save, delete, rescore, resolve_dates, start_session, report_session, audit_session, next_source, mark_source, add_sources, import_sources, work_status.',
+                        'Pre-Crime workflow operations. IMPORTANT: the names below are ACTIONS of THIS one `pipeline` tool, NOT standalone tools — to run any of them, call the `pipeline` tool with action:"<name>". There is no separate save / audit_session / complete_task / report_session / etc. tool; calling one of those names directly will fail with "Unknown tool". Actions: status, configure, next, save, delete, rescore, resolve_dates, start_session, report_session, audit_session, next_source, mark_source, add_sources, import_sources, work_status.',
                         '',
                         'action="status": Read full system state in one call. Returns { config, stats, completeness, readyDrafts, brewingCount }. completeness is a derived check of whether config has the fields needed for the current defaultBookingAction. Use this at startup and between enrichment rounds.',
                         '',
@@ -105,7 +105,7 @@ const TOOL_DEFS = [
                             },
                             bookingId: {
                                 type: 'string',
-                                description: 'For action=share_booking: Booking.id to share.'
+                                description: 'For action=share_booking: Booking.id to share. For action=dismiss_booking: a single Booking.id to permanently skip (or use bookingIds[] to dismiss many in ONE call).'
                             },
                             mode: {
                                 type: 'string',
@@ -267,7 +267,7 @@ const TOOL_DEFS = [
                             bookingIds: {
                                 type: 'array',
                                 items: { type: 'string' },
-                                description: 'For action=judge_affected. Booking ids to (re-)judge. Pass the array DIRECTLY, NOT a JSON string.'
+                                description: 'For action=judge_affected: Booking ids to (re-)judge. For action=dismiss_booking: Booking ids to permanently skip in ONE batch call (preferred for "dismiss all" — never loop save calls to set status). Pass the array DIRECTLY, NOT a JSON string.'
                             },
                             reason: {
                                 type: 'string',
@@ -276,6 +276,10 @@ const TOOL_DEFS = [
                             writeStatus: {
                                 type: 'boolean',
                                 description: 'For action=judge_affected. Default true; pass false to compute without persisting Booking.status.'
+                            },
+                            completeTask: {
+                                type: 'object',
+                                description: 'For action=save (optional): fold the terminal complete_task INTO this save to remove a whole turn. On a SUCCESSFUL save the server marks the task terminal — do NOT also call action=complete_task. Pass { taskId, status:"done"|"failed"|"cancelled", output?, error? }; output has the same shape as complete_task output (clientIds, bookingIds, factletIds, sourceIds, summary, needsJudge). Multi-save workers pass completeTask ONLY on their FINAL save, with output ids accumulated across all their saves.'
                             }
                         },
                         required: ['action']
@@ -328,4 +332,72 @@ const TOOL_DEFS = [
                 }
 ];
 
-module.exports = { TOOL_DEFS };
+// ============================================================================
+// Per-worker action scoping (served at tools/list, keyed on ?scope=<taskType>).
+// A spawned worker uses only a handful of the pipeline's ~25 actions; the rest are
+// orchestrator/interactive-only, and several (share_booking, plan_tasks, judge_affected,
+// claim_task) are EXPLICITLY forbidden to workers by the skills. So a worker's tools/list
+// can advertise a PRUNED pipeline — smaller action enum, only the relevant action
+// description fragments, and only the properties those actions use — cutting the per-turn
+// schema token tax with ZERO extra round-trips (pruning happens once, at connect time).
+//
+// Safe by construction: an unknown/absent scope returns the FULL TOOL_DEFS, so the
+// interactive orchestrator and claude workers (which connect WITHOUT ?scope) are unchanged.
+// ============================================================================
+
+// The only pipeline actions a spawned research/enrichment worker can ever need. Everything
+// omitted here is orchestrator/interactive-only or explicitly forbidden to workers.
+const WORKER_ACTIONS = ['get_task', 'get_config', 'save', 'complete_task', 'resolve_dates', 'next_source', 'mark_source', 'add_sources'];
+
+// taskType -> allowed pipeline actions. All spawned worker types start on the shared
+// WORKER_ACTIONS set; narrow per-type later (e.g. drills drop the source-queue actions,
+// scrapers drop resolve_dates) once #4 stabilizes. A type absent here => full schema.
+const SCOPE_ACTIONS = {
+    DRILL_DOWN:          WORKER_ACTIONS,
+    DRILL_CONTAINER:     WORKER_ACTIONS,
+    ENRICH_CLIENT:       WORKER_ACTIONS,
+    APPLY_FACTLET:       WORKER_ACTIONS,
+    FIND_CLIENT_SOURCES: WORKER_ACTIONS,
+    DISCOVER_SOURCES:    WORKER_ACTIONS,
+    SCRAPE_SOURCE:       WORKER_ACTIONS,
+    DRAFT_OUTREACH:      WORKER_ACTIONS,
+};
+
+function _prunePipeline(pipeline, allowedActions) {
+    const allow = new Set(allowedActions);
+    // Description: the fragments were join('\n') over ['header','',frag,'',frag,...], so
+    // fragments are blank-line separated. Keep only allowed action fragments; drop the
+    // original enumerated header and replace it with a scoped one. (get_task/complete_task
+    // have no prose fragment — they are documented by their properties + the header list.)
+    const segs = String(pipeline.description).split('\n\n');
+    const keptFrags = segs.filter(s => {
+        const m = s.match(/^action="([^"]+)"/);
+        return m && allow.has(m[1]);
+    });
+    const header = 'Pre-Crime workflow operations. These are ACTIONS of THIS one `pipeline` tool, NOT standalone tools — call `pipeline` with action:"<name>" (there is no separate save/complete_task/get_task/etc. tool). Actions available for this task: ' + allowedActions.join(', ') + '.';
+    const description = [header, ...keptFrags].join('\n\n');
+    // Properties: keep `action` (with a pruned enum) + every property that is shared (its
+    // description names no action) or references at least one allowed action. This drops
+    // properties used ONLY by disallowed actions (share_booking epochs, session ids, rescore
+    // knobs, next filters, claim_task/judge_affected params, ...). The dispatch reads args.*
+    // directly and never validates against the advertised schema, so trimming a property only
+    // changes what the MODEL sees — it can never reject a call the server would have accepted.
+    const props = pipeline.inputSchema.properties;
+    const prunedProps = {};
+    for (const [name, def] of Object.entries(props)) {
+        if (name === 'action') { prunedProps.action = { ...def, enum: allowedActions.slice() }; continue; }
+        const mentioned = String(def.description || '').match(/action=([a-z_]+)/g) || [];
+        if (mentioned.length === 0) { prunedProps[name] = def; continue; }        // shared param
+        if (mentioned.some(m => allow.has(m.slice('action='.length)))) prunedProps[name] = def;
+    }
+    return { ...pipeline, description, inputSchema: { ...pipeline.inputSchema, properties: prunedProps } };
+}
+
+// Return the tools/list payload for a given connection scope. No/unknown scope => full set.
+function scopedToolDefs(scope) {
+    const allowed = scope && SCOPE_ACTIONS[scope];
+    if (!allowed) return TOOL_DEFS;
+    return TOOL_DEFS.map(t => t.name === 'pipeline' ? _prunePipeline(t, allowed) : t);
+}
+
+module.exports = { TOOL_DEFS, scopedToolDefs };

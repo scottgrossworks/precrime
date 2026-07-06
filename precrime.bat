@@ -48,11 +48,6 @@ if /i "%~1"=="--marketplace" (
   shift
   goto :parse_args
 )
-if /i "%~1"=="--share" (
-  set "PRECRIME_OBJECTIVE=marketplace"
-  shift
-  goto :parse_args
-)
 if /i "%~1"=="--outreach" (
   set "PRECRIME_OBJECTIVE=outreach"
   shift
@@ -96,7 +91,7 @@ set "DBNOBS=%DBSPEC:\=%"
 if not defined DBPATH if "%DBNOBS%"=="%DBSPEC%" set "DBPATH=%~dp0data\%DBSPEC%"
 if not defined DBPATH set "DBPATH=%~dp0%DBSPEC%"
 
-:: Verify the DB path resolved and the file exists
+:: Verify the DB file exists
 if "%DBPATH%"=="" (
   echo.
   echo  FATAL: Could not resolve database path.
@@ -205,14 +200,14 @@ if errorlevel 1 (
 :: Worker binary -- conductor spawns ONE-SHOT workers that MATCH this orchestrator.
 :: precrime.bat = Claude orchestrator -> Claude workers (--print non-interactive).
 :: goose.bat    = Goose orchestrator  -> Goose workers  (these vars are NOT set there).
-:: NONE sentinel: Windows CMD `set "VAR="` deletes the var; use NONE to signal "no flag".
 set "PRECRIME_WORKER_BIN=claude"
 set "PRECRIME_WORKER_ARGS=--dangerously-skip-permissions --print --model claude-haiku-4-5-20251001"
 set "PRECRIME_WORKER_INST_FLAG=NONE"
 
-:: Start MCP server (HTTP mode). .mcp.json now points Claude at http://127.0.0.1:5179/mcp
-:: instead of spawning mcp_server.js as a child. DATABASE_URL is already in env above.
-start "" /B node "%~dp0server\mcp\mcp_server.js"
+:: Start MCP server (HTTP mode). .mcp.json points Claude at http://127.0.0.1:5179/mcp.
+:: Own window (NOT /B): /B shares the console and the conductor's log writes corrupt
+:: the orchestrator's interactive TUI -> "The parameter is incorrect. (os error 87)".
+start "PreCrime MCP (conductor)" node "%~dp0server\mcp\mcp_server.js"
 :: Poll until :5179 is listening (up to 10s) instead of fixed sleep.
 powershell -NoProfile -ExecutionPolicy Bypass -Command "$d=[DateTime]::Now.AddSeconds(10);while([DateTime]::Now -lt $d){if(Get-NetTCPConnection -LocalPort 5179 -EA SilentlyContinue){break};Start-Sleep -Milliseconds 500}"
 

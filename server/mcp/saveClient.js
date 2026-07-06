@@ -402,8 +402,24 @@ async function pipelineSave(id, clientId, patch, sessionId, judge, factletId) {
                             ` (worker passed a stale/hallucinated id); rest of the patch still saved.`);
                     }
                 } else {
-                    // Create new booking
-                    await tx.booking.create({ data: bookingData });
+                    // Booking dedup: an event is uniquely (title + start date) for a given
+                    // client. The container drill kept re-adding the SAME event (e.g. "San
+                    // Diego Comic-Con 2026") to the SAME exhibitor client -> 98 LEGO rows.
+                    // Refuse a create when this client already holds that title on that date.
+                    // This does NOT inhibit discovering NEW exhibitors within a container --
+                    // each distinct company is its own client; it only stops duplicate rows.
+                    let dup = null;
+                    if (bookingData.title && bookingData.startDate) {
+                        dup = await tx.booking.findFirst({
+                            where: { clientId, title: bookingData.title, startDate: bookingData.startDate },
+                            select: { id: true }
+                        });
+                    }
+                    if (dup) {
+                        console.error(`[save] booking dedup — client ${clientId} already has "${bookingData.title}" on that date; duplicate create skipped.`);
+                    } else {
+                        await tx.booking.create({ data: bookingData });
+                    }
                 }
             }
         }

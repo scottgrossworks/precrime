@@ -306,6 +306,49 @@ async function judgeLeed(vp, dossier, booking, mode, cfg) {
     return { state: 'brewing', reason: out.trim().slice(0, 200) || 'judge_not_hot' };
 }
 
+// CHEAP per-exhibitor fit gate for container expansion (call (a) of the two-tier drill).
+// Before spending an EXPENSIVE DRILL_DOWN worker researching a scraped exhibitor, ask the
+// LLM one short question: would THIS company plausibly buy VALUE_PROP at THIS show? ~24
+// tokens out. Not-fit exhibitors are dismissed so zero research is wasted on them. Defaults
+// to fit=false on any failure -- never spend the expensive drill on an unverified company.
+// Returns { fit: boolean, reason: string }.
+// Two-tier container gate, call (a): would THIS vendor/company plausibly buy VALUE_PROP
+// at THIS event? Cheap in-process LLM (~24 tokens) so the EXPENSIVE spawned DRILL_DOWN
+// worker (call (b)) only runs for a YES. Returns { fit, reason, decided }: `decided` is
+// TRUE only when the LLM actually answered -- infra failures (no key / llm down / no
+// company) return decided:false so callers can fail-closed on SPEND without dismissing
+// the booking as a genuine no-fit.
+async function judgeContainerFit(vp, company, show, cfg) {
+    if (!cfg || !cfg.llmApiKey) return { fit: false, reason: 'no_llm_key', decided: false };
+    if (!company) return { fit: false, reason: 'no_company', decided: false };
+    const prompt = [
+        'You gate B2B sales leads for this seller/product:',
+        JSON.stringify(vp, null, 2).slice(0, 2500),
+        '',
+        `Multi-vendor event: "${show || '(event)'}".`,
+        `One participant/exhibitor at it: "${company}".`,
+        "Would THIS company plausibly HIRE or BUY the seller's product for their presence at THIS event? Judge product-market fit only.",
+        'Answer with exactly YES or NO, then a short reason (<=8 words).'
+    ].join('\n');
+    const out = await _llmComplete(prompt, cfg, 24);
+    if (out === null) return { fit: false, reason: 'fit_unavailable', decided: false };
+    const word = out.trim().toLowerCase();
+    // A DECIDED verdict requires the model to actually answer yes/no. An empty or ambiguous
+    // completion is NOT a confident NO — a flaky/terse model response must never permanently
+    // dismiss a booking. Only yes/no counts as decided; anything else is undecided, so the
+    // caller skips the drill this round WITHOUT dismissing (fail-closed on spend, not on data).
+    if (word.startsWith('yes')) return { fit: true,  reason: out.trim().slice(0, 120), decided: true };
+    if (word.startsWith('no'))  return { fit: false, reason: out.trim().slice(0, 120), decided: true };
+    return { fit: false, reason: word ? ('unclear: ' + out.trim().slice(0, 100)) : 'empty_response', decided: false };
+}
+
+// Planner-facing convenience: gate a container-spawned vendor booking using the loaded
+// VALUE_PROP + RUNTIME_CONFIG, so callers don't thread the LLM plumbing (mirrors how
+// computeBookingTargetScore owns its own cfg). Keeps every LLM detail inside factlets.js.
+async function gateContainerVendor(company, show) {
+    return judgeContainerFit(VALUE_PROP, company, show, RUNTIME_CONFIG);
+}
+
 async function computeBookingTargetScore(bookingId) {
     const booking = await prisma.booking.findUnique({
         where: { id: bookingId },
@@ -393,6 +436,8 @@ module.exports = {
     findLiveFactletsForClient,
     computeClientScore,
     computeBookingTargetScore,
+    judgeContainerFit,
+    gateContainerVendor,
     classifyBookingProcedural,
     bookingActionToMode,
     factletMentionsValueProp,

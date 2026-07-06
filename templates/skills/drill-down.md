@@ -14,9 +14,9 @@ of HOT. Find ONLY those missing fields and save them. You fill DATA with researc
 You do NOT contact anyone. Never call `gmail__gmail_send`, `share_booking`, `claim_task`,
 `plan_tasks`, `judge_affected`, `next_source`, or `mark_source`.
 
-## Step 0 — Load task
-- `taskId = env.PRECRIME_TASK_ID`. Missing → complete `failed` `missing_task_id`, stop.
-- `precrime__pipeline({ action:"get_task", taskId })`. Not `{ type:"DRILL_DOWN" }` → complete `failed` `wrong_task_type`, stop.
+## Step 0 — Load task (already provided — do NOT call get_task)
+- Your task packet is the **ASSIGNED TASK** JSON block in these instructions. Set `task` = that packet, `taskId = task.id`. Do NOT call `precrime__pipeline({ action:"get_task" })` — it is already here.
+- If `task.type` ≠ `"DRILL_DOWN"` → complete `failed` `wrong_task_type`, stop.
 - `targetType = task.targetType` — either **`Booking`** (close a near-hot booking by filling its missing fields) or **`Client`** (a bare discovered company with NO contact and NO booking — find a decision-maker contact AND an upcoming event that needs the trade, minting a NEW booking).
 - `clientId = task.input?.clientId`; `missing = task.input?.missing` (array of gap codes). For a `Booking` target, `bookingId = task.targetId`; for a `Client` target there is no booking yet (`bookingId = null`).
 
@@ -37,25 +37,27 @@ Work only the codes in `missing`. Per code:
 
 Use 1–4 bounded searches total. Tavily unavailable → complete `cancelled` `tavily_unavailable`, stop.
 
-## Step 3 — Save what you found (judge:false)
+## Step 3 — Save what you found AND complete, in ONE call (judge:false)
 ONE save. Client-level fields (email/phone/name/website) on the patch; booking-level fields
 (date/time/zip/title) inside `bookings[]` with the proving `sourceUrl`. The server resolves
-`dateText` and re-classifies the booking (it may go HOT).
+`dateText` and re-classifies the booking (it may go HOT). **Fold the task completion into this
+SAME call via `completeTask` — do NOT make a separate `complete_task` call on the happy path;
+that wastes a whole turn. When the save succeeds the server marks the task done.**
 ```
 precrime__pipeline({ action:"save", judge:false, id: clientId,
   patch:{ name:"<if found>", email:"<direct address if found>", phone:"<if found>",
     bookings:[{ trade:"<canonical>", dateText:"<verbatim date text if found>",
       location:"<venue text>", zip:"<5-digit if found>", title:"<event name>",
-      sourceUrl:"<live page proving these>" }] }})
+      sourceUrl:"<live page proving these>" }] },
+  completeTask:{ taskId, status:"done",
+    output:{ clientIds:[clientId], bookingIds: bookingId ? [bookingId] : [], factletIds:[], sourceIds:[],
+      summary:"Drill-down <bookingId or clientId>: filled <fields-found>.", needsJudge:true } }})
 ```
-Omit any field you did not find. Never write `Booking.status`, never `judge:true`.
+Omit any field you did not find. Never write `Booking.status`, never `judge:true`. After this call succeeds you are DONE — STOP.
 
-## Step 4 — Complete
-```
-precrime__pipeline({ action:"complete_task", taskId, status:"done",
-  output:{ clientIds:[clientId], bookingIds: bookingId ? [bookingId] : [], factletIds:[], sourceIds:[],
-    summary:"Drill-down <bookingId or clientId>: filled <fields-found or 'nothing'>.", needsJudge:true }})
-```
-Found nothing for any missing field: `status:"done"`, summary `"no missing fields resolved"`, `needsJudge:false`.
-Tavily down / error: `status:"cancelled"|"failed"`, `error:"<tavily_unavailable|tool_error>"`.
+## Step 4 — Completion for the NO-SAVE paths only
+Only when there is no save to fold into:
+- **Found nothing to save** (no missing field resolved): `precrime__pipeline({ action:"complete_task", taskId, status:"done", output:{ clientIds:[clientId], bookingIds: bookingId ? [bookingId] : [], factletIds:[], sourceIds:[], summary:"no missing fields resolved", needsJudge:false }})`
+- **Tavily down / error**: `precrime__pipeline({ action:"complete_task", taskId, status:"cancelled"|"failed", error:"<tavily_unavailable|tool_error>" })`
+
 Never contact anyone. Never leave a claimed task open. Then STOP.

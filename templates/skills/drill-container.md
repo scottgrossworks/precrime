@@ -59,10 +59,12 @@ Find the event's OWN site/listing, then gather BOTH:
 
 ## Step 4 — Write results (judge:false)
 
-**4a. Vendor expansion (if a vendor/exhibitor list exists).** Apply the RELEVANCE SIGNALS test again
-per vendor: mint only vendors our service could plausibly draw/serve (their booth would benefit from a
-traffic-draw, or their audience fits) — skip the rest; do NOT mint everyone. ONE `save` per kept
-vendor with **no `id`** (server creates/dedups by company), each booking INHERITING `ctx`:
+**4a. Vendor expansion (if a vendor/exhibitor list exists).** LIGHT harvest only — do NOT spend extra
+searches judging each vendor, and do NOT do a deep per-vendor fit analysis here. Skip only the OBVIOUS
+non-fits (the `### Not Relevant Signals`); mint the rest as-is from the list. A cheap server-side gate
+(`judgeContainerFit`) runs BEFORE any vendor is enriched, so borderline vendors cost nothing until they
+pass it — your job is a fast, cheap harvest, not the fit decision. ONE `save` per minted vendor with
+**no `id`** (server creates/dedups by company), each booking INHERITING `ctx`:
 ```
 precrime__pipeline({ action:"save", judge:false,
   patch:{ company:"<vendor>", name:"<contact if found, else company>",

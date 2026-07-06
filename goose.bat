@@ -69,11 +69,6 @@ if /i "%~1"=="--marketplace" (
   shift
   goto :parse_args
 )
-if /i "%~1"=="--share" (
-  set "PRECRIME_OBJECTIVE=marketplace"
-  shift
-  goto :parse_args
-)
 if /i "%~1"=="--outreach" (
   set "PRECRIME_OBJECTIVE=outreach"
   shift
@@ -227,15 +222,6 @@ if errorlevel 1 (
 :: in-memory struct by the MCP server at startup. No DB Config table to sync.
 :: Edit DOCS\VALUE_PROP.md or precrime_config.json and restart to change config.
 
-:: --- 6b. Start MCP server (HTTP mode) ---
-:: mcp_server.js binds :5179 and conductor.js starts inside it.
-:: Goose connects via type:streamable_http -- it no longer spawns the server.
-:: DATABASE_URL and all API keys are already in env from steps 2-3 above.
-start "" /B node "%~dp0server\mcp\mcp_server.js"
-:: Poll until :5179 is listening (up to 10s) instead of a fixed sleep -- a 2s sleep
-:: can race the server bind and make the goose 'precrime' extension fail to init.
-powershell -NoProfile -ExecutionPolicy Bypass -Command "$d=[DateTime]::Now.AddSeconds(10);while([DateTime]::Now -lt $d){if(Get-NetTCPConnection -LocalPort 5179 -EA SilentlyContinue){break};Start-Sleep -Milliseconds 500}"
-
 :: --- 7. Render goose user config + GOOSE.md from templates ---
 :: Goose reads %APPDATA%\Block\goose\config\config.yaml. Regenerated every launch
 :: so the project always owns its config (stale config can pin to a different project).
@@ -264,15 +250,74 @@ if errorlevel 1 (
   pause & exit /b 1
 )
 
+:: --- 7b. Start the MCP server (HTTP transport on :5179) ---
+:: The goose 'precrime' extension is streamable_http -> http://127.0.0.1:5179/mcp,
+:: so the server MUST already be listening before goose launches, or the extension
+:: fails to initialize and goose runs with NO precrime tools. (Mirrors precrime.bat.)
+:: Worker binary MUST be the absolute goose.exe path. The conductor spawns
+:: `<bin> run --instructions <skill>` via cmd.exe; bare `goose` would resolve to
+:: THIS goose.bat (same name, CWD searched before PATH) and recurse into the
+:: launcher, which then treats the .md skill path as a DB arg and dies with
+:: "Database not found: ...md.sqlite". Setting the full .exe path bypasses that.
+set "PRECRIME_WORKER_BIN=%USERPROFILE%\.local\bin\goose.exe"
+set "PRECRIME_WORKER_ARGS=run"
+set "PRECRIME_WORKER_INST_FLAG=--instructions"
+:: TOKEN ECONOMY: scope each spawned worker to ONLY the MCP extensions its task type
+:: needs (conductor.js gooseExtArgs) via --no-profile + --with-*. Without this, every
+:: worker loads all 6 config extensions' tool schemas on EVERY turn (gmail/rss it never
+:: calls + the heavy precrime pipeline description). Unset to revert to full extensions.
+set "PRECRIME_GOOSE_EXT_SCOPE=1"
+:: Start in its OWN window (NOT /B). /B shares goose's console, and the conductor's
+:: log writes collide with goose's interactive TUI -> goose's stdout handle goes bad
+:: and it dies with "The parameter is incorrect. (os error 87)". A separate window
+:: keeps the conductor logs visible AND leaves goose sole owner of its console.
+start "PreCrime MCP (conductor)" node "%~dp0server\mcp\mcp_server.js"
+:: Poll until :5179 is listening (up to 10s) instead of a fixed sleep.
+powershell -NoProfile -ExecutionPolicy Bypass -Command "$d=[DateTime]::Now.AddSeconds(10);while([DateTime]::Now -lt $d){if(Get-NetTCPConnection -LocalPort 5179 -EA SilentlyContinue){break};Start-Sleep -Milliseconds 500}"
+
 :: --- 8. Launch goose ---
 :: Trigger text encodes BOTH mode and objective so init-wizard.md can detect
 :: them without depending on env-variable inheritance into the goose process.
 :: PRECRIME_OBJECTIVE is also exported (env) for any tool that prefers env over
 :: prompt parsing.
-if "%PRECRIME_MODE%"=="headless" (
+:: Headless: no menu, run straight through.
+if /i "%PRECRIME_MODE%"=="headless" (
   set "GOOSE_TRIGGER=headless precrime objective=%PRECRIME_OBJECTIVE% (database: %DBPATH%)"
-) else (
-  set "GOOSE_TRIGGER=run precrime objective=%PRECRIME_OBJECTIVE% (database: %DBPATH%)"
+  goto :launch
 )
+
+:: Interactive: the LAUNCHER prints the menu (deterministic, model-independent) and
+:: bakes the choice into the trigger as choice=hot|workflow. The wizard honors it and
+:: does NOT re-print a menu. (set /p is kept OUT of if() blocks to dodge batch quirks.)
+:menu
+echo.
+echo   ============================================================
+echo      PRE-CRIME   --   objective: %PRECRIME_OBJECTIVE%
+echo   ============================================================
+echo      [1]  SHOW HOT LEEDZ    review judged-hot bookings (share / email / skip)
+echo      [2]  RUN WORKFLOW      discover - scrape - enrich - judge (fills the queue)
+echo      [Q]  QUIT
+echo   ============================================================
+set "PRECRIME_CHOICE="
+set /p "PRECRIME_CHOICE=   Choose [1/2/Q]: "
+if /i "%PRECRIME_CHOICE%"=="1" goto :pick_hot
+if /i "%PRECRIME_CHOICE%"=="2" goto :pick_workflow
+if /i "%PRECRIME_CHOICE%"=="Q" goto :quit
+echo   Please type 1, 2, or Q.
+goto :menu
+
+:pick_hot
+set "GOOSE_TRIGGER=run precrime choice=hot objective=%PRECRIME_OBJECTIVE% (database: %DBPATH%)"
+goto :launch
+
+:pick_workflow
+set "GOOSE_TRIGGER=run precrime choice=workflow objective=%PRECRIME_OBJECTIVE% (database: %DBPATH%)"
+goto :launch
+
+:quit
+echo   Exiting. The MCP server is still running in the background; close this window to stop it.
+exit /b 0
+
+:launch
 echo  Mode: %PRECRIME_MODE%   Objective: %PRECRIME_OBJECTIVE%
-"%USERPROFILE%\.local\bin\goose.exe" run --system "First call developer__shell: type %~dp0GOOSE.md. Then follow it tersely." -t "%GOOSE_TRIGGER%" -s
+"%USERPROFILE%\.local\bin\goose.exe" run --system "You are the Pre-Crime orchestrator on Goose. Do NOT read files first, do NOT print a menu, do NOT explain. Your FIRST tool call THIS TURN is mandatory and is the ONLY thing you must do: if the trigger contains choice=hot, call precrime__pipeline with action=plan_tasks mode=hot_only objective=%PRECRIME_OBJECTIVE%; otherwise call precrime__pipeline with action=plan_tasks mode=workflow objective=%PRECRIME_OBJECTIVE%. Make that tool call immediately as your very first action. When it returns, reply with exactly one line: Queue seeded -- conductor running; call report_session for a summary. Then STOP. Never call claim_task, never dispatch worker skills, never poll or loop -- the Node conductor owns all dispatch from here." -t "%GOOSE_TRIGGER%" -s

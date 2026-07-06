@@ -78,21 +78,24 @@ async function judgeAffected({ clientIds, bookingIds, reason, writeStatus, intel
 // rescore, and the hot query (shared:false) excludes it. Distinct from a real
 // marketplace share by sharedTo="dismissed".
 async function pipelineDismissBooking(id, args) {
-    const bookingId = args.bookingId;
-    if (!bookingId) {
-        return createErrorResponse(id, -32602, 'dismiss_booking requires bookingId.');
+    // Accept a single bookingId OR a batch bookingIds[]. "Dismiss all X rows" is a natural
+    // bulk action; batching it in ONE call is essential -- without it the model, told to
+    // dismiss many, fires N sequential saves that mis-write Booking.status and hang the
+    // session (the freeze we saw). updateMany dismisses every match at once; ids that don't
+    // exist simply don't match (count < requested), no error -- correct for "dismiss all".
+    let ids = [];
+    if (Array.isArray(args.bookingIds)) ids = args.bookingIds.filter(Boolean);
+    else if (args.bookingId) ids = [args.bookingId];
+    if (ids.length === 0) {
+        return createErrorResponse(id, -32602, 'dismiss_booking requires bookingId (string) or bookingIds (array of Booking.id).');
     }
-    const booking = await prisma.booking.findUnique({ where: { id: bookingId } });
-    if (!booking) {
-        return createErrorResponse(id, -32602, `dismiss_booking: booking "${bookingId}" not found.`);
-    }
-    await prisma.booking.update({
-        where: { id: bookingId },
+    const r = await prisma.booking.updateMany({
+        where: { id: { in: ids } },
         data: { shared: true, sharedTo: 'dismissed', sharedAt: BigInt(Date.now()), status: 'cold' }
     });
     return createSuccessResponse(id, JSON.stringify({
-        dismissed: true, bookingId,
-        note: 'Permanently skipped. This booking will not be presented as hot again.'
+        dismissed: r.count, requested: ids.length,
+        note: `Permanently skipped ${r.count} booking(s). They will not be presented as hot again.`
     }, null, 2));
 }
 
