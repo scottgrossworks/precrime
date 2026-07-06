@@ -57,3 +57,9 @@ A live (future-dated) Booking that is only one or two hot prerequisites short of
 
 ### drill-down
 The research-only act of closing a near-hot Booking: a focused task that hunts the Booking's *specific* missing fields (a direct contact, an event date/time, a venue zip, a named decision-maker) using search/extract tools, then saves them so the Judge can promote it. Drill-down never contacts anyone — outreach stays a separate, user-approved step.
+
+### container (event class)
+A Booking whose event is a public, multi-vendor, or competitive gathering — a convention, expo, trade show, festival, fair, or tournament — classified `container` rather than `direct`. A container is not itself a sellable Leed: its opportunity is the organizer, the vendors/exhibitors, and/or the crowd, never the event's subject. A container drill finds the named organizer and expands each *fitting* vendor into its own Booking that inherits the event's date and venue. A `direct` event, by contrast, is a single private host — a wedding, a company party. (An earlier three-way convention/festival/direct split was collapsed into this binary.)
+
+### fit gate
+An LLM product-market-fit check — "would this buyer plausibly hire or buy the seller's product for this event?" — run at a decision point to avoid spending effort on irrelevant prospects. It judges VALUE_PROP relevance signals (booth traffic, a crowd, an activation or entertainment need), not topic match, so an unrelated trade show can still fit while a closed B2B event does not. The fit gate is the LLM half of the Judge's promotion decision, and also runs standalone to gate expensive work — e.g. a container vendor must pass the fit gate before a Worker is spent drilling it.

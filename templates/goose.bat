@@ -280,6 +280,11 @@ powershell -NoProfile -ExecutionPolicy Bypass -Command "$d=[DateTime]::Now.AddSe
 :: them without depending on env-variable inheritance into the goose process.
 :: PRECRIME_OBJECTIVE is also exported (env) for any tool that prefers env over
 :: prompt parsing.
+:: Default orchestrator system prompt (workflow + headless): seed the queue, then STOP --
+:: the Node conductor owns all dispatch. choice=hot OVERRIDES this in :pick_hot below,
+:: because SHOW HOT LEEDZ is a foreground presenter, not background work.
+set "PRECRIME_SYS=You are the Pre-Crime orchestrator on Goose. Do NOT read files first, do NOT print a menu, do NOT explain. Your FIRST tool call THIS TURN is mandatory and is the ONLY thing you must do: call precrime__pipeline with action=plan_tasks mode=workflow objective=%PRECRIME_OBJECTIVE%. Make that tool call immediately as your very first action. When it returns, reply with exactly one line: Queue seeded -- conductor running; call report_session for a summary. Then STOP. Never call claim_task, never dispatch worker skills, never poll or loop -- the Node conductor owns all dispatch from here."
+
 :: Headless: no menu, run straight through.
 if /i "%PRECRIME_MODE%"=="headless" (
   set "GOOSE_TRIGGER=headless precrime objective=%PRECRIME_OBJECTIVE% (database: %DBPATH%)"
@@ -308,6 +313,11 @@ goto :menu
 
 :pick_hot
 set "GOOSE_TRIGGER=run precrime choice=hot objective=%PRECRIME_OBJECTIVE% (database: %DBPATH%)"
+:: SHOW HOT LEEDZ is a FOREGROUND presenter: seed a SHOW_HOT_LEEDZ task (hot_only does NOT
+:: arm the conductor, so it stays dormant and does not steal the task), claim it as the
+:: interactive orchestrator, then run the show-hot-leedz presenter to display bookings and
+:: take share/email/skip per item. This is the ONE place the orchestrator may claim + present.
+set "PRECRIME_SYS=You are the Pre-Crime orchestrator on Goose running the interactive SHOW HOT LEEDZ review. Do these steps in order, then STOP. Step 1: your first tool call is precrime__pipeline with action=plan_tasks mode=hot_only objective=%PRECRIME_OBJECTIVE%. Step 2: call precrime__pipeline with action=claim_task role=interactive-orchestrator and types listing only SHOW_HOT_LEEDZ. Step 3: if claim_task returns a CLAIMED task, read the file skills/show-hot-leedz.md (print it with the developer shell) and follow it exactly against that claimed task id -- present each judged-hot booking and let the user pick share, email, or skip per booking, then complete that task id. If claim_task returns no task, reply exactly: No hot leedz to present. then stop. You MAY claim this one SHOW_HOT_LEEDZ task and use find, share_booking, dismiss_booking, and outreach draft tools. Do NOT claim worker tasks such as DRILL_DOWN or DRILL_CONTAINER or SCRAPE_SOURCE, and do NOT dispatch worker skills -- the Node conductor owns those."
 goto :launch
 
 :pick_workflow
@@ -320,4 +330,4 @@ exit /b 0
 
 :launch
 echo  Mode: %PRECRIME_MODE%   Objective: %PRECRIME_OBJECTIVE%
-"%USERPROFILE%\.local\bin\goose.exe" run --system "You are the Pre-Crime orchestrator on Goose. Do NOT read files first, do NOT print a menu, do NOT explain. Your FIRST tool call THIS TURN is mandatory and is the ONLY thing you must do: if the trigger contains choice=hot, call precrime__pipeline with action=plan_tasks mode=hot_only objective=%PRECRIME_OBJECTIVE%; otherwise call precrime__pipeline with action=plan_tasks mode=workflow objective=%PRECRIME_OBJECTIVE%. Make that tool call immediately as your very first action. When it returns, reply with exactly one line: Queue seeded -- conductor running; call report_session for a summary. Then STOP. Never call claim_task, never dispatch worker skills, never poll or loop -- the Node conductor owns all dispatch from here." -t "%GOOSE_TRIGGER%" -s
+"%USERPROFILE%\.local\bin\goose.exe" run --system "%PRECRIME_SYS%" -t "%GOOSE_TRIGGER%" -s

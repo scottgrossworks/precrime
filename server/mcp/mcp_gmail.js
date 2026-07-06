@@ -424,6 +424,34 @@ function generateBoundary() {
 }
 
 /**
+ * Encode a header value as an RFC 2047 "encoded-word" when it contains any non-ASCII
+ * character, so UTF-8 subjects (em dashes, accents, curly quotes) survive instead of
+ * corrupting to mojibake (e.g. an em dash arriving as "a-EUR-quote"). Pure-ASCII values
+ * are returned unchanged so ordinary subjects stay human-readable in the raw message.
+ * @param {string} value - raw header value
+ * @returns {string} the same value, or a =?UTF-8?B?...?= encoded-word
+ */
+function encodeHeader(value) {
+    const s = String(value == null ? '' : value);
+    if (/^[\x00-\x7F]*$/.test(s)) return s;
+    return `=?UTF-8?B?${Buffer.from(s, 'utf8').toString('base64')}?=`;
+}
+
+/**
+ * Base64-encode a UTF-8 body, wrapped to 76-char lines (RFC 2045). Paired with a
+ * `Content-Transfer-Encoding: base64` header, this guarantees every mail client decodes
+ * the exact UTF-8 bytes, so em dashes, accented names, and smart quotes render correctly
+ * instead of being misread as Latin-1. Replaces sending raw UTF-8 under an implicit 7bit
+ * encoding (the cause of the "a-EUR-quote" garbage).
+ * @param {string} text - UTF-8 body text
+ * @returns {string} CRLF-wrapped base64
+ */
+function encodeBodyBase64(text) {
+    const b64 = Buffer.from(String(text == null ? '' : text), 'utf8').toString('base64');
+    return b64.replace(/.{1,76}/g, '$&\r\n').trimEnd();
+}
+
+/**
  * Build RFC 2822 MIME email message
  * Supports plain text emails and multipart messages with attachments
  * @param {string} to - Recipient email
@@ -437,9 +465,10 @@ function generateBoundary() {
 function buildMimeMessage(to, subject, body, cc, bcc, attachments) {
     const lines = [];
 
-    // Required headers
+    // Required headers. Subject is RFC 2047-encoded when it contains non-ASCII so it does
+    // not corrupt; addresses are ASCII and pass through as-is.
     lines.push(`To: ${to}`);
-    lines.push(`Subject: ${subject}`);
+    lines.push(`Subject: ${encodeHeader(subject)}`);
 
     // Optional headers
     if (cc) lines.push(`Cc: ${cc}`);
@@ -450,9 +479,10 @@ function buildMimeMessage(to, subject, body, cc, bcc, attachments) {
 
     // If no attachments, use simple text/plain format
     if (!attachments || attachments.length === 0) {
-        lines.push('Content-Type: text/plain; charset=utf-8');
+        lines.push('Content-Type: text/plain; charset="UTF-8"');
+        lines.push('Content-Transfer-Encoding: base64');
         lines.push('');
-        lines.push(body);
+        lines.push(encodeBodyBase64(body));
         return lines.join('\r\n');
     }
 
@@ -461,11 +491,12 @@ function buildMimeMessage(to, subject, body, cc, bcc, attachments) {
     lines.push(`Content-Type: multipart/mixed; boundary="${boundary}"`);
     lines.push('');
 
-    // Part 1: Text body
+    // Part 1: Text body (base64 UTF-8 so all characters render correctly)
     lines.push(`--${boundary}`);
-    lines.push('Content-Type: text/plain; charset=utf-8');
+    lines.push('Content-Type: text/plain; charset="UTF-8"');
+    lines.push('Content-Transfer-Encoding: base64');
     lines.push('');
-    lines.push(body);
+    lines.push(encodeBodyBase64(body));
     lines.push('');
 
     // Part 2+: Each attachment
@@ -492,8 +523,9 @@ function buildMimeMessage(to, subject, body, cc, bcc, attachments) {
  * @returns {Promise<string>} Gmail message ID or draft ID
  */
 async function sendGmailMessage(mimeMessage, isDraft = false) {
-    // Base64url encode the message
-    const encodedMessage = Buffer.from(mimeMessage)
+    // Base64url encode the message (explicit UTF-8; the body/subject are already ASCII-safe
+    // after base64 + RFC 2047 encoding, but be explicit so nothing downstream reinterprets).
+    const encodedMessage = Buffer.from(mimeMessage, 'utf8')
         .toString('base64')
         .replace(/\+/g, '-')
         .replace(/\//g, '_')
