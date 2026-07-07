@@ -17,7 +17,7 @@ add_sources → complete. Never call `claim_task`, `plan_tasks`, `next`, `judge_
 
 ## Step 0 — Load task
 - `taskId = env.PRECRIME_TASK_ID`. Missing → complete `failed` `missing_task_id`, stop.
-- `precrime__pipeline({ action:"get_task", taskId })`. If `task.type` is not `DISCOVER_SOURCES` → complete `failed` `wrong_task_type`, stop.
+- Read the **ASSIGNED TASK** JSON block in these instructions as `task` (do NOT call get_task). If `task.type` is not `DISCOVER_SOURCES` → complete `failed` `wrong_task_type`, stop.
 
 ## Step 1 — Read VALUE_PROP (what to search for)
 `developer__shell(command="type \"DOCS\\VALUE_PROP.md\"")` (relative to the deployment root; or `precrime__pipeline({action:"get_config"})`)

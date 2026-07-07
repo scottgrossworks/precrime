@@ -25,7 +25,7 @@ are JSON objects, not strings. Never send a value containing `{ } < >` or a bare
   `buyerRoles`, `audienceSegments`, `notBuyer`, `relevanceSignals`.
 
 ## Step 1 — Load task
-`precrime__pipeline({ action: "get_task", taskId })`
+Read the **ASSIGNED TASK** JSON block in these instructions as `task` (do NOT call get_task):
 - `factletId = task.targetId`; `clientId = task.input.clientId`
 - Not `{ type:"APPLY_FACTLET", targetType:"Factlet" }` → complete `failed` `wrong_task_type`, stop.
 - `clientId` null/absent = **SWEEP** (no existing client matched). Don't just drop it:

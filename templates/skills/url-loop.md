@@ -14,7 +14,7 @@ Process ONE already-claimed SCRAPE_SOURCE task, then stop. Never call `claim_tas
 
 ## Step 0 — Load task
 - `taskId = env.PRECRIME_TASK_ID`. Missing → complete `failed` `missing_task_id`, stop.
-- `precrime__pipeline({ action:"get_task", taskId })` → `sourceId = task.targetId`,
+- Read the **ASSIGNED TASK** JSON block in these instructions as `task` (do NOT call get_task) → `sourceId = task.targetId`,
   `url = task.input.url`, `channel = task.input.channel`.
 - Not `{ type:"SCRAPE_SOURCE", targetType:"Source" }` → complete `failed` `wrong_task_type`, stop.
 

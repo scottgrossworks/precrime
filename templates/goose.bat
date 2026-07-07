@@ -237,14 +237,14 @@ if not exist "%GOOSE_TPL%" (
 set "PROJECT_ROOT=%~dp0"
 if "%PROJECT_ROOT:~-1%"=="\" set "PROJECT_ROOT=%PROJECT_ROOT:~0,-1%"
 if not exist "%GOOSE_CFG_DIR%" mkdir "%GOOSE_CFG_DIR%"
-powershell -NoProfile -ExecutionPolicy Bypass -Command "$tpl = Get-Content -Raw -LiteralPath $env:GOOSE_TPL; $out = $tpl.Replace('__PROJECT_ROOT__', $env:PROJECT_ROOT).Replace('__GOOSE_MODEL__', $env:GOOSE_MODEL); [System.IO.File]::WriteAllText($env:GOOSE_CFG, $out, [System.Text.UTF8Encoding]::new($false))"
+powershell -NoProfile -ExecutionPolicy Bypass -Command "$tpl = Get-Content -Raw -Encoding UTF8 -LiteralPath $env:GOOSE_TPL; $out = $tpl.Replace('__PROJECT_ROOT__', $env:PROJECT_ROOT).Replace('__GOOSE_MODEL__', $env:GOOSE_MODEL); [System.IO.File]::WriteAllText($env:GOOSE_CFG, $out, [System.Text.UTF8Encoding]::new($false))"
 if errorlevel 1 (
   echo  Failed to write goose config: %GOOSE_CFG%
   pause & exit /b 1
 )
 
 set "GOOSE_MD=%~dp0GOOSE.md"
-powershell -NoProfile -ExecutionPolicy Bypass -Command "$f = Get-Content -Raw -LiteralPath $env:GOOSE_MD; $out = $f.Replace('__PROJECT_ROOT__', $env:PROJECT_ROOT); [System.IO.File]::WriteAllText($env:GOOSE_MD, $out, [System.Text.UTF8Encoding]::new($false))"
+powershell -NoProfile -ExecutionPolicy Bypass -Command "$f = Get-Content -Raw -Encoding UTF8 -LiteralPath $env:GOOSE_MD; $out = $f.Replace('__PROJECT_ROOT__', $env:PROJECT_ROOT); [System.IO.File]::WriteAllText($env:GOOSE_MD, $out, [System.Text.UTF8Encoding]::new($false))"
 if errorlevel 1 (
   echo  Failed to patch GOOSE.md
   pause & exit /b 1
@@ -283,7 +283,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -Command "$d=[DateTime]::Now.AddSe
 :: Default orchestrator system prompt (workflow + headless): seed the queue, then STOP --
 :: the Node conductor owns all dispatch. choice=hot OVERRIDES this in :pick_hot below,
 :: because SHOW HOT LEEDZ is a foreground presenter, not background work.
-set "PRECRIME_SYS=You are the Pre-Crime orchestrator on Goose. Do NOT read files first, do NOT print a menu, do NOT explain. Your FIRST tool call THIS TURN is mandatory and is the ONLY thing you must do: call precrime__pipeline with action=plan_tasks mode=workflow objective=%PRECRIME_OBJECTIVE%. Make that tool call immediately as your very first action. When it returns, reply with exactly one line: Queue seeded -- conductor running; call report_session for a summary. Then STOP. Never call claim_task, never dispatch worker skills, never poll or loop -- the Node conductor owns all dispatch from here."
+set "PRECRIME_SYS=You are the Pre-Crime orchestrator on Goose. Do NOT read files first, do NOT print a menu, do NOT explain. Your FIRST tool call THIS TURN is mandatory and is the ONLY thing you must do: call precrime__pipeline with action=plan_tasks mode=workflow objective=%PRECRIME_OBJECTIVE%. Make that tool call immediately as your very first action. When it returns, reply with exactly one line: Queue seeded -- conductor running; call status for a summary. Then STOP. Never call claim_task, never dispatch worker skills, never poll or loop -- the Node conductor owns all dispatch from here."
 
 :: Headless: no menu, run straight through.
 if /i "%PRECRIME_MODE%"=="headless" (
@@ -313,20 +313,37 @@ goto :menu
 
 :pick_hot
 set "GOOSE_TRIGGER=run precrime choice=hot objective=%PRECRIME_OBJECTIVE% (database: %DBPATH%)"
-:: SHOW HOT LEEDZ is a FOREGROUND presenter: seed a SHOW_HOT_LEEDZ task (hot_only does NOT
-:: arm the conductor, so it stays dormant and does not steal the task), claim it as the
-:: interactive orchestrator, then run the show-hot-leedz presenter to display bookings and
-:: take share/email/skip per item. This is the ONE place the orchestrator may claim + present.
-set "PRECRIME_SYS=You are the Pre-Crime orchestrator on Goose running the interactive SHOW HOT LEEDZ review. Do these steps in order, then STOP. Step 1: your first tool call is precrime__pipeline with action=plan_tasks mode=hot_only objective=%PRECRIME_OBJECTIVE%. Step 2: call precrime__pipeline with action=claim_task role=interactive-orchestrator and types listing only SHOW_HOT_LEEDZ. Step 3: if claim_task returns a CLAIMED task, read the file skills/show-hot-leedz.md (print it with the developer shell) and follow it exactly against that claimed task id -- present each judged-hot booking and let the user pick share, email, or skip per booking, then complete that task id. If claim_task returns no task, reply exactly: No hot leedz to present. then stop. You MAY claim this one SHOW_HOT_LEEDZ task and use find, share_booking, dismiss_booking, and outreach draft tools. Do NOT claim worker tasks such as DRILL_DOWN or DRILL_CONTAINER or SCRAPE_SOURCE, and do NOT dispatch worker skills -- the Node conductor owns those."
+:: SHOW HOT LEEDZ is a FOREGROUND presenter. Prime the SHOW_HOT_LEEDZ task deterministically
+:: (hot_only does NOT arm the conductor, so it stays dormant and will not steal the task);
+:: the orchestrator then only has to CLAIM it and present. Priming here removes the flaky
+:: model from the seeding step.
+set "PRECRIME_PLAN_MODE=hot_only"
+call :arm_conductor
+set "PRECRIME_SYS=You are the Pre-Crime orchestrator on Goose running the interactive SHOW HOT LEEDZ review. The SHOW_HOT_LEEDZ task has already been seeded for you. This OVERRIDES any routing in GOOSE.md or init-wizard.md: do NOT read init-wizard.md, do NOT call plan_tasks, do NOT call start_session, and do NOT begin any session or cycle. Do these steps in order, then STOP. Step 1: call precrime__pipeline action=claim_task role=interactive-orchestrator with types listing only SHOW_HOT_LEEDZ. Step 2: if it returns a CLAIMED task, read the file skills/show-hot-leedz.md (print it with the developer shell) and follow it exactly against that claimed task id -- present each judged-hot booking and let the user pick share, email, or skip per booking, then complete that task id. If claim_task returns no task, reply exactly: No hot leedz to present. then stop. You MAY use find, share_booking, dismiss_booking, and outreach draft tools. Do NOT claim worker tasks such as DRILL_DOWN or DRILL_CONTAINER or SCRAPE_SOURCE, and do NOT dispatch worker skills."
 goto :launch
 
 :pick_workflow
 set "GOOSE_TRIGGER=run precrime choice=workflow objective=%PRECRIME_OBJECTIVE% (database: %DBPATH%)"
+:: Arm the conductor DETERMINISTICALLY. The cheap orchestrator model has proven unreliable at
+:: issuing the one required plan_tasks call (it improvised start_session and stalled, leaving
+:: the conductor DORMANT with no work running). Issue plan_tasks(workflow) ourselves; the Node
+:: conductor then owns all dispatch and self-feeds. The goose session below is only for status.
+set "PRECRIME_PLAN_MODE=workflow"
+call :arm_conductor
+set "PRECRIME_SYS=You are the Pre-Crime orchestrator on Goose. The workflow has ALREADY been started for you (plan_tasks was issued by the launcher) and the Node conductor is now running all dispatch autonomously. This OVERRIDES any routing in GOOSE.md or init-wizard.md: do NOT read any skill file, do NOT call plan_tasks, start_session, claim_task, or begin any session or cycle. Reply with exactly one line: Queue seeded -- conductor running; call status for a summary. Then STOP. If the user later asks for progress, call precrime__pipeline action=status and quote the result verbatim."
 goto :launch
 
 :quit
 echo   Exiting. The MCP server is still running in the background; close this window to stop it.
 exit /b 0
+
+:: Deterministically POST plan_tasks(%PRECRIME_PLAN_MODE%) to the already-listening MCP server
+:: (:5179) so the conductor is primed regardless of what the orchestrator model does. This is
+:: the one critical call the cheap model kept getting wrong (improvising start_session, then
+:: stalling); the launcher owns it now. Failure is non-fatal (WARN) -- goose still launches.
+:arm_conductor
+powershell -NoProfile -ExecutionPolicy Bypass -Command "$b = @{ jsonrpc='2.0'; id=1; method='tools/call'; params=@{ name='pipeline'; arguments=@{ action='plan_tasks'; mode=$env:PRECRIME_PLAN_MODE; objective=$env:PRECRIME_OBJECTIVE } } } | ConvertTo-Json -Depth 8; try { Invoke-RestMethod -Uri 'http://127.0.0.1:5179/mcp' -Method Post -ContentType 'application/json' -Body $b -TimeoutSec 20 | Out-Null; Write-Host ('  Conductor primed: plan_tasks ' + $env:PRECRIME_PLAN_MODE + '.') } catch { Write-Host ('  WARN: could not prime conductor via MCP: ' + $_.Exception.Message) }"
+exit /b
 
 :launch
 echo  Mode: %PRECRIME_MODE%   Objective: %PRECRIME_OBJECTIVE%

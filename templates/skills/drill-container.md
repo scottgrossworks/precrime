@@ -21,7 +21,7 @@ You do NOT contact anyone and you do NOT share. Never call `gmail__gmail_send`, 
 
 ## Step 0 — Load task
 - `taskId = env.PRECRIME_TASK_ID`. Missing → complete `failed` `missing_task_id`, stop.
-- `precrime__pipeline({ action:"get_task", taskId })`. Not `{ type:"DRILL_CONTAINER" }` → complete `failed` `wrong_task_type`, stop.
+- Your task packet is the **ASSIGNED TASK** JSON block in these instructions; set `task` = that packet (do NOT call get_task). Not `{ type:"DRILL_CONTAINER" }` → complete `failed` `wrong_type`, stop.
 - `containerBookingId = task.targetId`; `clientId = task.input?.clientId`;
   `ctx = task.input?.containerContext` — `{ title, location, zip, startDate, startTime }` (the event's
   own date/venue; every vendor leed INHERITS these). Read the event title/description yourself to judge
@@ -76,32 +76,34 @@ precrime__pipeline({ action:"save", judge:false,
 ```
 Process up to ~12 vendors this run; no second pass is scheduled, so prioritize the best-fit vendors.
 
-**4b. Organizer + marketplace prep (always, on the container's OWN booking).** ONE `save` updating the
-existing client + booking (`id: clientId`, booking by its id):
+**4b. Organizer + marketplace prep + COMPLETE (always, on the container's OWN booking).** This is your
+FINAL save (it runs after all 4a vendor saves), so fold the task completion into it via `completeTask`
+— do NOT make a separate `complete_task` call on the success path. ONE `save` updating the existing
+client + booking (`id: clientId`, booking by its id):
 ```
 precrime__pipeline({ action:"save", judge:false, id: clientId,
   patch:{ name:"<real organizer person>", email:"<direct, non-generic>", phone:"<if found>",
     bookings:[{ id:"<containerBookingId>", trade:"<canonical>",
-      description:"<2-4 sentence selling point: why this event is a strong gig for the trade — crowd, fit, demand>",
+      description:"<2-4 sentence selling point: why this event is a strong gig for the trade, crowd, fit, demand>",
       notes:"Vendor application: <url/pdf>. Requirements: <fee / booth / deadline / accepted categories>.",
       location:"<ctx.location>", zip:"<ctx.zip>", startDate:"<ctx.startDate>", startTime:"<ctx.startTime>",
-      sourceUrl:"<page proving organizer + vendor form>" }] }})
+      sourceUrl:"<page proving organizer + vendor form>" }] },
+  completeTask:{ taskId, status:"done",
+    output:{ clientIds:[<organizer clientId PLUS every vendor clientId you minted in 4a>], bookingIds:[containerBookingId],
+      factletIds:[], sourceIds:[],
+      summary:"Container <containerBookingId>: <N> vendor leed(s) + organizer/marketplace <staged|partial>.",
+      needsJudge:true } }})
 ```
 Rules:
+- **`completeTask.output.clientIds` MUST list the organizer client PLUS every vendor client minted in 4a** — the JUDGE_AFFECTED sweep needs all of them. After this call you are DONE — STOP.
 - Booking `description` → marketplace `dt`; `notes` → marketplace `rq`. Keep emails/phones, epochs, and
-  any date/time other than the booking's own OUT of `description` (the share path validates this).
+  any date/time other than the booking's own OUT of `description` (the share path validates this). No em dashes.
 - Never write `Booking.status`; never `judge:true`; never `share_booking`. The server Judge re-scores;
   a present demand signal (the trade has appeared at this event before) tips it toward marketplace-eligible.
-- No named organizer found → still save whatever you got (progress); omit fields you did not find.
+- No named organizer found → still save whatever you got (progress) with `needsJudge:false`; omit fields you did not find.
 
-## Step 5 — Complete
-```
-precrime__pipeline({ action:"complete_task", taskId, status:"done",
-  output:{ clientIds:[<organizer clientId + every vendor clientId saved>], bookingIds:[containerBookingId],
-    factletIds:[], sourceIds:[],
-    summary:"Container <containerBookingId>: <N> vendor leed(s) + organizer/marketplace <staged|partial>.", needsJudge:true }})
-```
-No fit: `status:"done"`, summary `"no VALUE_PROP fit for this event"`, `needsJudge:false`.
-Nothing usable: `status:"done"`, summary `"no organizer / vendor list found"`, `needsJudge:false`.
-Tavily down / error: `status:"cancelled"|"failed"`, `error:"<tavily_unavailable|tool_error>"`.
+## Step 5 — Completion for the no-save paths only
+Only when 4b did NOT run (you bailed before any save):
+- **No VALUE_PROP fit** (bailed at the Step 2 fit gate): `precrime__pipeline({ action:"complete_task", taskId, status:"done", output:{ clientIds:[], bookingIds:[containerBookingId], factletIds:[], sourceIds:[], summary:"no VALUE_PROP fit for this event", needsJudge:false }})`
+- **Tavily down / error** (bailed at Step 3): `precrime__pipeline({ action:"complete_task", taskId, status:"cancelled"|"failed", error:"<tavily_unavailable|tool_error>", output:{ clientIds:[], bookingIds:[containerBookingId], factletIds:[], sourceIds:[], summary:"container drill failed: <reason>", needsJudge:false }})`
 Never contact anyone. Never share. Never leave a claimed task open. Then STOP.

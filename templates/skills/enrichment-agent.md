@@ -17,7 +17,7 @@ create clients/bookings, or call `claim_task`, `plan_tasks`, `next`, `rescore`,
 
 ## Step 0 — Load task
 - `taskId = env.PRECRIME_TASK_ID`. Missing → complete `failed` `missing_task_id`, stop.
-- `precrime__pipeline({ action:"get_task", taskId })` → `clientId = task.targetId`,
+- Read the **ASSIGNED TASK** JSON block in these instructions as `task` (do NOT call get_task) → `clientId = task.targetId`,
   `url = task.input.url`, `summary = task.input.summary`.
 - Not `{ type:"ENRICH_CLIENT", targetType:"Client" }` → complete `failed` `wrong_task_type`, stop.
 - `summary` empty → complete `done` `needsJudge:false`, but still mark the entry consumed
@@ -47,25 +47,24 @@ Fold only facts about THIS client into the dossier; invent nothing. Format:
 - Mark the source consumed: in `targetUrls` (JSON array) set the entry whose `url` matches to
   `consumed:true`, leave all others unchanged (no match → leave as-is).
 
-## Step 3 — Save (judge:false)
+## Step 3 — Save AND complete in ONE call (judge:false)
+This save always runs (it persists the dossier + marks the source consumed). Fold the task
+completion into this SAME call via `completeTask` — do NOT make a separate `complete_task` call
+on the success path; that wastes a whole turn. When the save succeeds the server marks the task done.
 ```
 precrime__pipeline({ action:"save", id: clientId, judge:false,
   patch:{ dossier:"<updated dossier>",
     targetUrls:"<JSON.stringify with this url's entry consumed:true>",
-    email:"<only if summary gave a direct email>", phone:"<only if summary gave a phone>" }})
+    email:"<only if summary gave a direct email>", phone:"<only if summary gave a phone>" },
+  completeTask:{ taskId, status:"done",
+    output:{ clientIds:[clientId], bookingIds:[], factletIds:[], sourceIds:[],
+      summary:"Enriched <clientId> from <url>: <one-line result>, or 'no enrichable signal' if nothing new",
+      needsJudge:<true if you added any NEW dossier signal this run, else false> } }})
 ```
-Always `judge:false`. Never write `Booking.status` or call `judge_affected`/`rescore`.
+Always `judge:false`. Never write `Booking.status` or call `judge_affected`/`rescore`. After this call succeeds you are DONE — STOP.
 
-## Step 4 — Complete
-Synthesized:
-```
-precrime__pipeline({ action:"complete_task", taskId, status:"done",
-  output:{ clientIds:[clientId], bookingIds:[], factletIds:[], sourceIds:[],
-    summary:"Enriched <clientId> from <url>: <one-line result>.", needsJudge:true }})
-```
-Nothing usable (or empty summary): same shape, `clientIds:[]`, summary `"no enrichable signal"`,
-`needsJudge:false` (still mark the entry consumed in Step 2).
-Failure:
+## Step 4 — Completion for the no-save paths only
+Only when there is no save to fold into (a hard failure before the Step 3 save):
 ```
 precrime__pipeline({ action:"complete_task", taskId, status:"failed",
   error:"<client_missing|tool_error>",

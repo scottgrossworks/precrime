@@ -267,7 +267,17 @@ async function handlePipeline(id, params) {
         case 'resolve_dates':  return createSuccessResponse(id, JSON.stringify(await resolveEventDates(args), null, 2));
         case 'share_booking':  return await pipelineShareBooking(id, args);
         case 'dismiss_booking': return await pipelineDismissBooking(id, args);
-        case 'start_session':  return await pipelineStartSession(id, args.workflow, args.target_count, args.metadata);
+        case 'start_session':
+            // DISABLED. The Node conductor owns all dispatch in this architecture; the
+            // interactive orchestrator has NO legitimate reason to open a session (workers
+            // perform the saves, not the orchestrator, so an orchestrator session always
+            // ends with 0 saves and auto-terminates after minutes of wasted wall-clock).
+            // No active worker skill calls start_session -- they explicitly forbid it -- so
+            // cheap models were IMPROVISING it (start_session workflow="main-cycle") and
+            // spinning pointless 3-minute cycles. Refuse with a redirect instead of creating
+            // one. (Legacy TMP/_archive skills that reference start_session are not deployed.)
+            return createErrorResponse(id, -32601,
+                'start_session is disabled: the Node conductor owns all dispatch. Do NOT start a session or a cycle, and do NOT retry this. Work is already running. To SEE progress call action=status. To enqueue more work call plan_tasks({mode:"workflow"}) exactly once, then stop. Workers perform all saves; you never run a session.');
         case 'report_session': return await pipelineReportSession(id, args.session_id, /*close=*/true);
         case 'audit_session':  return await pipelineReportSession(id, args.session_id, /*close=*/false);
         case 'next_source':    return await pipelineNextSource(id, args.channel, args.maxAgeDays, args.session_id);

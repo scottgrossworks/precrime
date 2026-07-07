@@ -34,7 +34,7 @@ may appear in the email.
 
 ## Step 0: Load task + Gmail gate
 - `taskId = env.PRECRIME_TASK_ID`. Missing, complete `failed` `missing_task_id`, stop.
-- `precrime__pipeline({ action:"get_task", taskId })`, `bookingId = task.targetId`.
+- Read the **ASSIGNED TASK** JSON block in these instructions as `task` (do NOT call get_task), `bookingId = task.targetId`.
   Not `{ type:"DRAFT_OUTREACH", targetType:"Booking" }`, complete `failed` `wrong_task_type`, stop.
 - Gmail gate (BLOCKING): if `gmail__gmail_send` is not in your tools, complete `failed`
   `OUTREACH_REQUIRES_GMAIL`, stop. Never compose without a delivery path.
@@ -76,26 +76,21 @@ auto-mail tells ("I'm writing to...", "I'm reaching out...", "I hope this finds 
 closes ("Would you be open to...", "Let me know if..."); full-name salutations; any phrase in
 VALUE_PROP `forbidden`.
 
-## Step 4: Save (judge:false)
+## Step 4: Save the draft AND complete, in ONE call (judge:false)
 First re-read the full draft and replace any em dash, en dash, or double hyphen with a comma
-(HARD RULE). Then:
+(HARD RULE). Then save the draft AND fold the task completion into the SAME call via `completeTask`
+— do NOT make a separate `complete_task` call on the drafted path; that wastes a whole turn.
 ```
 precrime__pipeline({ action:"save", id: clientId, judge:false,
-  patch:{ draft:"[email text with verbatim signature, no dashes]", draftStatus:"ready" }})
+  patch:{ draft:"[email text with verbatim signature, no dashes]", draftStatus:"ready" },
+  completeTask:{ taskId, status:"done",
+    output:{ clientIds:[clientId], bookingIds:[bookingId],
+      summary:"drafted outreach for <clientId> / booking <bookingId>", needsJudge:false } }})
 ```
+After this call succeeds you are DONE — STOP.
 
-## Step 5: Complete
-Drafted:
-```
-precrime__pipeline({ action:"complete_task", taskId, status:"done",
-  output:{ clientIds:[clientId], bookingIds:[bookingId],
-    summary:"drafted outreach for <clientId> / booking <bookingId>", needsJudge:false }})
-```
-Skipped (not outreach-ready): `status:"done"`, summary `"skip: <reason>"`, `needsJudge:false`.
-Failure (MISSING_SIGNATURE, MISSING_RATE, thin dossier, or gmail unavailable):
-```
-precrime__pipeline({ action:"complete_task", taskId, status:"failed",
-  error:"<reason>",
-  output:{ clientIds:[clientId], bookingIds:[bookingId], summary:"drafter failed: <reason>", needsJudge:false }})
-```
+## Step 5: Completion for the no-save paths only
+Only when there is no draft to save:
+- **Skipped** (not outreach-ready, from Step 2): `precrime__pipeline({ action:"complete_task", taskId, status:"done", output:{ clientIds:[clientId], bookingIds:[bookingId], summary:"skip: <reason>", needsJudge:false }})`
+- **Failure** (MISSING_SIGNATURE, MISSING_RATE, thin dossier, or gmail unavailable): `precrime__pipeline({ action:"complete_task", taskId, status:"failed", error:"<reason>", output:{ clientIds:[clientId], bookingIds:[bookingId], summary:"drafter failed: <reason>", needsJudge:false }})`
 Never leave a claimed task open. Then STOP: one worker, one task.

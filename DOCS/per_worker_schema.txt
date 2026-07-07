@@ -1,0 +1,56 @@
+designed?  how is it implemented?  what are the token uses before/after?
+
+Problem. The pipeline MCP tool bundles ~25 actions (save, share_booking, plan_tasks, judge_affected…), each with a paragraph of schema. An LLM is stateless, so the client re-sends the full tool schema on every turn. A DRILL_DOWN worker uses ~8 actions but was shipped all 25, every turn — pure re-billed waste.
+
+Design. Prune the schema per worker, at the MCP handshake, before the model sees a token. Safe by construction: no scope → full schema (orchestrator unaffected).
+
+Implementation.
+
+The conductor appends the task type to the worker's connection URL: …/mcp?scope=DRILL_DOWN.
+The server reads ?scope= in its tools/list handler and rebuilds pipeline with only that scope's allowed action enum, only those actions' description fragments, and only the properties they use.
+Happens once at connect — zero extra round-trips (unlike lazy "fetch-a-tool" schemes that cost a turn each).
+Before/after (measured, live). Unscoped pipeline schema: 25 actions, 47 props, 18,356 chars. Scoped to DRILL_DOWN: 8 actions, 30 props, ~9,700 chars — ~48% smaller, re-billed on every one of the worker's ~6 turns. Plus extension scoping drops whole unused MCP extensions (gmail, rss) from the worker entirely.
+
+
+ Cast of characters:
+
+Conductor — Node loop that hands out jobs.
+Worker — a goose process doing one job. It has two halves: goose (the plumbing) and the LLM (the model that thinks).
+MCP server — Node server that owns the tools.
+Trace one job:
+
+Conductor picks a job (say a DRILL_DOWN) and starts a Worker, telling goose: "connect to the MCP server at …/mcp?scope=DRILL_DOWN." (The ?scope= tag is the whole trick — it names the job.)
+goose connects and asks the MCP server one question: "what tools do you have?" (tools/list).
+MCP server sees ?scope=DRILL_DOWN on the request. Instead of returning all 25 actions, it builds a small copy of the tool list — just the ~8 actions this job needs — and sends that back.
+goose now holds the small tool list. It builds the prompt: system text + small tool list + the task, and sends it to the LLM.
+LLM reads it, replies "call save with these args."
+goose runs that against the MCP server, gets the result, appends it, and sends the whole thing to the LLM again for the next step.
+The point: every time step 6 loops back to the LLM (turn 2, 3, 4…), goose re-sends that tool list. Small list × many turns = far fewer tokens. The pruning happened once, back in step 3, before the LLM ever saw anything — so it costs zero extra trips. The orchestrator (interactive goose) connects with no ?scope=, so it gets the full list, unchanged.
+
+
+
+the tool schemas are not markdown. The markdown files are the worker instructions (skills). The tool schema — what tools/list sends the model — is a JavaScript object in server/mcp/toolDefs.js. That distinction is the whole answer: you can't easily prune prose, but you can trivially prune a JS object.
+
+Here's the actual shape of the pipeline tool in toolDefs.js:
+
+{
+  name: 'pipeline',
+  description: ['action="save": …', '', 'action="share_booking": …', …].join('\n'),
+  inputSchema: {
+    properties: {
+      action: { enum: ['save','get_task','share_booking','plan_tasks', …25…] },
+      patch:  { description: 'For action=save …' },
+      bookingId: { description: 'For action=share_booking …' },
+      … 47 params …
+    }
+  }
+}
+So it's three prunable structures: an array of description fragments, an enum array of action names, and a map of parameters.
+
+Pruning (scopedToolDefs(scope)), pure object manipulation — no markdown involved:
+
+Look up the allowed actions for the scope (e.g. DRILL_DOWN → [get_task, save, complete_task, …]).
+enum: filter the array to allowed actions.
+description: split('\n\n') back into per-action fragments, keep only ones starting with an allowed action="…", rejoin.
+params: keep each property whose description names an allowed action (or names none = shared).
+tools/list reads ?scope= off the request URL, calls scopedToolDefs(scope), returns the rebuilt object. No scope → the original object untouched. It's a filter over JS arrays/objects, run once at connect.

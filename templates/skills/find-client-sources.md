@@ -16,7 +16,7 @@ NOT write the dossier. Mechanical: search, extract, store. Never call `claim_tas
 
 ## Step 0 — Load task
 - `taskId = env.PRECRIME_TASK_ID`. Missing → complete `failed` `missing_task_id`, stop.
-- `precrime__pipeline({ action:"get_task", taskId })` → `clientId = task.targetId`; `focus = task.input?.focus`.
+- Read the **ASSIGNED TASK** JSON block in these instructions as `task` (do NOT call get_task) → `clientId = task.targetId`; `focus = task.input?.focus`.
 - Not `{ type:"FIND_CLIENT_SOURCES", targetType:"Client" }` → complete `failed` `wrong_task_type`, stop.
 
 ## Step 1 — Load client
@@ -46,28 +46,22 @@ official site, event pages, news, directories; skip social login walls).
 `tavily__tavily_extract` per chosen URL. Keep each summary short and factual — raw material
 for the ENRICH worker. Don't interpret or score.
 
-## Step 4 — Store on targetUrls (judge:false)
+## Step 4 — Store on targetUrls AND complete, in ONE call (judge:false)
 Append `{ url, summary, consumed:false }` per source. DEDUP on `url` (skip URLs already present,
-consumed or not). Preserve existing entries.
+consumed or not). Preserve existing entries. Fold the completion into this SAME save via
+`completeTask` — do NOT make a separate `complete_task` call on the success path; that wastes a
+whole turn. When the save succeeds the server marks the task done.
 ```
 precrime__pipeline({ action:"save", id: clientId, judge:false,
-  patch:{ targetUrls:"<JSON.stringify of existing + new { url, summary, consumed:false } entries>" }})
+  patch:{ targetUrls:"<JSON.stringify of existing + new { url, summary, consumed:false } entries>" },
+  completeTask:{ taskId, status:"done",
+    output:{ clientIds:[clientId], bookingIds:[], factletIds:[], sourceIds:[],
+      summary:"Found <N> source summaries for <clientId>.", needsJudge:false } }})
 ```
-Never write `dossier`, `Booking.status`, factlets, or bookings. Never call `judge_affected`/`rescore`.
+Never write `dossier`, `Booking.status`, factlets, or bookings. Never call `judge_affected`/`rescore`. After this call succeeds you are DONE — STOP.
 
-## Step 5 — Complete
-Found sources:
-```
-precrime__pipeline({ action:"complete_task", taskId, status:"done",
-  output:{ clientIds:[clientId], bookingIds:[], factletIds:[], sourceIds:[],
-    summary:"Found <N> source summaries for <clientId>.", needsJudge:false }})
-```
-Nothing usable: `status:"done"`, empty arrays, summary `"no sources found"`, `needsJudge:false`.
-Failure / no Tavily:
-```
-precrime__pipeline({ action:"complete_task", taskId, status:"failed"|"cancelled",
-  error:"<tavily_unavailable|client_missing|tool_error>",
-  output:{ clientIds:[clientId], bookingIds:[], factletIds:[], sourceIds:[],
-    summary:"FIND_CLIENT_SOURCES failed for <clientId>: <reason>.", needsJudge:false }})
-```
+## Step 5 — Completion for the no-save paths only
+Only when there is no save to fold into:
+- **Nothing usable** (no sources found): `precrime__pipeline({ action:"complete_task", taskId, status:"done", output:{ clientIds:[clientId], bookingIds:[], factletIds:[], sourceIds:[], summary:"no sources found", needsJudge:false }})`
+- **Failure / no Tavily**: `precrime__pipeline({ action:"complete_task", taskId, status:"failed"|"cancelled", error:"<tavily_unavailable|client_missing|tool_error>", output:{ clientIds:[clientId], bookingIds:[], factletIds:[], sourceIds:[], summary:"FIND_CLIENT_SOURCES failed for <clientId>: <reason>.", needsJudge:false }})`
 Never leave a claimed task open. Then STOP.
