@@ -11,8 +11,8 @@ triggers:
 
 Process ONE already-claimed FIND_CLIENT_SOURCES task. Find and summarize URLs ABOUT
 one Client; store them for the ENRICH_CLIENT worker to fold into the dossier. You do
-NOT write the dossier. Mechanical: search, extract, store. Never call `claim_task`,
-`plan_tasks`, `next`, `rescore`, or `judge_affected`.
+NOT write the dossier. Mechanical: search, extract, store. Only the tools advertised
+to you exist.
 
 ## Step 0 — Load task
 - `taskId = env.PRECRIME_TASK_ID`. Missing → complete `failed` `missing_task_id`, stop.
@@ -58,7 +58,7 @@ precrime__pipeline({ action:"save", id: clientId, judge:false,
     output:{ clientIds:[clientId], bookingIds:[], factletIds:[], sourceIds:[],
       summary:"Found <N> source summaries for <clientId>.", needsJudge:false } }})
 ```
-Never write `dossier`, `Booking.status`, factlets, or bookings. Never call `judge_affected`/`rescore`. After this call succeeds you are DONE — STOP.
+Never write `dossier`, `Booking.status`, factlets, or bookings. After this call succeeds you are DONE — STOP.
 
 ## Step 5 — Completion for the no-save paths only
 Only when there is no save to fold into:

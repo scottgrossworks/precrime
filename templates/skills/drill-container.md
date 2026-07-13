@@ -12,12 +12,10 @@ triggers:
 
 Process ONE already-claimed DRILL_CONTAINER task. A convention, expo, festival, fair, or
 tournament is NOT a single prospect — it is a CONTAINER. The opportunity is the **organizer**,
-the **vendors/exhibitors**, and/or the **crowd**, never the event's subject (we don't care about
-taekwondo any more than nursing at an AMA expo). Your job, in order: confirm there's a VALUE_PROP
-angle at all, find the real organizer, expand any vendor list into fitting leedz, and prep the
-event as a marketplace listing. You fill DATA with research tools and synthesize listing prose.
-You do NOT contact anyone and you do NOT share. Never call `gmail__gmail_send`, `share_booking`,
-`claim_task`, `plan_tasks`, `judge_affected`, `next_source`, or `mark_source`.
+the **vendors/exhibitors**, and/or the **crowd**, never the event's subject. Your job, in
+order: confirm there's a VALUE_PROP angle at all, find the real organizer, expand any vendor
+list into fitting leedz, and prep the event as a marketplace listing. RESEARCH ONLY — you
+never contact anyone and never share. Only the tools advertised to you exist.
 
 ## Step 0 — Load task
 - `taskId = env.PRECRIME_TASK_ID`. Missing → complete `failed` `missing_task_id`, stop.
@@ -31,20 +29,17 @@ You do NOT contact anyone and you do NOT share. Never call `gmail__gmail_send`, 
 ## Step 1 — Load context
 `precrime__find({ action:"clients", filters:{ id: clientId }, limit:1, summary:false })` and
 `precrime__find({ action:"bookings", filters:{ search: containerBookingId } })` → event name, venue,
-date, website, current description. **Read `DOCS/VALUE_PROP.md` in full — especially `## RELEVANCE
-SIGNALS` and its `### Not Relevant Signals` — you need it for the fit gate below.**
+date, website, current description. Your fit criteria are in the packet: `task.vp.relevanceSignals`
+and `task.vp.notRelevantSignals` (do NOT read VALUE_PROP.md or call get_config).
 
 ## Step 2 — FIT GATE (do this first; bail cheaply on no-fit)
-Judge product-market fit between VALUE_PROP and THIS event **using VALUE_PROP's `## RELEVANCE SIGNALS`
-as the criteria** — that section is the authoritative fit test. The question is NOT "does the event's
-subject match our trade"; it is whether the event shows any RELEVANCE SIGNAL — needs live
-entertainment / guest activities / booth traffic / a guest takeaway; has a crowd, booths, sponsor
-activations, a family or student audience; vendors/exhibitors who'd want booth-draw. (That is why a
-service like ours fits a roofing expo — booth traffic for any exhibitor — AND a tournament with a
-crowd, but NOT a closed B2B event hitting the `### Not Relevant Signals`: pure catering/AV/security,
-no public audience, no entertainment/activation need.)
-- **No RELEVANCE SIGNAL / hits a Not-Relevant signal** → complete `done`, summary `"no VALUE_PROP fit for this event"`, `needsJudge:false`, stop. Do not research further.
-- **One or more RELEVANCE SIGNALS present** → continue.
+Judge fit between VALUE_PROP and THIS event using `task.vp.relevanceSignals` as the authoritative
+criteria. The question is NOT "does the event's subject match our trade" — it is whether the event
+shows any relevance signal (a crowd, booths, sponsor activations, entertainment/activation need,
+vendors who'd want booth-draw). A niche expo with booth traffic fits; a closed B2B event matching
+`task.vp.notRelevantSignals` does not.
+- **No relevance signal / hits a not-relevant signal** → complete `done`, summary `"no VALUE_PROP fit for this event"`, `needsJudge:false`, stop. Do not research further.
+- **One or more relevance signals present** → continue.
 
 ## Step 3 — Research (bounded; 1–4 searches total)
 Tavily unavailable → complete `cancelled` `tavily_unavailable`, stop.
@@ -54,8 +49,8 @@ Find the event's OWN site/listing, then gather BOTH:
 - **A vendor / exhibitor list** — the event's `exhibitors` / `vendors` / `directory` / `floor plan`
   page, if one exists. Also capture any **vendor-application** link/PDF + requirements (fee, booth,
   deadline, accepted categories) — these often carry the full schema.
-- **Confirm the trade** (canonical `precrime__trades()` name) for marketplace listing.
-- Capture the page URL(s) proving these.
+- Capture the page URL(s) proving these. (Do NOT determine a trade — this is a single-trade
+  business; the server stamps every booking with the VALUE_PROP trade automatically.)
 
 ## Step 4 — Write results (judge:false)
 
@@ -70,7 +65,7 @@ precrime__pipeline({ action:"save", judge:false,
   patch:{ company:"<vendor>", name:"<contact if found, else company>",
     email:"<direct, non-generic only; else OMIT>", website:"<if found>",
     segment:"<vendor category>", source:"container:<containerBookingId>",
-    bookings:[{ title:"<ctx.title>", trade:"<canonical if the vendor's business fits, else OMIT>",
+    bookings:[{ title:"<ctx.title>",
       location:"<ctx.location>", zip:"<ctx.zip>", startDate:"<ctx.startDate>", startTime:"<ctx.startTime>",
       source:"container:<containerBookingId>", sourceUrl:"<vendor-list page URL>" }] }})
 ```
@@ -83,7 +78,7 @@ client + booking (`id: clientId`, booking by its id):
 ```
 precrime__pipeline({ action:"save", judge:false, id: clientId,
   patch:{ name:"<real organizer person>", email:"<direct, non-generic>", phone:"<if found>",
-    bookings:[{ id:"<containerBookingId>", trade:"<canonical>",
+    bookings:[{ id:"<containerBookingId>",
       description:"<2-4 sentence selling point: why this event is a strong gig for the trade, crowd, fit, demand>",
       notes:"Vendor application: <url/pdf>. Requirements: <fee / booth / deadline / accepted categories>.",
       location:"<ctx.location>", zip:"<ctx.zip>", startDate:"<ctx.startDate>", startTime:"<ctx.startTime>",

@@ -23,13 +23,8 @@
     "fullContentBonus": 2
   },
   "keywords": {
-    "global": [
-      "event", "convention", "expo", "trade show", "conference",
-      "wedding", "corporate event", "gala", "fundraiser", "festival",
-      "party", "celebration", "venue", "exhibitor", "planner",
-      "booking", "vendor", "entertainment", "photo booth", "DJ",
-      "caterer", "decorator", "rental", "hire"
-    ]
+    "global": [],
+    "_note": "keywords are derived from DOCS/VALUE_PROP.md at scorer startup (see index.js loadKeywordsFromValueProp). Do NOT hardcode here."
   },
   "blacklist": []
 }

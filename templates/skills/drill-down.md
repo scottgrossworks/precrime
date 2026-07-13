@@ -11,8 +11,7 @@ triggers:
 
 Process ONE already-claimed DRILL_DOWN task: a booking that is one or two fields short
 of HOT. Find ONLY those missing fields and save them. You fill DATA with research tools.
-You do NOT contact anyone. Never call `gmail__gmail_send`, `share_booking`, `claim_task`,
-`plan_tasks`, `judge_affected`, `next_source`, or `mark_source`.
+RESEARCH ONLY — you never contact anyone. Only the tools advertised to you exist.
 
 ## Step 0 — Load task (already provided — do NOT call get_task)
 - Your task packet is the **ASSIGNED TASK** JSON block in these instructions. Set `task` = that packet, `taskId = task.id`. Do NOT call `precrime__pipeline({ action:"get_task" })` — it is already here.
@@ -31,7 +30,6 @@ Work only the codes in `missing`. Per code:
 - **`client_name` / `client_name_not_person`** (need a real PERSON, not an org/team): find the named decision-maker on the org's staff/about page or LinkedIn; capture their name (and email if it appears).
 - **`start_date` / `start_time` / `start_date_not_future_enough`** (need the event date): find the event's OWN listing/registration page and copy the **verbatim** date/time text. Do not invent dates.
 - **`location_with_zip`** (need venue + zip): find the venue on the event page or the venue's own site; capture the address incl. 5-digit zip (or the city to geocode).
-- **`trade`** (rare): confirm the service fits a canonical `precrime__trades()` name; if not, leave it.
 - **`title`**: capture the event/opportunity name from the page.
 - **`booking`** (CLIENT target only — there is no event yet): research the org (its site, events/calendar page, or an event listing/registration page) for ONE UPCOMING public event it is hosting or attending that fits the trade. Capture the event's **verbatim** date/time text, venue + 5-digit zip, and title. Pair it with the contact from `client_email` above. No qualifying FUTURE event found → leave it (do NOT invent one); saving just the contact is still progress.
 
@@ -46,9 +44,11 @@ that wastes a whole turn. When the save succeeds the server marks the task done.
 ```
 precrime__pipeline({ action:"save", judge:false, id: clientId,
   patch:{ name:"<if found>", email:"<direct address if found>", phone:"<if found>",
-    bookings:[{ trade:"<canonical>", dateText:"<verbatim date text if found>",
+    bookings:[{ dateText:"<verbatim date text if found>",
       location:"<venue text>", zip:"<5-digit if found>", title:"<event name>",
       sourceUrl:"<live page proving these>" }] },
+    // NOTE: do NOT set `trade`. This is a single-trade business; the server stamps every
+    // booking with the VALUE_PROP trade automatically. Never write the event-vendor's trade.
   completeTask:{ taskId, status:"done",
     output:{ clientIds:[clientId], bookingIds: bookingId ? [bookingId] : [], factletIds:[], sourceIds:[],
       summary:"Drill-down <bookingId or clientId>: filled <fields-found>.", needsJudge:true } }})

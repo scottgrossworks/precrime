@@ -14,7 +14,7 @@ const { createSuccessResponse, createErrorResponse } = require('./responses');
 const verify = require('./verify');
 const { isGenericEmail } = require('./factlets');
 const { normalizeBookingDatesForSave } = require('./dates');
-const { judgeAffected } = require('./judge');
+const { judgeAffected, actedOnData } = require('./judge');
 const { logSessionEvent } = require('./sessionLog');
 const { VALUE_PROP } = require('./runtime');
 
@@ -337,6 +337,17 @@ async function pipelineSave(id, clientId, patch, sessionId, judge, factletId) {
             await tx.client.update({ where: { id: clientId }, data: clientData });
         }
 
+        // THE DOWNGRADE: drafting/sending outreach IS acting on the leed. Mark the client's
+        // live bookings acted-on with the SAME flag dismiss_booking uses (shared:true), so they
+        // drop out of the hot presenter and never resurface. Without this a drafted leed stayed
+        // status=hot/shared=false and was shown again every run (the "same leedz again" bug).
+        if (patch.draftStatus === 'ready' || patch.draftStatus === 'sent') {
+            await tx.booking.updateMany({
+                where: { clientId, shared: false },
+                data: actedOnData('drafted')
+            });
+        }
+
         // Create factlets only. Factlet is standalone in this architecture;
         // there is no join table. Client.dossier (timestamped prose) is the
         // durable per-client record; APPLY_FACTLET workers and JUDGE_AFFECTED
@@ -362,6 +373,13 @@ async function pipelineSave(id, clientId, patch, sessionId, judge, factletId) {
                 for (const f of bookingFields) {
                     if (b[f] !== undefined) bookingData[f] = b[f];
                 }
+
+                // SINGLE-TRADE BUSINESS: a booking is an opportunity to sell OUR service, so its
+                // trade is ALWAYS the VALUE_PROP trade (e.g. caricatures) -- never the vendor's own
+                // business at the event. Container/drill workers kept writing the event-vendor trade
+                // (dj / photo booth / photographer) into Booking.trade, producing wrong marketplace
+                // listings. Force it. Fall back to the worker's value only if VALUE_PROP has no trade.
+                if (VALUE_PROP && VALUE_PROP.trade) bookingData.trade = VALUE_PROP.trade;
 
                 // Booking.status is owned by the server Judge. A worker save may only
                 // DEMOTE a booking to 'cold' or 'brewing' (e.g. returning a shared or
@@ -405,15 +423,21 @@ async function pipelineSave(id, clientId, patch, sessionId, judge, factletId) {
                     // Booking dedup: an event is uniquely (title + start date) for a given
                     // client. The container drill kept re-adding the SAME event (e.g. "San
                     // Diego Comic-Con 2026") to the SAME exhibitor client -> 98 LEGO rows.
-                    // Refuse a create when this client already holds that title on that date.
-                    // This does NOT inhibit discovering NEW exhibitors within a container --
-                    // each distinct company is its own client; it only stops duplicate rows.
+                    // Match is NORMALIZED (trim + lowercase + collapse spaces) and date-tolerant
+                    // (same date, OR either side missing a date) so title-case/whitespace variants
+                    // and undated re-adds still collapse -- the old exact title+date match let a
+                    // flood of near-identical rows through (KCON/ADLM x N in the hot queue).
+                    // Distinct companies are distinct clients, so this never blocks new exhibitors.
                     let dup = null;
-                    if (bookingData.title && bookingData.startDate) {
-                        dup = await tx.booking.findFirst({
-                            where: { clientId, title: bookingData.title, startDate: bookingData.startDate },
-                            select: { id: true }
+                    if (bookingData.title) {
+                        const norm = s => (s || '').trim().toLowerCase().replace(/\s+/g, ' ');
+                        const wantT = norm(bookingData.title);
+                        const wantD = bookingData.startDate ? +new Date(bookingData.startDate) : null;
+                        const siblings = await tx.booking.findMany({
+                            where: { clientId }, select: { id: true, title: true, startDate: true }
                         });
+                        dup = siblings.find(s => norm(s.title) === wantT
+                            && (wantD === null || !s.startDate || +new Date(s.startDate) === wantD)) || null;
                     }
                     if (dup) {
                         console.error(`[save] booking dedup — client ${clientId} already has "${bookingData.title}" on that date; duplicate create skipped.`);

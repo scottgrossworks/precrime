@@ -101,7 +101,7 @@ const { nextTopic } = require('./workers/last30daysTopics');   // deterministic 
 // per-channel files + an ephemeral in-memory index and is the sole writer.
 const { createSourceStore } = require('./sourceStore');
 const sourceStore = createSourceStore({ root: PRECRIME_ROOT });
-const { startConductor, armConductor } = require('./conductor');
+const { startConductor, armConductor, conductorStatus } = require('./conductor');
 const dates = require('./dates');
 const { resolveEventDates, normalizeBookingDatesForSave } = dates;
 const { createSuccessResponse, createErrorResponse, safeJson } = require('./responses');
@@ -249,8 +249,23 @@ async function handlePipeline(id, params) {
             // hung-worker timeout reaps it (existing safety net).
             if (args.completeTask && !(saveRes && saveRes.error)) {
                 const ct = args.completeTask;
+                // Server-side id-derivation: guarantee the JUDGE_AFFECTED sweep sees the client +
+                // booking this save just created/affected, even when the worker (which cannot know
+                // a server-generated id) omits them from completeTask.output. Merge the save's own
+                // affectedClientIds/affectedBookingIds in. This is what lets create-then-complete
+                // skills (apply-factlet) fold their completion instead of spending a second turn.
+                const out = Object.assign({}, ct.output);
+                try {
+                    const saved = JSON.parse(saveRes.result.content[0].text);
+                    const merge = (key, extra) => {
+                        if (!Array.isArray(extra) || !extra.length) return;
+                        out[key] = [...new Set([...(Array.isArray(out[key]) ? out[key] : []), ...extra])];
+                    };
+                    merge('clientIds', saved.affectedClientIds);
+                    merge('bookingIds', saved.affectedBookingIds);
+                } catch (_) { /* non-standard save payload -> keep worker-supplied output as-is */ }
                 const ctRes = await pipelineCompleteTask(id, {
-                    taskId: ct.taskId, status: ct.status || 'done', output: ct.output, error: ct.error
+                    taskId: ct.taskId, status: ct.status || 'done', output: out, error: ct.error
                 });
                 if (ctRes && ctRes.error) logWarn(`save+completeTask: complete failed for task ${ct.taskId}: ${ctRes.error.message || ctRes.error}`);
             }
@@ -285,8 +300,9 @@ async function handlePipeline(id, params) {
         case 'add_sources':    return await pipelineAddSources(id, args.entries);
         case 'import_sources': return await pipelineImportSources(id);
         case 'work_status':    return await pipelineWorkStatus(id);
+        case 'mark_sent':      return await pipelineMarkSent(id, args);
         default:
-            return createErrorResponse(id, -32602, `Unknown pipeline action: "${action}". Must be: status, configure, get_config, get_task, next, save, delete, rescore, resolve_dates, share_booking, dismiss_booking, start_session, report_session, audit_session, next_source, mark_source, add_sources, import_sources, work_status, judge_affected, plan_tasks, claim_task, complete_task, tasks, recycler.`);
+            return createErrorResponse(id, -32602, `Unknown pipeline action: "${action}". Must be: status, configure, get_config, get_task, next, save, delete, rescore, resolve_dates, share_booking, dismiss_booking, mark_sent, report_session, audit_session, next_source, mark_source, add_sources, import_sources, work_status, judge_affected, plan_tasks, claim_task, complete_task, tasks, recycler.`);
     }
 }
 
@@ -319,17 +335,10 @@ async function pipelineDelete(id, target, recordId, confirm = false) {
         return createErrorResponse(id, -32602, `delete requires id (the record to remove).`);
     }
 
-    // Guard destructive deletes. The user's standing rule: NEVER delete bookings/clients in
-    // interactive mode -- to clear a hot leed from the queue, DEMOTE it with dismiss_booking
-    // (shared+cold, permanent skip, no data loss). delete is permanent (and delete client
-    // cascade-removes every booking). Refuse unless the caller passes confirm:true.
-    if ((target === 'booking' || target === 'client') && !confirm) {
-        const alt = target === 'booking'
-            ? 'To hide a hot leed use action=dismiss_booking with bookingId or bookingIds[] (demotes without deleting).'
-            : 'Deleting a client also deletes ALL its bookings. To hide leedz use action=dismiss_booking, not delete.';
-        return createErrorResponse(id, -32602,
-            `Refusing to DELETE ${target} "${recordId}" -- destructive and permanent. ${alt} To truly delete, re-issue with confirm:true.`);
-    }
+    // STANDING RULE (user, 2026-07-13, supersedes the old never-delete rule): interactive
+    // mode can delete ANYTHING -- client, booking, factlet -- immediately, no refusal, no
+    // confirm gate, no redirect to dismiss_booking. The user's word is the confirmation.
+    // (confirm/force args are still accepted for backward compatibility but ignored.)
 
     try {
         if (target === 'booking') {
@@ -410,13 +419,20 @@ async function pipelineRescore(id, scope, procedural = false) {
     // pass procedural:true to scrub mis-scored hot leedz without spending a single token.
     if (procedural) {
         const rows = await prisma.booking.findMany({ where, include: { client: true } });
+        // Org-level acted-on veto: an org already emailed/dismissed/shared (matched by email,
+        // normalized company name, or website domain -- catches variant-named duplicate client
+        // rows too) must not stay hot. Built once; forces cold below.
+        const actedSets = await buildActedVetoSets();
         for (const b of rows) {
             bump(before, b.status || 'unknown');
             try {
                 const proc = classifyBookingProcedural(b, b.client);
                 // hot_eligible -> keep current status (do NOT auto-promote to hot here).
                 // Otherwise the procedural verdict (cold|brewing) becomes the new status.
-                const next = proc.state === 'hot_eligible' ? b.status : proc.state;
+                let next = proc.state === 'hot_eligible' ? b.status : proc.state;
+                if (next === 'hot' && actedVetoHit(actedSets, b.client)) {
+                    next = 'cold';   // org already contacted/dismissed
+                }
                 if (next !== b.status) {
                     await prisma.booking.update({ where: { id: b.id }, data: { status: next } });
                     changed++;
@@ -583,6 +599,7 @@ async function pipelineWorkStatus(id) {
     }
 
     return createSuccessResponse(id, JSON.stringify({
+        conductor: conductorStatus(),   // live running workers + armed/resting/halted state (same process)
         sources,
         clients: { thin, needs_enrichment: needsEnrichment, ready_drafts: readyDrafts },
         bookings: { hot: hotBookings, brewing: brewingBookings },
@@ -762,7 +779,7 @@ const { pipelineSave } = require('./saveClient').createSaveHandler({ isHttpUrl }
 // judgeAffected (the in-process scoring authority) + dismiss/judge_affected
 // handlers. Imported by same names so save, the executor, and the share.js
 // factory wiring below resolve unchanged. See judge.js.
-const { judgeAffected, pipelineDismissBooking, pipelineJudgeAffected } = require('./judge');
+const { judgeAffected, pipelineDismissBooking, pipelineJudgeAffected, actedOnData, buildActedVetoSets, actedVetoHit } = require('./judge');
 
 // ============================================================================
 // SHARE BOOKING -- the only sanctioned marketplace posting path (Phase 5)
@@ -1001,14 +1018,83 @@ async function reclaimStaleTasks() {
 
 // Expire bookings whose event date has passed. An event leed is perishable: once the
 // date is gone the booking is dead weight — it must not be scored, enriched, or counted
-// as a live future booking. Demotes past cold/brewing bookings to 'expired' (idempotent;
-// leaves hot/shared/expired and undated bookings untouched). Returns the count.
+// as a live future booking. INCLUDES HOT (standing rule 2026-07-13): a hot booking whose
+// date passes is just as dead — "the World Cup is over" — and used to sit hot forever.
+// Also resets dossierScore/intelScore on clients left with NO live future booking, so an
+// expired leed's client drops out of the high-dossier bucket instead of staying "Hot".
+// Idempotent; leaves shared/expired and undated bookings untouched. Returns the count.
 async function expirePastBookings() {
-    const r = await prisma.booking.updateMany({
-        where: { status: { in: ['cold', 'brewing'] }, startDate: { lt: new Date() } },
+    const now = new Date();
+    const past = await prisma.booking.findMany({
+        where: { status: { in: ['cold', 'brewing', 'hot'] }, startDate: { lt: now } },
+        select: { id: true, clientId: true }
+    });
+    if (past.length === 0) return 0;
+    await prisma.booking.updateMany({
+        where: { id: { in: past.map(b => b.id) } },
         data: { status: 'expired' }
     });
-    return r.count;
+    const cids = Array.from(new Set(past.map(b => b.clientId).filter(Boolean)));
+    if (cids.length) {
+        // A client that STILL has a live future booking keeps its score (that signal is
+        // real); only clients with nothing live left get reset. New bookings/factlets
+        // rebuild the score later.
+        const stillLive = await prisma.booking.findMany({
+            where: {
+                clientId: { in: cids }, shared: false,
+                startDate: { gte: now }, status: { in: ['cold', 'brewing', 'hot'] }
+            },
+            select: { clientId: true }, distinct: ['clientId']
+        });
+        const liveSet = new Set(stillLive.map(b => b.clientId));
+        const dead = cids.filter(c => !liveSet.has(c));
+        if (dead.length) {
+            await prisma.client.updateMany({
+                where: { id: { in: dead } },
+                data: { dossierScore: 0, intelScore: 0 }
+            });
+        }
+    }
+    return past.length;
+}
+
+// Scoring-criteria fingerprint. The proactive judge sweep (Stage 2b) dedupes by a
+// per-booking watermark: skip a booking already judged since its own updatedAt. But
+// editing the SCORING LENS -- VALUE_PROP.md, the classification/judge/scoring code, or
+// precrime_config.json -- does NOT bump any booking's updatedAt, so the sweep would
+// never re-judge existing bookings against the new lens. THAT is the "a human has to
+// say 'rescore'" gap. We hash the scoring inputs at startup; if they changed since the
+// last run, we set a re-judge FLOOR (SCORING_CRITERIA_CHANGED_AT) so every eligible
+// booking is re-scored once against the new criteria, then the normal watermark
+// resumes. Fully automatic -- the orchestrator never asks the user to rescore.
+let SCORING_CRITERIA_CHANGED_AT = 0;   // epoch ms; 0 = criteria unchanged this run
+function initScoringFingerprint() {
+    const inputs = [
+        path.join(PRECRIME_ROOT, 'DOCS', 'VALUE_PROP.md'),
+        path.join(PRECRIME_ROOT, 'precrime_config.json'),
+        path.join(__dirname, 'classification.js'),
+        path.join(__dirname, 'judge.js'),
+        path.join(__dirname, 'factlets.js')
+    ];
+    const h = crypto.createHash('sha256');
+    for (const f of inputs) {
+        try { h.update(f + '\0'); h.update(fs.readFileSync(f)); }
+        catch (_) { h.update(f + '\0MISSING'); }
+    }
+    const fp = h.digest('hex');
+    const fpFile = path.join(path.dirname(dbPath), '.scoring_fingerprint');
+    let prev = null;
+    try { prev = fs.readFileSync(fpFile, 'utf8').trim(); } catch (_) {}
+    if (prev !== fp) {
+        SCORING_CRITERIA_CHANGED_AT = Date.now();
+        try { fs.writeFileSync(fpFile, fp); }
+        catch (e) { logError(`scoring fingerprint write failed: ${e.message}`); }
+        console.error(prev === null
+            ? '[scoring] no prior fingerprint — baselining; eligible bookings judged fresh this run.'
+            : '[scoring] criteria changed since last run — auto re-judging eligible bookings against the new lens (no prompt).');
+    } else {
+        console.error('[scoring] criteria unchanged since last run.');
+    }
 }
 
 async function cleanupOpenTasksOnStartup() {
@@ -1136,7 +1222,10 @@ async function runInProcessTask(task) {
             taskId: task.id, status: 'done',
             output: { clientIds, bookingIds, changed, transitions, summary }
         });
-        return { type: task.type, changed, summary };
+        // hotProduced = count of bookings promoted TO hot this pass. The conductor's target-hot
+        // supervisor sums these to decide when "loop until N new hot leedz" is satisfied.
+        const hotProduced = transitions.filter(tr => tr && tr.to === 'hot').length;
+        return { type: task.type, changed, hotProduced, summary };
     }
     if (task.type === 'SHOW_HOT_LEEDZ') {
         const hotCount = await prisma.booking.count({
@@ -1175,7 +1264,9 @@ async function pipelinePlanTasks(id, args) {
     // to start. 'hot_only' (SHOW_HOT_LEEDZ) does NOT arm the full loop. The
     // conductor's own self-feed replan (id 'conductor-replan') never re-arms.
     if (id !== 'conductor-replan' && (mode === 'workflow' || mode === 'headless')) {
-        armConductor();
+        // args.targetHot (optional int): "loop until N new hot leedz". The conductor counts
+        // ->hot promotions and stops self-feed at N. No target => run continuously (until rest).
+        armConductor({ targetHot: args.targetHot });
     }
 
     // Objective ('marketplace' | 'outreach' | 'hybrid') gates SHARE_BOOKING
@@ -1229,9 +1320,14 @@ async function pipelinePlanTasks(id, args) {
     const workflowState = (mode === 'workflow' || mode === 'headless')
         ? await computeWorkflowIntakeState()
         : null;
-    // One condition, two semantic names so they can diverge later if needed.
+    // shouldPlanDiscovery gates only the genuinely-unbounded new-input stages
+    // (DISCOVER_SOURCES, LAST_30_DAYS): pause open-ended discovery while a
+    // factlet backlog is being consumed. ENRICH_CLIENT and SCRAPE_SOURCE are
+    // now foundational (budget-capped, always run) and no longer gated here, so
+    // shouldPlanClientEnrichment is retained (vestigial) for now rather than
+    // deleted -- kept in case enrichment ever needs its own strategy gate again.
     const shouldPlanDiscovery = !workflowState || workflowState.strategy !== 'consume_factlets';
-    const shouldPlanClientEnrichment = shouldPlanDiscovery;
+    const shouldPlanClientEnrichment = shouldPlanDiscovery;   // vestigial: no longer gates ENRICH (see Stage 5)
 
     // Total Tasks of each type already created in THIS Session (any status).
     // Drives the session-budget gate. Refreshed once at planning start; the
@@ -1400,7 +1496,11 @@ async function pipelinePlanTasks(id, args) {
                 for (const b of eligible) {
                     if (alreadyQueued.has(b.id)) continue;
                     const lj = lastJudged.get(b.id);
-                    if (lj && lj >= b.updatedAt) continue; // judged since last change -> skip
+                    // Skip only if judged since the booking last changed AND since the scoring
+                    // criteria last changed. A lens edit bumps SCORING_CRITERIA_CHANGED_AT (set at
+                    // startup by the fingerprint check), forcing exactly one re-judge per booking
+                    // against the new criteria; afterward the finishedAt watermark resumes.
+                    if (lj && +lj >= +b.updatedAt && +lj >= SCORING_CRITERIA_CHANGED_AT) continue;
                     judgeNeededInputs.push({ sourceTaskId: 'proactive_eligible', clientIds: [], bookingIds: [b.id] });
                 }
             }
@@ -1433,8 +1533,13 @@ async function pipelinePlanTasks(id, args) {
             suppressed.add('SHARE_BOOKING');
             suppressed.add('DRAFT_OUTREACH');
             suppressed.add('APPLY_FACTLET');
-            suppressed.add('ENRICH_CLIENT');
-            suppressed.add('SCRAPE_SOURCE');
+            // ENRICH_CLIENT and SCRAPE_SOURCE are FOUNDATIONAL stages (like
+            // DRILL_DOWN): they promote brewing->hot (find the decision-maker
+            // contact) and provide fresh fuel. They are budget-capped, so they
+            // must NOT be suppressed by judge -- judge fires almost every cycle,
+            // and suppressing them here starved the entire brewing backlog
+            // (877 bookings stuck, 0 hot). Only DISCOVER (unbounded new input)
+            // stays funnel-gated behind judge.
             suppressed.add('DISCOVER_SOURCES');
         }
 
@@ -1576,8 +1681,10 @@ async function pipelinePlanTasks(id, args) {
             // hot action we just scheduled.
             if (hotPlanned > 0 || hotActionOpen > 0 || hotExists > 0) {
                 suppressed.add('APPLY_FACTLET');
-                suppressed.add('ENRICH_CLIENT');
-                suppressed.add('SCRAPE_SOURCE');
+                // ENRICH_CLIENT/SCRAPE_SOURCE stay foundational even with hot
+                // work pending (budget-capped small slice) -- an always-hot
+                // backlog must not starve enrichment/scraping, or the funnel
+                // never refills. Only DISCOVER pauses for hot action.
                 suppressed.add('DISCOVER_SOURCES');
             }
         }
@@ -1698,14 +1805,16 @@ async function pipelinePlanTasks(id, args) {
                 }
             }
             if (applyPlanned > 0 || applyAlreadyOpen > 0) {
-                suppressed.add('ENRICH_CLIENT');
-                suppressed.add('SCRAPE_SOURCE');
+                // Applying known factlets does NOT promote a brewing booking that
+                // is missing a contact email -- only ENRICH/FIND does. So apply
+                // must not suppress enrichment/scraping (that was a third
+                // starvation path). Only DISCOVER waits behind apply.
                 suppressed.add('DISCOVER_SOURCES');
             }
-            // Backlog: consume_factlets strategy also pauses ENRICH this pass.
+            // Backlog: consume_factlets pauses only DISCOVER (unbounded new
+            // input). ENRICH/SCRAPE keep their budget-capped slice so the
+            // brewing backlog drains even while factlets are being consumed.
             if (workflowState && workflowState.strategy === 'consume_factlets') {
-                suppressed.add('ENRICH_CLIENT');
-                suppressed.add('SCRAPE_SOURCE');
                 suppressed.add('DISCOVER_SOURCES');
             }
         }
@@ -1770,8 +1879,7 @@ async function pipelinePlanTasks(id, args) {
                         if (!gate.fit) {
                             if (gate.decided) {
                                 await prisma.booking.update({ where: { id: nh.bookingId },
-                                    data: { shared: true, sharedTo: 'unfit_vendor',
-                                        sharedAt: BigInt(Date.now()), status: 'cold' } }).catch(() => {});
+                                    data: actedOnData('unfit_vendor') }).catch(() => {});
                             }
                             logInfo(`container fit-gate: skip drill — ${company || '(no company)'} @ ${meta.title || '(event)'} [${gate.decided ? 'dismissed' : 'deferred'}]: ${gate.reason}`);
                             continue;
@@ -1875,7 +1983,11 @@ async function pipelinePlanTasks(id, args) {
         // suppress lower scrape/discovery stages when scheduled. Client-level dedup
         // + atomic per-client ENRICH creation (all of a client's unconsumed summaries
         // enqueued in one pass) prevents partial coverage, same as APPLY_FACTLET.
-        if (!suppressed.has('ENRICH_CLIENT') && shouldPlanClientEnrichment) {
+        // Foundational: ENRICH/FIND run every cycle (budget-capped), NOT gated
+        // on shouldPlanClientEnrichment (= strategy !== consume_factlets). The
+        // brewing backlog needs decision-maker contacts to promote regardless of
+        // the factlet backlog; MAX_FIND_PASSES caps un-promotable clients.
+        if (!suppressed.has('ENRICH_CLIENT')) {
             const enrichOpen = await countReady('ENRICH_CLIENT');
             const findOpen   = await countReady('FIND_CLIENT_SOURCES');
             // Clients already mid-enrichment (open or this-session FIND/ENRICH) are skipped.
@@ -1975,7 +2087,11 @@ async function pipelinePlanTasks(id, args) {
         // ---------- Stage 6: SCRAPE_SOURCE ----------
         // Scrape existing Sources only when no hot / judge / apply / enrich
         // backlog is gating us. PER-TARGET DEDUP same as other workers.
-        if (!suppressed.has('SCRAPE_SOURCE') && shouldPlanDiscovery) {
+        // Foundational: SCRAPE runs every cycle (budget-capped) over the bounded
+        // ready-source queue (fb/ig excluded), NOT gated on shouldPlanDiscovery.
+        // Scraping the existing queue is fuel, not open-ended discovery -- the
+        // unbounded stage (DISCOVER_SOURCES below) stays funnel-gated.
+        if (!suppressed.has('SCRAPE_SOURCE')) {
             const ckScrape = await createBudget('SCRAPE_SOURCE');
             let scrapePlanned = 0;
             const scrapeOpen = await countReady('SCRAPE_SOURCE');
@@ -2203,6 +2319,53 @@ async function pipelineGetTask(id, args) {
     const row = await prisma.task.findUnique({ where: { id: taskId } });
     if (!row) return createErrorResponse(id, -32602, `get_task: task "${taskId}" not found.`);
     return createSuccessResponse(id, JSON.stringify(taskRowToPacket(row), null, 2));
+}
+
+// mark_sent -- DETERMINISTIC outreach record. Called by the gmail send tool itself the moment
+// an email actually goes out (NOT dependent on any LLM remembering to save). Given the recipient
+// email (and/or an explicit clientId), it marks the matching Client draftStatus="sent" + sentAt,
+// and flips that client's live bookings OUT of the hot queue (shared=true, cold) -- the same
+// acted-on flag dismiss/share use. This is the "mark data consumed" step: emailed => reset => never
+// shown as hot again. Idempotent; a client already "sent" is left as-is (no double work).
+async function pipelineMarkSent(id, args) {
+    const email = args && args.email ? String(args.email).trim().toLowerCase() : '';
+    const clientId = args && args.clientId ? String(args.clientId) : '';
+    if (!email && !clientId) {
+        return createErrorResponse(id, -32602, 'mark_sent requires email or clientId.');
+    }
+    // Match by explicit id, else by email CASE-INSENSITIVELY. SQLite `=` is case-sensitive, so a
+    // stored "Capke@AVMA.org" silently escaped a lowercased "capke@avma.org" match and stayed hot.
+    let clients;
+    if (clientId) {
+        clients = await prisma.client.findMany({ where: { id: clientId }, select: { id: true } });
+    } else {
+        const withEmail = await prisma.client.findMany({ where: { email: { not: null } }, select: { id: true, email: true } });
+        clients = withEmail.filter(c => String(c.email).trim().toLowerCase() === email);
+    }
+    if (clients.length === 0) {
+        // Not an error: the recipient may not be a tracked client (manual email, cc, etc.).
+        return createSuccessResponse(id, JSON.stringify({ marked: 0, note: `no client matches ${email || clientId}` }, null, 2));
+    }
+    const ids = clients.map(c => c.id);
+    // Demote EVERY client at this address. Emailing an address reaches everyone at it, so all
+    // matching leedz are contacted and must go cold -- INCLUDING the duplicate rows the same org
+    // accumulates (the #1 cause of "I already emailed them but they're hot again"). The old
+    // "ambiguous -> skip" guard left those duplicates hot forever; over-demoting a shared inbox is
+    // far better than a contacted leed resurrecting. The email-level judge veto backs this up.
+    // Contacted = done (standing rule 2026-07-13): mark sent AND reset the dossier signal
+    // so the client drops out of the high-dossier bucket -- the user never wants to see a
+    // contacted leed resurface. The email-level judge veto keeps it out of hot; this keeps
+    // it out of the priority lists too.
+    await prisma.client.updateMany({
+        where: { id: { in: ids } },
+        data: { draftStatus: 'sent', sentAt: new Date(), dossierScore: 0, intelScore: 0 }
+    });
+    const bk = await prisma.booking.updateMany({
+        where: { clientId: { in: ids }, shared: false },
+        data: actedOnData('email_user')
+    });
+    logInfo(`mark_sent: ${email || clientId} -> ${ids.length} client(s) sent, ${bk.count} booking(s) reset out of hot.`);
+    return createSuccessResponse(id, JSON.stringify({ marked: ids.length, bookingsReset: bk.count }, null, 2));
 }
 
 async function pipelineCompleteTask(id, args) {
@@ -2490,6 +2653,10 @@ async function startMcpServer() {
     } catch (e) {
         logError(`SourceStore load error: ${e.message}`);
     }
+    // Detect a scoring-lens change (VALUE_PROP / classification / judge / config edit)
+    // and, if found, arm a one-time auto re-judge of eligible bookings. No user prompt.
+    try { initScoringFingerprint(); }
+    catch (e) { logError(`scoring fingerprint init error: ${e.message}`); }
 
     const PORT = (PRECRIME_CONFIG.workers && PRECRIME_CONFIG.workers.port) || 5179;
     const HOST = '127.0.0.1';

@@ -12,9 +12,9 @@ triggers:
 
 Process ONE already-claimed task whose target is a BOOKING. Load the Booking + its
 Client, judge JIT whether the leed is outreach-ready, and if so save the draft via
-`save({ judge:false })`. Complete either way. Never call `claim_task`, `plan_tasks`,
-`rescore`, or `judge_affected`. Never compute scores or `Booking.status` (server-side).
-Never auto-send: the orchestrator decides send vs draft.
+`save({ judge:false })`. Complete either way. Never compute scores or `Booking.status`
+(server-side). Never auto-send: the orchestrator decides send vs draft. Only the tools
+advertised to you exist.
 
 ## HARD RULE: NO DASHES IN THE EMAIL, EVER
 
@@ -32,12 +32,13 @@ full email text once and replace ANY em dash, en dash, or double hyphen you find
 comma. Only plain letters, numbers, spaces, and normal punctuation (`. , : ; ? ! ' " ( )`)
 may appear in the email.
 
-## Step 0: Load task + Gmail gate
+## Step 0: Load task
 - `taskId = env.PRECRIME_TASK_ID`. Missing, complete `failed` `missing_task_id`, stop.
 - Read the **ASSIGNED TASK** JSON block in these instructions as `task` (do NOT call get_task), `bookingId = task.targetId`.
   Not `{ type:"DRAFT_OUTREACH", targetType:"Booking" }`, complete `failed` `wrong_task_type`, stop.
-- Gmail gate (BLOCKING): if `gmail__gmail_send` is not in your tools, complete `failed`
-  `OUTREACH_REQUIRES_GMAIL`, stop. Never compose without a delivery path.
+- This worker only WRITES the draft (`draftStatus:"ready"`); it never sends. Sending is a
+  separate procedural step (`gmail_send` -> `mark_sent`), so `gmail__gmail_send` is NOT required
+  here and is intentionally not in this worker's tools. Do not gate on it.
 
 ## Step 1: Load leed
 - Booking: `precrime__find({ action:"bookings", filters:{ id: bookingId } })`, read `clientId`.
@@ -92,5 +93,5 @@ After this call succeeds you are DONE — STOP.
 ## Step 5: Completion for the no-save paths only
 Only when there is no draft to save:
 - **Skipped** (not outreach-ready, from Step 2): `precrime__pipeline({ action:"complete_task", taskId, status:"done", output:{ clientIds:[clientId], bookingIds:[bookingId], summary:"skip: <reason>", needsJudge:false }})`
-- **Failure** (MISSING_SIGNATURE, MISSING_RATE, thin dossier, or gmail unavailable): `precrime__pipeline({ action:"complete_task", taskId, status:"failed", error:"<reason>", output:{ clientIds:[clientId], bookingIds:[bookingId], summary:"drafter failed: <reason>", needsJudge:false }})`
+- **Failure** (MISSING_SIGNATURE, MISSING_RATE, or thin dossier): `precrime__pipeline({ action:"complete_task", taskId, status:"failed", error:"<reason>", output:{ clientIds:[clientId], bookingIds:[bookingId], summary:"drafter failed: <reason>", needsJudge:false }})`
 Never leave a claimed task open. Then STOP: one worker, one task.

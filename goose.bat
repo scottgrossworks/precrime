@@ -205,14 +205,17 @@ echo.
 :: DLL lock. Match COMMAND LINE, never image name -- a blanket `taskkill /IM
 :: node.exe` / `claude.exe` would crash the user's interactive Claude Code session
 :: (Claude Code runs as node/claude too). Kills only mcp_server.js + worker procs.
-powershell -NoProfile -ExecutionPolicy Bypass -Command "Get-CimInstance Win32_Process | Where-Object { ($_.Name -in 'node.exe','claude.exe','goose.exe') -and $_.CommandLine -and ($_.CommandLine -like '*mcp_server.js*' -or $_.CommandLine -like '*--print*' -or $_.CommandLine -like '*--no-session*') } | ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }"
+powershell -NoProfile -ExecutionPolicy Bypass -Command "Get-CimInstance Win32_Process | Where-Object { ($_.Name -in 'node.exe','claude.exe','goose.exe') -and $_.CommandLine -and ($_.CommandLine -like '*mcp_server.js*' -or $_.CommandLine -like '*--print*' -or $_.CommandLine -like '*--no-session*' -or $_.CommandLine -like '*mcp_gmail.js*') } | ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }"
 timeout /t 1 /nobreak >nul
 
-:: --- 5. Setup ---
-call setup.bat
-if errorlevel 1 (
+:: --- 5. Build-artifact guard (npm install + prisma generate are DEPLOY steps in deploy.js;
+:: the launcher only VERIFIES the tree is ready, it does not build). Missing client =>
+:: deploy or unzip is incomplete; say how to finish and stop (no slow build at launch).
+if not exist "%~dp0server\node_modules\@prisma\client\index.js" (
   echo.
-  echo Setup failed. Fix the error above and try again.
+  echo  Prisma client missing -- deploy incomplete.
+  echo  Run:  setup.bat      ^(or re-run deploy.js on the build machine^)
+  echo.
   pause
   exit /b 1
 )
@@ -262,10 +265,16 @@ if errorlevel 1 (
 set "PRECRIME_WORKER_BIN=%USERPROFILE%\.local\bin\goose.exe"
 set "PRECRIME_WORKER_ARGS=run"
 set "PRECRIME_WORKER_INST_FLAG=--instructions"
-:: TOKEN ECONOMY: scope each spawned worker to ONLY the MCP extensions its task type
-:: needs (conductor.js gooseExtArgs) via --no-profile + --with-*. Without this, every
-:: worker loads all 6 config extensions' tool schemas on EVERY turn (gmail/rss it never
-:: calls + the heavy precrime pipeline description). Unset to revert to full extensions.
+:: Name each worker's goose session precrime-<TYPE>-<taskId> so token-report.js can attribute
+:: tokens + cost per task type from goose's sessions.db. goose only; claude workers ignore it.
+set "PRECRIME_WORKER_NAME_FLAG=--name"
+:: TOKEN ECONOMY: scope each spawned goose worker via a per-task RECIPE (conductor.js
+:: buildWorkerRecipe). The recipe names extensions CORRECTLY (precrime / tavily / precrime-rss),
+:: lists ONLY the ones the task type needs, and points precrime at ...?scope=<type> so the server
+:: serves a PRUNED pipeline schema. This REPLACES the old --no-profile ad-hoc path, which let
+:: goose derive names from the URL/command (precrime -> "localhost_5179_mcp", tavily -> "python")
+:: and orphaned every worker with "tool not found" -> 0 hot leedz. Empty/0/false = OFF (plain
+:: --instructions + full profile). goose only; claude workers ignore it.
 set "PRECRIME_GOOSE_EXT_SCOPE=1"
 :: Start in its OWN window (NOT /B). /B shares goose's console, and the conductor's
 :: log writes collide with goose's interactive TUI -> goose's stdout handle goes bad
@@ -330,7 +339,7 @@ set "GOOSE_TRIGGER=run precrime choice=workflow objective=%PRECRIME_OBJECTIVE% (
 :: conductor then owns all dispatch and self-feeds. The goose session below is only for status.
 set "PRECRIME_PLAN_MODE=workflow"
 call :arm_conductor
-set "PRECRIME_SYS=You are the Pre-Crime orchestrator on Goose. The workflow has ALREADY been started for you (plan_tasks was issued by the launcher) and the Node conductor is now running all dispatch autonomously. This OVERRIDES any routing in GOOSE.md or init-wizard.md: do NOT read any skill file, do NOT call plan_tasks, start_session, claim_task, or begin any session or cycle. Reply with exactly one line: Queue seeded -- conductor running; call status for a summary. Then STOP. If the user later asks for progress, call precrime__pipeline action=status and quote the result verbatim."
+set "PRECRIME_SYS=You are the Pre-Crime orchestrator on Goose. The workflow has ALREADY been started for you (plan_tasks was issued by the launcher) and the Node conductor is now running all dispatch autonomously. This OVERRIDES any routing in GOOSE.md or init-wizard.md: do NOT read any skill file, do NOT call start_session, claim_task, or begin any session or cycle. Reply with exactly one line: Queue seeded -- conductor running; call status for a summary. Then STOP. EXCEPTION -- the ONLY time you call plan_tasks: if the user asks to run/loop until a specific NUMBER of hot leedz (e.g. 'until 5 hot leedz'), call precrime__pipeline action=plan_tasks mode=workflow targetHot=<that number> EXACTLY ONCE; the Node conductor then stops itself automatically once it has produced that many new hot leedz. If the user later asks for progress, call precrime__pipeline action=status and quote the result verbatim."
 goto :launch
 
 :quit
@@ -348,3 +357,9 @@ exit /b
 :launch
 echo  Mode: %PRECRIME_MODE%   Objective: %PRECRIME_OBJECTIVE%
 "%USERPROFILE%\.local\bin\goose.exe" run --system "%PRECRIME_SYS%" -t "%GOOSE_TRIGGER%" -s
+:: When the interactive session ends, return to the menu so the user can pick again
+:: (e.g. [1] review -> back to menu -> [2] workflow) WITHOUT re-running the launcher or
+:: restarting the MCP server (it is still up). pick_hot/pick_workflow reset SYS+TRIGGER each
+:: pass, so the next choice starts clean. Headless is a single run -> exit.
+if /i "%PRECRIME_MODE%"=="headless" goto :eof
+goto :menu

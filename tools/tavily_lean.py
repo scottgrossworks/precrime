@@ -174,6 +174,12 @@ def pick_relevant_snippets(
 TAVILY_SEARCH_URL = "https://api.tavily.com/search"
 TAVILY_EXTRACT_URL = "https://api.tavily.com/extract"
 
+# Full-mode extract content cap (chars). Raw Tavily pages run 10k-50k+; unbounded, the cleaned
+# page rode through every drill-worker turn as re-billed input -- the dominant DRILL_* token cost.
+# A vendor list past ~8k chars is rare and the skill harvests only ~12 vendors/run, so it never
+# needs the whole dump. Override with env TAVILY_EXTRACT_MAX_CHARS.
+MAX_EXTRACT_CHARS = int(os.environ.get("TAVILY_EXTRACT_MAX_CHARS", "8000"))
+
 
 def _post(url: str, payload: dict, timeout: int = 30) -> dict:
     resp = requests.post(url, json=payload, timeout=timeout)
@@ -270,7 +276,7 @@ def _candidate_kind(line: str) -> str | None:
     return None
 
 
-def extract_candidates(content: str, limit: int = 80) -> dict:
+def extract_candidates(content: str, limit: int = 25) -> dict:
     """
     Assistive extraction pass for the LLM, not a final classifier.
 
@@ -294,12 +300,12 @@ def extract_candidates(content: str, limit: int = 80) -> dict:
         candidates.append({
             "text": line,
             "kind": kind,
-            "context": " | ".join(p for p in [before, line, after] if p)[:500],
+            "context": " | ".join(p for p in [before, line, after] if p)[:160],
         })
         if len(candidates) >= limit:
             break
 
-    urls = list(dict.fromkeys(URL_RE.findall(content)))[:40]
+    urls = list(dict.fromkeys(URL_RE.findall(content)))[:12]
     emails = list(dict.fromkeys(EMAIL_RE.findall(content)))[:20]
     phones = list(dict.fromkeys(PHONE_RE.findall(content)))[:10]
     return {
@@ -318,8 +324,8 @@ def extract_lean(url: str, query_hint: str = "", timeout: int = 30, mode: str = 
     """
     Extract one URL.
 
-    mode="full" (default): cleaned full page content. Strips markdown image syntax,
-        inline link URLs, empty links. PRESERVES list structure, headers, vendor
+    mode="full" (default): cleaned page content, capped at MAX_EXTRACT_CHARS. Strips markdown
+        image syntax, inline link URLs, empty links. PRESERVES list structure, headers, vendor
         names. Use this for vendor lists, exhibitor rosters, contact directories.
 
     mode="snippet": legacy behavior. Picks 5 query-relevance-scored sentences
@@ -347,7 +353,7 @@ def extract_lean(url: str, query_hint: str = "", timeout: int = 30, mode: str = 
     if mode == "snippet":
         body = pick_relevant_snippets(content, query_hint or url, max_snippets=5, max_chars=800)
     else:
-        body = clean_for_extract(content)
+        body = clean_for_extract(content)[:MAX_EXTRACT_CHARS]
 
     emails = list(dict.fromkeys(EMAIL_RE.findall(content)))[:20]
     phones = list(dict.fromkeys(PHONE_RE.findall(content)))[:10]
@@ -363,6 +369,14 @@ def extract_lean(url: str, query_hint: str = "", timeout: int = 30, mode: str = 
         "candidates": candidates,
     }
     lean_chars = len(json.dumps(lean))
+    # Invariant: the lean extract must NEVER exceed the raw Tavily response. On huge pages the
+    # content cap + candidate digest could still run over; trim the content tail until it fits
+    # (candidates are the high-signal part, so shrink prose first). Kills the historical
+    # "lean bigger than raw" cases where the wrapper INFLATED the payload.
+    if lean_chars > raw_chars and len(body) > 500:
+        body = body[: max(500, len(body) - (lean_chars - raw_chars) - 256)]
+        lean["content"] = body
+        lean_chars = len(json.dumps(lean))
     lean["stats"] = {
         "raw_chars": raw_chars,
         "lean_chars": lean_chars,

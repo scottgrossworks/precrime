@@ -213,14 +213,24 @@ function createShareHandlers(deps) {
             }, null, 2));
         }
 
-        // 3c. Booking must have a description (the marketplace listing requires it).
-        if (!fresh.description || !String(fresh.description).trim()) {
+        // 3c. Marketplace listing needs description prose. Accept ANY source the payload can use
+        // (line ~300 builds dt from the same fallback): a caller-supplied dtDraft (the presenter
+        // synthesizes it from the client dossier at share time), OR a stored Booking.description,
+        // OR Booking.notes. Previously this hard-required a stored description, so a thin-but-real
+        // hot leed could never be shared even when the presenter had the dossier to synthesize from.
+        const _descSource = (args && args.dtDraft && String(args.dtDraft).trim())
+            || (fresh.description && String(fresh.description).trim())
+            || (fresh.notes && String(fresh.notes).trim());
+        // Substance gate: a live marketplace listing needs real prose, not "." / "TODO" / one word.
+        // A weak presenter model can synthesize a hollow dtDraft; require a short phrase's worth of
+        // alphanumerics so a hollow blurb can't post.
+        if (!_descSource || _descSource.replace(/[^a-z0-9]/gi, '').length < 15) {
             return createSuccessResponse(id, JSON.stringify({
                 mode,
                 posted: false,
                 error: 'share_ready_gate_fail',
                 missing: ['booking.description'],
-                hint: 'Booking must have a description before sharing. Add a description and retry.'
+                hint: 'Provide description prose: pass dtDraft (synthesize it from the client dossier) or enrich the booking with a description, then retry.'
             }, null, 2));
         }
 

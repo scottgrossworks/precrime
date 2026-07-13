@@ -353,6 +353,15 @@ if (fs.existsSync(cfgSampleSrc)) {
   process.exit(1);
 }
 
+// 2d.4 Ship token-report.js (per-worker-type token + cost report; reads goose's sessions.db).
+const tokenReportSrc = path.join(PRECRIME, 'token-report.js');
+if (fs.existsSync(tokenReportSrc)) {
+  copyFile(tokenReportSrc, path.join(outputDir, 'token-report.js'));
+  console.log('  + token-report.js');
+} else {
+  console.warn('  ⚠ token-report.js missing — token/cost report will be absent from the deploy');
+}
+
 // 2e. npm install + prisma generate in generated workspace
 if (!noInstall) {
   console.log('\nInstalling server dependencies (npm install)...');
@@ -577,18 +586,22 @@ console.log('\nSkill playbooks:');
   // sole writer and appends discoveries); the build never ships business-specific
   // sources and never overwrites a deployment's grown list. The runtime store
   // (server/mcp/sourceStore.js) reads data/sources/<channel>.md.
-  ['data/sources/directory.md', 'data/sources/directory.md'],
-  ['data/sources/rss.md',       'data/sources/rss.md'],
-  ['data/sources/fb.md',        'data/sources/fb.md'],
-  ['data/sources/ig.md',        'data/sources/ig.md'],
-  ['data/sources/reddit.md',    'data/sources/reddit.md'],
-  ['data/sources/x.md',         'data/sources/x.md'],
-  ['data/sources/website.md',   'data/sources/website.md'],
-  ['data/sources/blog.md',      'data/sources/blog.md'],
   ['skills/shared/booking-detect.md',        'skills/shared/booking-detect.md'],
   ['skills/shared/classify-contact.md',      'skills/shared/classify-contact.md'],
   ['skills/shared/factlet-rules.md',         'skills/shared/factlet-rules.md'],
 ].forEach(([src, dst]) => copyTemplate(src, dst, tokens));
+
+// Source lists are DEPLOYMENT DATA the running system grows -- NEVER overwrite a populated one.
+// A rebuild must not wipe the deployment's scrape queue (same class of bug as the VALUE_PROP
+// clobber). Ship the empty placeholder ONLY when the target is absent or still has no URLs.
+for (const ch of ['directory', 'rss', 'fb', 'ig', 'reddit', 'x', 'website', 'blog']) {
+  const rel = `data/sources/${ch}.md`;
+  const dstPath = path.join(outputDir, rel);
+  let populated = false;
+  try { populated = fs.existsSync(dstPath) && /^https?:\/\//m.test(fs.readFileSync(dstPath, 'utf8')); } catch (_) {}
+  if (populated) console.log(`  = ${rel} preserved (has URLs — not overwritten)`);
+  else copyTemplate(rel, rel, tokens);
+}
 
 // 8. Copy + substitute doc stubs.
 // MCP_REWRITE.md is a historical engineering design doc and does NOT ship in the distribution.
@@ -596,13 +609,24 @@ console.log('\nSkill playbooks:');
 console.log('\nDocs:');
 [
   ['docs/CLAUDE.md',       'DOCS/CLAUDE.md'],
-  ['docs/VALUE_PROP.md',   'DOCS/VALUE_PROP.md'],
   ['docs/SCORING.json',    'DOCS/SCORING.json'],
   ['docs/PROMPTS.json',    'DOCS/PROMPTS.json'],       // server-side LLM judge prompts (loaded at startup)
   ['docs/PEER_SOURCES.json','DOCS/PEER_SOURCES.json'], // topic->peer-source table + engagement knobs
   ['docs/SUMMARY.md',      'DOCS/SUMMARY.md'],
   ['docs/FOUNDATION.md',   'DOCS/FOUNDATION.md'],
 ].forEach(([src, dst]) => copyTemplate(src, dst, tokens));
+
+// VALUE_PROP.md is USER-FILLED business config (pitch, signature, RATE, relevance signals),
+// NOT code. Ship the blank template ONLY on a first deploy -- when the target is absent or still
+// the unfilled "[YOUR ...]" placeholder. NEVER overwrite a filled-in one: a rebuild must not wipe
+// the deployment's business config (this clobbered a live deployment on 2026-07-09).
+const vpDst = path.join(outputDir, 'DOCS', 'VALUE_PROP.md');
+const vpUnfilled = !fs.existsSync(vpDst) || /\[YOUR /i.test(fs.readFileSync(vpDst, 'utf8'));
+if (vpUnfilled) {
+  copyTemplate('docs/VALUE_PROP.md', 'DOCS/VALUE_PROP.md', tokens);
+} else {
+  console.log('  = DOCS/VALUE_PROP.md preserved (filled-in — not overwritten by deploy)');
+}
 
 // 8b. Write CLAUDE.md + GOOSE.md to workspace root (agents auto-load from cwd)
 copyTemplate('CLAUDE.md', 'CLAUDE.md', tokens);

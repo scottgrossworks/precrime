@@ -2,6 +2,14 @@
 setlocal
 cd /d "%~dp0"
 
+:: Fast path: deps + Prisma client already present -> skip the whole verbose npm install /
+:: prisma generate (they ran every launch and made boot slow + noisy). One line, then out.
+:: First run (no generated client) falls through to the full setup below.
+if exist "%~dp0server\node_modules\@prisma\client\index.js" (
+  echo Pre-Crime: ready.
+  exit /b 0
+)
+
 echo.
 echo Pre-Crime -- First-time Setup
 echo ============================================================

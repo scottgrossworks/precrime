@@ -12,8 +12,7 @@ triggers:
 Process ONE already-claimed DISCOVER_SOURCES task. Find NEW places to scrape that fit
 the product, and register them. You add SOURCES (feeds, accounts, directories, pages),
 never clients/bookings/factlets. Mechanical: read VALUE_PROP → search → classify →
-add_sources → complete. Never call `claim_task`, `plan_tasks`, `next`, `judge_affected`,
-`save`, `next_source`, or `mark_source`.
+add_sources → complete. You never save clients/bookings. Only the tools advertised to you exist.
 
 ## Step 0 — Load task
 - `taskId = env.PRECRIME_TASK_ID`. Missing → complete `failed` `missing_task_id`, stop.
@@ -31,7 +30,7 @@ Do NOT invent a business it isn't. Search for who books THIS trade in THIS area.
 Aim each query at SOURCE-BEARING pages (feeds, accounts, directories, listings) — NOT
 individual leads. Deliberately cover the channels recursion never finds: **RSS feeds,
 social handles, directories.** Combine trade/buyer/geography from Step 1. Templates:
-- **rss / blog:** `"<region>" <buyer type> blog`  ·  `<region> <trade> OR event entertainment feed`
+- **rss / blog (PRIORITIZE — feeds are chronically under-discovered; spend 2+ queries here when `data/sources/rss.md` is thin):** hunt ACTUAL feed URLs, not just pages. `<region> <buyer type> blog inurl:feed OR inurl:rss` · `<segment> events OR wedding OR party blog "/feed/"` · `<region> <trade> OR event entertainment blog rss` · `<buyer type> newsletter OR blog subscribe rss`. Most event/wedding/party blogs are WordPress and expose their feed at `<site>/feed/` — if a query surfaces a promising blog HOME page but no explicit feed link, register the blog URL with `/feed/` appended as an `rss` source (the scorer skips a feed that 404s, so a wrong guess is harmless).
 - **directory:** `<region> event vendor directory`  ·  `<region> <buyer type> association OR vendors list`
 - **reddit:** `site:reddit.com <region> events OR <buyer type>`
 - **ig:** `site:instagram.com <region> <buyer type>`

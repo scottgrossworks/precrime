@@ -11,8 +11,8 @@ triggers:
 
 # apply-factlet — one-shot APPLY_FACTLET worker
 
-Process ONE task, then stop. Never call `claim_task`, `plan_tasks`, `next`, `rescore`,
-or `judge_affected`. Never load extra clients or factlets.
+Process ONE task, then stop. Never load extra clients or factlets. Only the tools
+advertised to you exist.
 
 **Substitute real values.** Code blocks are templates. `taskId`, `factletId`, `clientId`,
 `dossier` are variables you captured — replace them with real values. `patch`/`filters`/`output`
@@ -21,8 +21,8 @@ are JSON objects, not strings. Never send a value containing `{ } < >` or a bare
 
 ## Step 0 — Task ID + VALUE_PROP
 - `taskId = env.PRECRIME_TASK_ID`. Missing → complete `failed` `missing_task_id`, stop.
-- `precrime__pipeline({ action: "get_config" })` → hold: `trade`, `geography`, `serviceZips`,
-  `buyerRoles`, `audienceSegments`, `notBuyer`, `relevanceSignals`.
+- Your VALUE_PROP slice is in the packet: `task.vp` = `trade`, `geography`, `buyerRoles`,
+  `audienceSegments`, `notBuyer`, `relevanceSignals`. Do NOT call `get_config`.
 
 ## Step 1 — Load task
 Read the **ASSIGNED TASK** JSON block in these instructions as `task` (do NOT call get_task):
@@ -58,7 +58,7 @@ RELEVANT if it provides ANY of:
 - **Demand** for `[trade]` or adjacent (RFP, "seeking vendors", inquiry) — implied is fine.
 - **Contact**: a named person + role + affiliation with THIS client who could book/authorize.
   Role-without-name, or a person at another org, does NOT count.
-- **Geography**: places this client inside (or outside) `geography`/`serviceZips`.
+- **Geography**: places this client inside (or outside) `task.vp.geography`.
 - **Trade/buyer profile**: industry, scale, event cadence, org type mapping to `buyerRoles`/
   `audienceSegments`; includes `notBuyer` negatives.
 
@@ -100,23 +100,25 @@ precrime__pipeline({ action:"save", id: clientId /* OMIT when newClient */, fact
     phone:"<direct phone>",                  // optional — verified
     bookings:[{
       // id:"<existing bookingId>"  ← include to UPDATE; OMIT to CREATE a new future booking
-      title:"<event name>", trade:"<trade>", location:"<venue/city>", zip:"<5-digit venue zip>",
+      title:"<event name>", location:"<venue/city>", zip:"<5-digit venue zip>",  // NO trade -- server stamps the VALUE_PROP trade
       startDateParts:{ year:2026, month:6, day:26, hour:7, minute:0, ampm:"pm" }
     }]
-  }})
+  },
+  completeTask:{ taskId, status:"done",
+    output:{ factletIds:[factletId], sourceIds:[],
+      summary:"Applied <factletId>: enriched and/or created client+booking.", needsJudge:true } }})
 ```
 A booking turns HOT only with a direct email (not info@/expo@) + venue zip + future date + start
 time — supply these whenever the factlet gives them. Do NOT set `Booking.status` (the judge
-promotes). Always `judge:false`. The save response returns the created/affected client and booking
-ids — use them in Step 6.
+promotes). Always `judge:false`. The `completeTask` folds this task's completion INTO the save — one
+turn, not two. You do NOT know the server-created client/booking ids and do NOT need to: the server
+merges the save's affected client + booking ids into the completion automatically. After this save
+succeeds you are DONE — STOP.
 
-## Step 6 — Complete
-Saved (enriched a client, and/or created a client/booking) — use the ids the save returned:
-```
-precrime__pipeline({ action:"complete_task", taskId, status:"done",
-  output:{ clientIds:[<savedClientId>], bookingIds:[<createdBookingId if any>], factletIds:[factletId], sourceIds:[],
-    summary:"Applied <factletId>: <action> (e.g. enriched <clientId> | created client+booking).", needsJudge:true }})
-```
+## Step 6 — Completion for the NO-SAVE paths only
+The saved path already completed via the folded `completeTask` in Step 5. Only the paths below —
+which have no save to fold into — call `complete_task` directly:
+
 No change:
 ```
 precrime__pipeline({ action:"complete_task", taskId, status:"done",

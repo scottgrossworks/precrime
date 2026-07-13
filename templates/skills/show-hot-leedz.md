@@ -32,7 +32,7 @@ Merge, deduplicate by id. Order by soonest `startDate` first. If empty, complete
 
 For each booking, evaluate which gates it passes (use the data already loaded -- no extra MCP calls):
 
-- **share-ready**: `status=hot` AND `client.contactGate=true` AND `booking.zip` present AND `booking.description` present
+- **share-ready**: `status=hot` AND `client.contactGate=true` AND `booking.zip` present AND `booking.trade` present. A missing `booking.description` is NOT a blocker — you synthesize the marketplace blurb from the client dossier at share time (Step 4 `share`).
 - **outreach-ready**: (`status=hot` OR `status=brewing`) AND `client.email` present AND `booking.startDate` present
 
 ## Step 3 -- Present
@@ -53,6 +53,7 @@ bookingId: <id>
 
 If a booking is OUTREACH ONLY because it lacks `zip` or `contactGate`, note it inline:
 `⚠ Cannot share: missing zip` or `⚠ Cannot share: no verified contact email`
+A missing `description` is NOT a share blocker and must NOT be flagged — it is synthesized from the dossier at share time.
 
 Order: soonest `startDate` first.
 
@@ -65,18 +66,19 @@ Ask once per Booking:
 ```
 
 - `share`: user does not want the gig; post to the Leedz marketplace.
-  If this booking is OUTREACH ONLY (fails share-ready gate), warn the user BEFORE calling: "This booking cannot be shared: <reason>. Choose outreach or skip." Do not call `share_booking` if the gate obviously fails.
-  Otherwise:
+  Only a MISSING `zip` or `contactGate` truly blocks a share — warn "cannot share: <reason>, choose outreach or skip" and don't call `share_booking`. A missing `description` does NOT block: you SYNTHESIZE the blurb.
+  Load the dossier (read-only): `precrime__find({ action:"clients", filters:{ id:<clientId> }, summary:false, limit:1 })`. From `dossier` + the booking facts, write `dtDraft` = 2–3 plain sentences selling THIS event as a caricatures gig (the crowd, the fit, why it's a strong booth draw). No emails, phones, or epoch numbers in it. If the booking already has a good `description`, reuse or sharpen it.
   ```
-  precrime__pipeline({ action: "share_booking", bookingId: <id>, mode: "draft" })
+  precrime__pipeline({ action: "share_booking", bookingId: <id>, mode: "draft", dtDraft: "<synthesized blurb>" })
   ```
-  Server derives timezone from Booking zip; do not pass `timezone`. Show `payload` and `humanReadable`. Ask `Post this leed?`; on explicit `yes`:
+  Server derives timezone from Booking zip; do not pass `timezone`. Show `payload` and `humanReadable`. Ask `Post this leed?`; on explicit `yes` (pass the SAME dtDraft):
   ```
-  precrime__pipeline({ action: "share_booking", bookingId: <id>, mode: "post" })
+  precrime__pipeline({ action: "share_booking", bookingId: <id>, mode: "post", dtDraft: "<same blurb>" })
   ```
   Quote the response. Do not write shared fields by hand.
 
-- `outreach`: user wants the gig; email the client. Use `skills/outreach-drafter.md` for outreach draft/send.
+- `outreach`: user wants the gig; email the client. Compose per `skills/outreach-drafter.md` style (real dossier facts, RATE, verbatim signature from `get_config`, NO em/en dashes). Show the draft; on the user's approval SEND via `gmail__gmail_send`.
+  You do NOT record the send. The gmail send tool marks the client sent and resets its bookings out of hot PROCEDURALLY — the action records itself, no save from you. (A client already at `draftStatus:"sent"` is a prior send: it should not be in your hot list at all; if you somehow see one, warn "already emailed" and skip.)
 
 - `skip`: PERMANENT dismissal. The user rejected this leed; it must never be presented as hot again. Call:
   ```
@@ -86,7 +88,9 @@ Ask once per Booking:
 
 Collect acted-on `bookingIds` and `clientIds`.
 
-Forbidden in this worker: `pipeline.save`, `pipeline.rescore`, `pipeline.judge_affected`, `pipeline.resolve_dates`, `pipeline.plan_tasks`, `tavily__tavily_extract`, scrape/enrich tools, external Leedz tools. (`dismiss_booking` is allowed -- it is the skip action.)
+- `enrich` / `drill` (user asks to enrich or drill leedz deeper): hand it to the background conductor — call `precrime__pipeline({ action:"plan_tasks", mode:"workflow" })` ONCE. That arms the Node conductor, which runs discovery / DRILL_DOWN / ENRICH_CLIENT in its own window while you keep presenting. Tell the user it's running in the background and to re-list hot leedz later to see the enrichment. Do NOT claim or run worker skills yourself, and do NOT block waiting on it. (You do NOT need this to SHARE — the share blurb is synthesized from the dossier at share time. Enrichment deepens the dossier; it is not a share prerequisite.)
+
+Forbidden in this worker: `pipeline.save`, `pipeline.rescore`, `pipeline.judge_affected`, `pipeline.resolve_dates`, `tavily__tavily_extract`, claiming or running worker task skills yourself, external Leedz tools. You never write bookings, scores, draftStatus, or status by hand — action side effects are procedural (the send marks sent; dismiss/share mark acted-on). Allowed: `dismiss_booking` (skip), `share_booking` with a synthesized `dtDraft` (share), `gmail__gmail_send` (outreach — the send records itself), and a SINGLE `plan_tasks({mode:"workflow"})` to hand enrichment to the conductor when the user asks.
 
 ## Step 5 -- Complete
 

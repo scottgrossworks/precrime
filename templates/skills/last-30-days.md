@@ -55,7 +55,7 @@ The candidate body is ALREADY fetched (no re-scrape). Map it:
 precrime__pipeline({ action:"save", judge:false,
   patch:{ company:"<organizer/author>", website:"<if any>", source:"<candidate url>", draftStatus:"brewing",
     clientNotes:"last-30-days: <topic>",
-    bookings:[{ trade:"<canonical from precrime__trades>", dateText:"<verbatim date text>",
+    bookings:[{ dateText:"<verbatim date text>",
       location:"<venue>", zip:"<if present>", title:"<event name>", sourceUrl:"<candidate url>" }],
     factlets:[{ content:"<snippet: event, date, venue, 'seeking vendors'>", source:"<candidate url>" }] }})
 ```

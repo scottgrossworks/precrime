@@ -96,11 +96,14 @@ echo  Pre-Crime (Hermes)
 echo  Database: data\%DBNAME%
 echo.
 
-:: Setup: install deps + generate Prisma client. Idempotent -- fast if already done.
-call setup.bat
-if errorlevel 1 (
+:: Build-artifact guard. npm install + prisma generate are DEPLOY steps (deploy.js runs
+:: them); the launcher only VERIFIES the tree is ready, it does not build. Missing client
+:: => deploy or unzip is incomplete; say how to finish and stop (no slow build at launch).
+if not exist "%~dp0server\node_modules\@prisma\client\index.js" (
   echo.
-  echo Setup failed. Fix the error above and try again.
+  echo  Prisma client missing -- deploy incomplete.
+  echo  Run:  setup.bat      ^(or re-run deploy.js on the build machine^)
+  echo.
   pause
   exit /b 1
 )

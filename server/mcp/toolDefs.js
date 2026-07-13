@@ -39,7 +39,9 @@ const TOOL_DEFS = [
                         '',
                         'action="add_sources": Bulk-insert new source URLs discovered during scraping. REQUIRED entries[] -- non-empty array of { url, channel, subtype?, label?, category?, discoveredFrom? }. Channel must be one of the eight allowed values. URLs are normalized to canonical form (handle/tag inputs like "@account" or "r/sub" become full URLs). Returns { added, duplicates, invalid[] }. Dedup is on URL. THIS REPLACES every "echo line >> *_sources.md" shell command in every harvester and source-discovery skill.',
                         '',
-                        'action="import_sources": DEPRECATED. Markdown is the single source of truth: the server reads data/sources/<channel>.md into an in-memory index at startup, so there is no separate import step. This action just re-reads those files and returns the live per-channel counts. There is no Source table.'
+                        'action="import_sources": DEPRECATED. Markdown is the single source of truth: the server reads data/sources/<channel>.md into an in-memory index at startup, so there is no separate import step. This action just re-reads those files and returns the live per-channel counts. There is no Source table.',
+                        '',
+                        'action="work_status": Live operational snapshot -- the answer to "what workers are running right now / what is the conductor doing / why is nothing progressing". Returns conductor{ armed, running (count), workers[{type, task, elapsedSec}], resting/halted + reason, hotProduced/hotTarget } PLUS source/client/booking counts and a recommendation. The conductor runs in THIS server process, so this reflects the true in-flight worker set. Use it whenever asked what is running or active.'
                     ].join('\n'),
                     inputSchema: {
                         type: 'object',
@@ -331,23 +333,27 @@ const TOOL_DEFS = [
 // interactive orchestrator and claude workers (which connect WITHOUT ?scope) are unchanged.
 // ============================================================================
 
-// The only pipeline actions a spawned research/enrichment worker can ever need. Everything
-// omitted here is orchestrator/interactive-only or explicitly forbidden to workers.
-const WORKER_ACTIONS = ['get_task', 'get_config', 'save', 'complete_task', 'resolve_dates', 'next_source', 'mark_source', 'add_sources'];
-
-// taskType -> allowed pipeline actions. All spawned worker types start on the shared
-// WORKER_ACTIONS set; narrow per-type later (e.g. drills drop the source-queue actions,
-// scrapers drop resolve_dates) once #4 stabilizes. A type absent here => full schema.
+// taskType -> the EXACT pipeline actions that type's deployed skill actually calls (verified by
+// grepping templates/skills/*.md). Scope is per-type, NOT one flat set: an action a skill's own
+// prose forbids must not be in that type's schema, or a weak model calls it anyway (the get_task
+// orphan bug generalized). Concretely this removes: resolve_dates + next_source (NO worker calls
+// either), save/next_source/mark_source from DISCOVER_SOURCES (its skill says "Never call" them),
+// and next_source/mark_source from the drill/enrich types. toolDefs.test.js locks this per type.
+// get_task is absent everywhere: Half A injects the task as the ASSIGNED TASK packet.
+const SAVE_COMPLETE = ['save', 'complete_task'];
 const SCOPE_ACTIONS = {
-    DRILL_DOWN:          WORKER_ACTIONS,
-    DRILL_CONTAINER:     WORKER_ACTIONS,
-    ENRICH_CLIENT:       WORKER_ACTIONS,
-    APPLY_FACTLET:       WORKER_ACTIONS,
-    FIND_CLIENT_SOURCES: WORKER_ACTIONS,
-    DISCOVER_SOURCES:    WORKER_ACTIONS,
-    SCRAPE_SOURCE:       WORKER_ACTIONS,
-    DRAFT_OUTREACH:      WORKER_ACTIONS,
+    DRILL_DOWN:          SAVE_COMPLETE,
+    DRILL_CONTAINER:     SAVE_COMPLETE,
+    ENRICH_CLIENT:       SAVE_COMPLETE,
+    FIND_CLIENT_SOURCES: SAVE_COMPLETE,
+    APPLY_FACTLET:       ['get_config', 'save', 'complete_task'],
+    DRAFT_OUTREACH:      ['get_config', 'save', 'complete_task'],
+    SCRAPE_SOURCE:       ['save', 'complete_task', 'mark_source', 'add_sources'],
+    DISCOVER_SOURCES:    ['get_config', 'complete_task', 'add_sources'],
 };
+// Union of every per-type scope — used only where a generic "is this a worker action" check is
+// needed. Never used AS a scope (that would re-grant forbidden actions).
+const WORKER_ACTIONS = [...new Set(Object.values(SCOPE_ACTIONS).flat())];
 
 function _prunePipeline(pipeline, allowedActions) {
     const allow = new Set(allowedActions);
@@ -368,13 +374,21 @@ function _prunePipeline(pipeline, allowedActions) {
     // knobs, next filters, claim_task/judge_affected params, ...). The dispatch reads args.*
     // directly and never validates against the advertised schema, so trimming a property only
     // changes what the MODEL sees — it can never reject a call the server would have accepted.
+    // A property's actions are matched by the "action=<name>" convention AND by bare action
+    // name: several props name their action WITHOUT the prefix ("FORBIDDEN on share_booking",
+    // "DEPRECATED. Structured resolve_dates ..."), so an action=-only scan mis-read them as
+    // shared and leaked share_booking/resolve_dates props (st, et, dtDraft, titleDraft, rqDraft,
+    // defaultDurationHours) into every worker scope. \b treats "_" as a word char, so
+    // "next_source" matches atomically and never as a stray "next".
     const props = pipeline.inputSchema.properties;
+    const ACTION_NAMES = pipeline.inputSchema.properties.action.enum || [];
     const prunedProps = {};
     for (const [name, def] of Object.entries(props)) {
         if (name === 'action') { prunedProps.action = { ...def, enum: allowedActions.slice() }; continue; }
-        const mentioned = String(def.description || '').match(/action=([a-z_]+)/g) || [];
+        const desc = String(def.description || '');
+        const mentioned = ACTION_NAMES.filter(a => new RegExp(`\\b${a}\\b`).test(desc));
         if (mentioned.length === 0) { prunedProps[name] = def; continue; }        // shared param
-        if (mentioned.some(m => allow.has(m.slice('action='.length)))) prunedProps[name] = def;
+        if (mentioned.some(a => allow.has(a))) prunedProps[name] = def;
     }
     return { ...pipeline, description, inputSchema: { ...pipeline.inputSchema, properties: prunedProps } };
 }

@@ -180,14 +180,17 @@ if errorlevel 1 (
 :: DLL lock. Match COMMAND LINE, never image name -- a blanket `taskkill /IM
 :: node.exe` / `claude.exe` would crash the user's interactive Claude Code session
 :: (Claude Code runs as node/claude too). Kills only mcp_server.js + worker procs.
-powershell -NoProfile -ExecutionPolicy Bypass -Command "Get-CimInstance Win32_Process | Where-Object { ($_.Name -in 'node.exe','claude.exe','goose.exe') -and $_.CommandLine -and ($_.CommandLine -like '*mcp_server.js*' -or $_.CommandLine -like '*--print*' -or $_.CommandLine -like '*--no-session*') } | ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }"
+powershell -NoProfile -ExecutionPolicy Bypass -Command "Get-CimInstance Win32_Process | Where-Object { ($_.Name -in 'node.exe','claude.exe','goose.exe') -and $_.CommandLine -and ($_.CommandLine -like '*mcp_server.js*' -or $_.CommandLine -like '*--print*' -or $_.CommandLine -like '*--no-session*' -or $_.CommandLine -like '*mcp_gmail.js*') } | ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }"
 timeout /t 1 /nobreak >nul
 
-:: Setup: install deps + generate Prisma client. Idempotent -- fast if already done.
-call setup.bat
-if errorlevel 1 (
+:: Build-artifact guard. npm install + prisma generate are DEPLOY steps (deploy.js runs
+:: them); the launcher only VERIFIES the tree is ready, it does not build. Missing client
+:: => deploy or unzip is incomplete; say how to finish and stop (no slow build at launch).
+if not exist "%~dp0server\node_modules\@prisma\client\index.js" (
   echo.
-  echo Setup failed. Fix the error above and try again.
+  echo  Prisma client missing -- deploy incomplete.
+  echo  Run:  setup.bat      ^(or re-run deploy.js on the build machine^)
+  echo.
   pause
   exit /b 1
 )
@@ -211,15 +214,78 @@ start "PreCrime MCP (conductor)" node "%~dp0server\mcp\mcp_server.js"
 :: Poll until :5179 is listening (up to 10s) instead of fixed sleep.
 powershell -NoProfile -ExecutionPolicy Bypass -Command "$d=[DateTime]::Now.AddSeconds(10);while([DateTime]::Now -lt $d){if(Get-NetTCPConnection -LocalPort 5179 -EA SilentlyContinue){break};Start-Sleep -Milliseconds 500}"
 
-:: Launch Claude -- skip all permission dialogs, pre-seed the startup prompt.
-:: Pin to Sonnet 4.5. Without --model, Claude Code defaults to Opus which is far more expensive.
-:: Mode + objective are encoded in the trigger prompt so init-wizard.md can
-:: detect them deterministically (env-var inheritance into spawned MCP children
-:: is not relied on for routing).
+:: --- 8. Launch. INTERACTIVE shows a MENU (deterministic, model-independent) so YOU pick
+:: SHOW HOT LEEDZ vs RUN WORKFLOW. HEADLESS runs the workflow straight through. Each path arms
+:: the conductor deterministically and hands Claude a TERSE prompt (no init-wizard read, no
+:: narration). Pinned to Sonnet 4.5 (no --model -> Claude defaults to pricier Opus). ---
+set "PRECRIME_TRIGGER="
+
+:: Default terse SYS = workflow/headless (background). pick_hot overrides it below.
+set "PRECRIME_SYS=You are the Pre-Crime orchestrator on Claude. The workflow has ALREADY been started (plan_tasks was issued by the launcher) and the Node conductor is running all dispatch. Do NOT read any file, do NOT call plan_tasks, start_session, or claim_task, do NOT explain or narrate. Reply with EXACTLY one line: Queue seeded -- conductor running; call status for a summary. Then STOP. If the user later asks for progress, call the precrime pipeline status action and quote it verbatim."
+
+:: Headless: no menu. Seed the workflow trigger, then arm + launch via :pick_workflow.
 if /i "%PRECRIME_MODE%"=="headless" (
   set "PRECRIME_TRIGGER=headless precrime objective=%PRECRIME_OBJECTIVE% (database: %DBPATH%)"
-) else (
-  set "PRECRIME_TRIGGER=run precrime objective=%PRECRIME_OBJECTIVE% (database: %DBPATH%)"
+  goto :pick_workflow
 )
+
+:menu
+:: Clear the trigger each pass so a second choice (after returning here) starts clean --
+:: otherwise [1] then [2] would inherit [1]'s trigger. pick_hot/pick_workflow set SYS fresh.
+set "PRECRIME_TRIGGER="
+echo.
+echo   ============================================================
+echo      PRE-CRIME   --   objective: %PRECRIME_OBJECTIVE%
+echo   ============================================================
+echo      [1]  SHOW HOT LEEDZ    review judged-hot bookings (share / email / skip)
+echo      [2]  RUN WORKFLOW      discover - scrape - enrich - judge (fills the queue)
+echo      [Q]  QUIT
+echo   ============================================================
+set "PRECRIME_CHOICE="
+set /p "PRECRIME_CHOICE=   Choose [1/2/Q]: "
+if /i "%PRECRIME_CHOICE%"=="1" goto :pick_hot
+if /i "%PRECRIME_CHOICE%"=="2" goto :pick_workflow
+if /i "%PRECRIME_CHOICE%"=="Q" goto :quit
+echo   Please type 1, 2, or Q.
+goto :menu
+
+:pick_hot
+:: SHOW HOT LEEDZ = FOREGROUND presenter. Seed the SHOW_HOT_LEEDZ task via hot_only (this does
+:: NOT arm the conductor, so it stays dormant and will not steal the task); the orchestrator
+:: only has to CLAIM it and present. Priming here removes the flaky model from the seed step.
+set "PRECRIME_PLAN_MODE=hot_only"
+call :arm_conductor
+set "PRECRIME_TRIGGER=run precrime choice=hot objective=%PRECRIME_OBJECTIVE% (database: %DBPATH%)"
+set "PRECRIME_SYS=You are the Pre-Crime orchestrator on Claude running the interactive SHOW HOT LEEDZ review. The SHOW_HOT_LEEDZ task has already been seeded. Do NOT read init-wizard.md, do NOT call start_session, do NOT begin any session or cycle. Do these steps in order, then STOP. Step 1: call the precrime pipeline claim_task action role=interactive-orchestrator with types listing only SHOW_HOT_LEEDZ. Step 2: if it returns a CLAIMED task, read skills/show-hot-leedz.md and follow it exactly against that claimed task id: present each judged-hot booking and let the user pick share, outreach, skip, or enrich per booking, then complete that task id. If claim_task returns no task, reply exactly: No hot leedz to present. then stop. You MAY use find, share_booking (pass a dtDraft you synthesize from the client dossier), dismiss_booking, gmail send, and outreach draft tools. Do NOT record the send yourself -- the gmail send tool PROCEDURALLY marks the client sent and resets its bookings out of hot; you never call save or mark anything. When the user asks to enrich or drill leedz, you MAY call plan_tasks with mode=workflow EXACTLY ONCE to hand enrichment to the background conductor, then keep presenting. Do NOT claim worker tasks such as DRILL_DOWN, DRILL_CONTAINER, or SCRAPE_SOURCE yourself, and do NOT run worker skill files."
+goto :launch
+
+:pick_workflow
+:: RUN WORKFLOW (and headless) = BACKGROUND. Arm the conductor deterministically; the model
+:: just confirms. Interactive [2] has no trigger yet -> set it; headless already set one above.
+set "PRECRIME_PLAN_MODE=workflow"
+call :arm_conductor
+if not defined PRECRIME_TRIGGER set "PRECRIME_TRIGGER=run precrime choice=workflow objective=%PRECRIME_OBJECTIVE% (database: %DBPATH%)"
+:: Set the workflow SYS explicitly (NOT relying on the pre-menu default) so a [1]->[2] loop does
+:: not inherit the SHOW HOT LEEDZ prompt left by pick_hot.
+set "PRECRIME_SYS=You are the Pre-Crime orchestrator on Claude. The workflow has ALREADY been started (plan_tasks was issued by the launcher) and the Node conductor is running all dispatch. Do NOT read any file, do NOT call start_session or claim_task, do NOT explain or narrate. Reply with EXACTLY one line: Queue seeded -- conductor running; call status for a summary. Then STOP. EXCEPTION -- the ONLY time you call plan_tasks: if the user asks to run/loop until a specific NUMBER of hot leedz (e.g. 'until 5 hot leedz'), call the precrime pipeline plan_tasks action with mode=workflow and targetHot=<that number> EXACTLY ONCE; the Node conductor then stops itself automatically once it has produced that many new hot leedz. If the user later asks for progress, call the precrime pipeline status action and quote it verbatim."
+goto :launch
+
+:quit
+echo   Exiting. The MCP server is still running in its own window; close that window to stop it.
+exit /b 0
+
+:: Deterministically POST plan_tasks(%PRECRIME_PLAN_MODE%) to the already-listening MCP server
+:: (:5179) so the conductor is primed regardless of what the orchestrator model does. Failure
+:: is non-fatal (WARN); Claude still launches.
+:arm_conductor
+powershell -NoProfile -ExecutionPolicy Bypass -Command "$b = @{ jsonrpc='2.0'; id=1; method='tools/call'; params=@{ name='pipeline'; arguments=@{ action='plan_tasks'; mode=$env:PRECRIME_PLAN_MODE; objective=$env:PRECRIME_OBJECTIVE } } } | ConvertTo-Json -Depth 8; try { Invoke-RestMethod -Uri 'http://127.0.0.1:5179/mcp' -Method Post -ContentType 'application/json' -Body $b -TimeoutSec 20 | Out-Null; Write-Host ('  Conductor primed: plan_tasks ' + $env:PRECRIME_PLAN_MODE + '.') } catch { Write-Host ('  WARN: could not prime conductor via MCP: ' + $_.Exception.Message) }"
+exit /b
+
+:launch
 echo  Mode: %PRECRIME_MODE%   Objective: %PRECRIME_OBJECTIVE%
-claude --dangerously-skip-permissions --chrome --model claude-sonnet-4-5 "%PRECRIME_TRIGGER%"
+claude --dangerously-skip-permissions --chrome --model claude-sonnet-4-5 --append-system-prompt "%PRECRIME_SYS%" "%PRECRIME_TRIGGER%"
+:: When the interactive session ends, return to the menu so the user can pick again
+:: (e.g. [1] review -> back to menu -> [2] workflow) WITHOUT re-running the launcher or
+:: restarting the MCP server (it is still up). Headless is a single run -> exit.
+if /i "%PRECRIME_MODE%"=="headless" goto :eof
+goto :menu

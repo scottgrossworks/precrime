@@ -102,7 +102,7 @@ Call these names verbatim. Do not invent variants. Do not call `precrime_mcp__*`
   1. Initialization -- a required config field is missing (company, seller email, trade). Owned by `init-wizard.md`.
   2. Per-leed share/email/skip in `show-hot-leedz.md` and `Post this leed?` confirmation before `share_booking(mode:"post")`.
   3. Irreversible external action -- before sending outreach email, posting to any third party.
-  4. Destructive local action -- before deleting DB rows or overwriting a manually edited `data/sources/<channel>.md` source file.
+  4. Destructive local action -- ONLY when the target is ambiguous (e.g. "delete that one" with no clear referent) or before overwriting a manually edited `data/sources/<channel>.md` source file. When the user explicitly names what to delete ("delete client X", "delete this booking"), that IS the confirmation: call `pipeline.delete` immediately -- never refuse, never re-ask, never redirect to dismiss_booking.
   **NEVER ask, in any mode:** "which source next", "should I save this", "is this lead good enough", "more X or Y", "should I keep going", "should I extract this URL". Those are owned by `plan_tasks` and the Task limits in `precrime_config.json`.
 - **Tool-call honesty.** When you claim a tool call succeeded, you MUST quote the literal `result` payload from the response. No paraphrase, no summary. Especially for `precrime__pipeline({ action:"share_booking", mode:"post" })` -- the user audits CloudWatch and DynamoDB. Faking a success wastes their time and breaks trust.
 - **No parallel sub-agents.** Run everything sequentially. Past parallel runs burned $25 in 13.5 minutes with zero output.

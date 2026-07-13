@@ -11,9 +11,8 @@ triggers:
 
 Process ONE already-claimed ENRICH_CLIENT task. It names one Client and carries one
 pre-fetched source summary (`input.url` + `input.summary`, from find-client-sources).
-Fold that summary into the dossier — nothing else. Never search, scrape, pick URLs,
-create clients/bookings, or call `claim_task`, `plan_tasks`, `next`, `rescore`,
-`judge_affected`, or Tavily.
+Fold that summary into the dossier — nothing else. Never search, scrape, pick URLs, or
+create clients/bookings. Only the tools advertised to you exist.
 
 ## Step 0 — Load task
 - `taskId = env.PRECRIME_TASK_ID`. Missing → complete `failed` `missing_task_id`, stop.

@@ -81,6 +81,10 @@ function parse(md) {
         audienceSegments: _bullets(who['Audience Segments']),
         notBuyer:         _bullets(who['Who Is Not A Buyer']),
         relevanceSignals: _bullets((sec['RELEVANCE SIGNALS'] || {}).intro),
+        // The '### Not Relevant Signals' sub-section — the fit-gate's negative criteria.
+        // Parsed so workers (drill-container fit gate) get it from the packet instead of
+        // shell-reading all of VALUE_PROP.md (a whole worker turn, re-billed every turn).
+        notRelevantSignals: _bullets(((sec['RELEVANCE SIGNALS'] || { sub: {} }).sub || {})['Not Relevant Signals']),
         forbiddenPhrases: _bullets((sec['FORBIDDEN PHRASES'] || {}).intro),
         signature:        _joinNonEmpty(outreach['Signature']),
         sampleEmail:      _joinNonEmpty(outreach['Sample Email'])

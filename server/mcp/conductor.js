@@ -27,7 +27,19 @@ function sleep(ms) { return new Promise(r => setTimeout(r, ms)); }
 // gmail (send) is never needed by a spawned worker; rss only by scraping; tavily only
 // by research types. Orchestrator-agnostic: goose.bat sets the flag; claude workers
 // (precrime.bat) leave it unset and keep their own tool scoping.
-const EXT_SCOPE = !!process.env.PRECRIME_GOOSE_EXT_SCOPE;
+// Robust truthiness: an unset var OR the strings "0"/"false"/"" all mean OFF. (CMD `set "X="`
+// unsets it; but a future `set "X=0"` would otherwise read as ON because !!"0" is true in JS.)
+const _extScopeRaw = (process.env.PRECRIME_GOOSE_EXT_SCOPE || '').trim().toLowerCase();
+const EXT_SCOPE = _extScopeRaw !== '' && _extScopeRaw !== '0' && _extScopeRaw !== 'false';
+
+// In-process types whose handler is HEAVY and long-running (LAST_30_DAYS spawns a
+// multi-minute Python CLI). These must NOT be awaited inline in the dispatch loop —
+// doing so suspends the loop for the whole run and starves the ready worker queue
+// (observed: 13 workers stuck ready while one last30days ran). They are launched as
+// tracked background jobs instead (counted against maxWorkers via `active`). Cheap
+// in-process types (JUDGE_AFFECTED, SHOW_HOT_LEEDZ) still run inline because JUDGE
+// gates the planner and both finish in well under a second.
+const INPROC_BACKGROUND = new Set(['LAST_30_DAYS']);
 
 // Injected at the END of EVERY spawned worker's instructions (one place -> system-wide).
 // A worker is an automated tool-caller, not a chat assistant. Every token the model EMITS
@@ -77,6 +89,72 @@ function gooseExtArgs(taskType) {
     }
 }
 
+// ---------------------------------------------------------------------------
+// RECIPE-based scoped worker (replaces the broken --no-profile ad-hoc path).
+//
+// goose derives an ad-hoc extension's NAME from its URL/command (precrime ->
+// "localhost_5179_mcp", tavily -> "python"), so skills calling precrime__/tavily__
+// hit "tool not found" and orphaned. A goose RECIPE declares each extension's name
+// EXPLICITLY, so names match the skills AND we keep the per-type extension trim AND
+// the ?scope=<type> pipeline-schema pruning. gooseExtArgs above is SUPERSEDED by this
+// (kept for reference; no longer called). Validate output with `goose recipe validate`.
+// ---------------------------------------------------------------------------
+const _fwd = p => p.replace(/\\/g, '/');                 // YAML: backslash starts an escape
+const _TAVILY_ARG = _fwd(path.join(PRECRIME_ROOT, 'tools', 'tavily_lean_mcp.py'));
+const _RSS_ARG    = _fwd(path.join(PRECRIME_ROOT, 'rss', 'rss-scorer-mcp', 'index.js'));
+
+// The per-type extension SET, emitted as recipe YAML lines (2-space list indent).
+function recipeExtLines(taskType) {
+    const precrime = [
+        '  - type: streamable_http', '    name: precrime',
+        `    uri: "http://127.0.0.1:5179/mcp?scope=${taskType}"`, '    timeout: 60',
+    ];
+    const developer = ['  - type: builtin', '    name: developer'];
+    const tavily = [
+        '  - type: stdio', '    name: tavily', '    cmd: python',
+        `    args: ["${_TAVILY_ARG}"]`, '    timeout: 60',
+    ];
+    const rss = [
+        '  - type: stdio', '    name: precrime-rss', '    cmd: node',
+        `    args: ["${_RSS_ARG}"]`, '    timeout: 30',
+    ];
+    const base = [...precrime, ...developer];
+    switch (taskType) {
+        case 'SCRAPE_SOURCE':       return [...base, ...tavily, ...rss];
+        case 'DRILL_DOWN':
+        case 'DRILL_CONTAINER':
+        case 'ENRICH_CLIENT':
+        case 'FIND_CLIENT_SOURCES':
+        case 'DISCOVER_SOURCES':    return [...base, ...tavily];
+        case 'LAST_30_DAYS':
+        case 'APPLY_FACTLET':
+        case 'DRAFT_OUTREACH':      return base;
+        default:                    return [...base, ...tavily];
+    }
+}
+
+// Build a full recipe: named+scoped extensions + the skill (with injected packet) as the
+// instructions block scalar. Block scalar (|) needs every line indented; content needs no
+// YAML escaping. `prompt` auto-starts the run.
+function buildWorkerRecipe(taskType, instructions) {
+    // goose recipes treat {{name}} as template PARAMETERS. Deployed skills are rendered
+    // ({{...}}-free), but neutralize any residual "{{" defensively -- a rendering miss then
+    // degrades to slightly-off text instead of failing recipe validation and orphaning the worker.
+    const safe = String(instructions).replace(/\{\{/g, '{ {');
+    const indented = safe.split('\n').map(l => '    ' + l).join('\n');
+    return [
+        'version: "1.0.0"',
+        `title: "PRECRIME ${taskType} worker"`,
+        'description: "Scoped one-shot PRECRIME worker (named + pruned extensions)."',
+        'prompt: "Begin the assigned task now. Follow the instructions exactly, then stop."',
+        'extensions:',
+        ...recipeExtLines(taskType),
+        'instructions: |',
+        indented,
+        '',
+    ].join('\n');
+}
+
 // Short human-readable subject for a task, for log lines. Unique ids tell you
 // nothing; this says WHAT a task is working on -- the target record and, for
 // drill-downs, which fields it is chasing. Pure string-building, no DB hit.
@@ -113,10 +191,26 @@ function taskDesc(task) {
 // This is what stops the scheduler from burning tokens the moment goose/claude
 // boots, before the user has chosen to run anything.
 let armed = false;
-function armConductor() {
+// Target-hot condition (the deterministic "loop until N new hot leedz" supervisor). When a
+// workflow is armed with targetHot > 0, the conductor counts how many bookings the in-process
+// JUDGE_AFFECTED promotes to 'hot', and STOPS self-feeding once that count reaches the target.
+// The check is a plain integer compare in Node — zero LLM tokens, no supervisory model loop.
+let hotTarget = 0;
+let hotProduced = 0;
+// Live status reporter for work_status. Reassigned inside startConductor (where it can see the
+// loop's active map + rest/halt scalars). conductorStatus() reads it. The conductor runs IN the
+// MCP server process, so the orchestrator just calls precrime__pipeline({action:"work_status"})
+// -- no stdin/IPC. Default (before start) says so.
+let _reportStatus = () => ({ started: false, note: 'conductor not started' });
+function conductorStatus() { return _reportStatus(); }
+function armConductor(opts) {
+    // A targeted (re)arm sets the goal and resets the counter for a fresh run. Passing no
+    // target (the plain launcher arm) leaves any existing target untouched.
+    const t = opts && opts.targetHot != null ? parseInt(opts.targetHot, 10) : 0;
+    if (Number.isFinite(t) && t > 0) { hotTarget = t; hotProduced = 0; }
     if (armed) return;
     armed = true;
-    console.error('[conductor] ARMED — workflow selected; conductor now claiming & dispatching tasks');
+    console.error(`[conductor] ARMED${hotTarget ? ` — goal: ${hotTarget} new hot leed(s)` : ''} — claiming & dispatching tasks`);
 }
 function isArmed() { return armed; }
 
@@ -152,6 +246,11 @@ async function conductorLoop(cfg, hooks) {
         : 'workerInstructionsFlag' in w                   ? w.workerInstructionsFlag
         : 'gooseInstructionsFlag'  in w                   ? w.gooseInstructionsFlag
         :                                                   '--instructions';
+    // Optional per-worker session-name flag (goose: --name). goose.bat sets it so each worker's
+    // goose session is named precrime-<TYPE>-<taskId> -- giving deterministic token/cost
+    // attribution per task type in goose's sessions.db (read by token-report.js). Unset for
+    // claude workers (no session-name concept), so the naming is skipped there.
+    const workerNameFlag   = process.env.PRECRIME_WORKER_NAME_FLAG || '';
     const skillsRoot       = w.skillsRoot
         ? path.resolve(PRECRIME_ROOT, w.skillsRoot)
         : path.resolve(PRECRIME_ROOT, 'skills');
@@ -190,19 +289,50 @@ async function conductorLoop(cfg, hooks) {
     // startup race where both create a planning session simultaneously.
     let lastReplanAt = Date.now();
 
-    // ---- Circuit breakers (stop a runaway loop from burning credits) ----
-    // haltReason, once set, freezes the conductor: no in-process LLM, no worker spawn, no
-    // replan. In-flight workers finish; then it idles until the process is restarted. Trips on
-    // (a) OpenRouter credit exhaustion (403 "key limit exceeded"), (b) a session closing on
-    // budget_exhausted (stop churning new sessions), (c) a per-run worker/time ceiling.
+    // ---- Pacing + circuit breaker (unattended-safe: pace spend, do NOT die) ----
+    // Two mechanisms, deliberately different:
+    //   haltReason (TRUE halt): ONLY real credit/quota exhaustion (provider 403 "key limit
+    //     exceeded"). Money is actually gone — no amount of looping makes leedz and a human
+    //     must top up — so freeze and surface it. This is the ONLY permanent stop left.
+    //   restReason (SOFT pacing rest): hitting a normal work ceiling (workers-per-window,
+    //     run-time-per-window, or a session's creation budget) is NOT fatal. The loop RESTS
+    //     for restMs, resets its per-window counters, and RESUMES on its own — so an overnight
+    //     run paces its spend across work/rest cycles instead of halting and waiting for a
+    //     human to restart it. In-flight workers always finish first (event-driven cleanup).
     let haltReason = null;
     let haltLogged = false;
-    let workersSpawned = 0;
-    let firstSpawnAt = 0;
+    let restReason = null;      // set while paused for a pacing rest; cleared on resume
+    let restUntil = 0;          // epoch ms the current rest ends
+    let restLogged = false;
+    let workersSpawned = 0;     // per-window worker count (reset after each rest)
+
+    // Expose live conductor state for work_status. Reads current values on every call, so it
+    // always reflects the live `active` map + rest/halt/armed state -- this IS the answer to
+    // "what workers are running right now / why is nothing progressing".
+    _reportStatus = () => ({
+        started: true,
+        armed,
+        running: active.size,
+        workers: [...active.entries()].map(([taskId, w]) => ({
+            taskId, type: w.type || null, task: w.desc || null,
+            elapsedSec: w.startedAt ? Math.round((Date.now() - w.startedAt) / 1000) : null,
+        })),
+        resting: !!restReason && Date.now() < restUntil,
+        restReason: restReason || null,
+        restRemainingSec: (restReason && restUntil > Date.now()) ? Math.round((restUntil - Date.now()) / 1000) : 0,
+        halted: !!haltReason,
+        haltReason: haltReason || null,
+        hotProduced, hotTarget,
+    });
+    let firstSpawnAt = 0;       // start of the current work window (reset after each rest)
     const maxWorkersPerRun = Number.isFinite(w.maxWorkersPerRun) ? w.maxWorkersPerRun : 150;
     const maxRunMs = Number.isFinite(w.maxRunMs) ? w.maxRunMs : 15 * 60 * 1000;
-    // LLM provider says credits/quota are gone -> every worker will 403; stop immediately.
-    const CREDIT_EXHAUSTED_RE = /key limit exceeded|insufficient.*credit|quota.*exceeded|billing.*(hard|limit)/i;
+    const restMs = Number.isFinite(w.restMs) ? w.restMs : 20 * 60 * 1000;  // breather between work windows
+    // LLM provider says credits/quota are gone -> every worker will 403; this one is a TRUE halt.
+    // Match ONLY genuine LLM-provider credit/quota exhaustion. The bare "quota exceeded" was too
+    // broad -- a Tavily/RSS "API quota exceeded" line tripped this and PERMANENTLY halted the whole
+    // pipeline on an unrelated third-party error. Now "quota" only matches with a provider name.
+    const CREDIT_EXHAUSTED_RE = /key limit exceeded|insufficient.*credits?|billing.*(hard|limit)|(openrouter|anthropic|openai|x-ai|deepseek|gemini|google)\b.*(quota|credit|rate limit|billing)/i;
 
     console.error(`[conductor] ready — pollMs=${pollMs} maxWorkers=${maxWorkers} hungKillMs=${hungWorkerKillMs}`);
     // GUARD: log the resolved worker config so the active orchestrator is never ambiguous.
@@ -228,6 +358,24 @@ async function conductorLoop(cfg, hooks) {
             continue;
         }
 
+        // Soft pacing rest: a work ceiling was hit. Wait out the breather (in-flight workers
+        // finish and self-complete over HTTP — their cleanup is event-driven, not loop-driven),
+        // then reset the per-window counters and resume. No restart, no babysitting.
+        if (restReason) {
+            if (Date.now() < restUntil) {
+                if (!restLogged) {
+                    console.error(`[conductor] RESTING ${Math.round((restUntil - Date.now()) / 60000)}min — ${restReason}. ${active.size} in-flight will finish; loop resumes automatically.`);
+                    restLogged = true;
+                }
+                await sleep(pollMs);
+                continue;
+            }
+            console.error(`[conductor] resuming after rest — ${restReason} cleared; fresh work window.`);
+            restReason = null; restUntil = 0; restLogged = false;
+            workersSpawned = 0; firstSpawnAt = 0;
+            lastReplanAt = 0;   // let the next pass replan immediately to refill the queue
+        }
+
         // Execute in-process tasks FIRST (JUDGE_AFFECTED → promotes bookings to hot;
         // SHOW_HOT_LEEDZ → marks them ready). These GATE the planner: a pending judge
         // or hot action suppresses APPLY_FACTLET / enrichment / discovery, so they
@@ -242,8 +390,54 @@ async function conductorLoop(cfg, hooks) {
                 console.error('[conductor] in-process poll error:', e.message);
             }
             for (const t of inproc) {
+                // Serialize heavy background in-process types: LAST_30_DAYS workers collide on a
+                // shared file if run concurrently ("being used by another process" -> exit 1).
+                // The old inline-await path serialized them for free; the background path does
+                // not, so enforce one-at-a-time here. Leave extras READY (do NOT claim) for a
+                // later poll once the running one settles.
+                if (INPROC_BACKGROUND.has(t.type)) {
+                    let activeOfType = 0;
+                    for (const v of active.values()) if (v.inproc && v.type === t.type) activeOfType++;
+                    if (activeOfType >= 1) continue;
+                }
                 const workerId = `conductor-inproc-${process.pid}-${t.id.slice(-6)}`;
                 if (!(await conductorClaimTask(t.id, workerId))) continue;
+
+                // HEAVY in-process job (e.g. LAST_30_DAYS' multi-minute Python CLI): run it
+                // as a tracked BACKGROUND job so the dispatch loop keeps spawning the ready
+                // worker queue instead of suspending here for the whole run. It occupies a
+                // slot (active) so we don't oversubscribe maxWorkers, and self-completes on
+                // resolution. A safety timer (below) frees the slot if the Python child hangs,
+                // since there is no process handle to SIGTERM. LAST_30_DAYS does not change
+                // planner gating state, so it needs none of the JUDGE stateChanged handling.
+                if (INPROC_BACKGROUND.has(t.type)) {
+                    // Safety kill: a background in-process job (last30days spawns a Python CLI that
+                    // can hang on Reddit 403 / --deep — observed stuck 7.5+ min) has no process
+                    // handle here, so without a timer it would hold its worker slot forever. At
+                    // hungWorkerKillMs, fail it and free the slot; the `settled` guard makes the
+                    // timer and the promise mutually exclusive so neither double-frees.
+                    let settled = false;
+                    const bgKill = setTimeout(async () => {
+                        if (settled) return;
+                        settled = true;
+                        console.error(`[conductor] hung in-process job killed — ${t.type}: ${taskDesc(t)} (>${Math.round(hungWorkerKillMs / 1000)}s)`);
+                        try { await conductorFailTask(t.id, 'hung_inproc_timeout'); } catch (_) {}
+                        active.delete(t.id);
+                    }, hungWorkerKillMs);
+                    active.set(t.id, { proc: null, killTimer: bgKill, type: t.type, desc: taskDesc(t), startedAt: Date.now(), inproc: true });
+                    console.error(`[conductor] in-process started (background) — ${t.type}: ${taskDesc(t)}`);
+                    Promise.resolve()
+                        .then(() => runInProcess(t))
+                        .then(() => { if (!settled) console.error(`[conductor] in-process done — ${t.type}: ${taskDesc(t)}`); })
+                        .catch(async (e) => {
+                            if (settled) return;
+                            console.error(`[conductor] in-process error — task=${t.id} type=${t.type}: ${e.message}`);
+                            try { await conductorFailTask(t.id, `inproc_error: ${e.message}`); } catch (_) {}
+                        })
+                        .finally(() => { clearTimeout(bgKill); if (!settled) { settled = true; active.delete(t.id); } });
+                    continue;
+                }
+
                 try {
                     const r = (await runInProcess(t)) || {};
                     // JUDGE_AFFECTED can promote/demote bookings (changes the gating state the
@@ -252,13 +446,30 @@ async function conductorLoop(cfg, hooks) {
                     // state change caused a tight spin: replan -> SHOW_HOT_LEEDZ -> budget
                     // exhausted -> session closed -> replan ... with no cooldown breather,
                     // whenever any hot booking sat unacted (see the container backlog).
-                    if (t.type === 'JUDGE_AFFECTED') stateChanged = true;
+                    if (t.type === 'JUDGE_AFFECTED') {
+                        stateChanged = true;
+                        // Target-hot supervisor: JUDGE_AFFECTED is the ONLY thing that promotes a
+                        // booking to 'hot', so its ->hot transitions are exactly "new hot leedz".
+                        // Count them; when the goal is met, halt self-feed (in-flight finish).
+                        if (Number.isFinite(r.hotProduced) && r.hotProduced > 0) hotProduced += r.hotProduced;
+                        if (hotTarget > 0 && hotProduced >= hotTarget) {
+                            // GOAL reached = SUCCESS, not a fault. Go DORMANT (disarm) rather than
+                            // set haltReason (which is reserved for real credit exhaustion and needs
+                            // a process restart). A fresh RUN_WORKFLOW re-arms cleanly; in-flight
+                            // workers finish. Fixes the permanent-freeze bug: hitting the goal used
+                            // to freeze the conductor for the life of the process.
+                            console.error(`[conductor] GOAL REACHED — produced ${hotProduced} new hot leed(s) (goal ${hotTarget}); going dormant. RUN_WORKFLOW again to continue.`);
+                            armed = false;
+                            hotTarget = 0;
+                            hotProduced = 0;
+                        }
+                    }
                     // Prefer the handler's human-readable summary; fall back to the raw
                     // counters only if a handler doesn't supply one.
                     const detail = r.summary
                         || `${r.changed != null ? `changed=${r.changed}` : ''}${r.hotCount != null ? ` hot=${r.hotCount}` : ''}`.trim()
                         || taskDesc(t);
-                    console.error(`[conductor] in-process done — ${t.type}: ${detail}`);
+                    console.error(`[conductor] in-process done — ${t.type}: ${detail}${hotTarget ? ` [hot ${hotProduced}/${hotTarget}]` : ''}`);
                 } catch (e) {
                     console.error(`[conductor] in-process error — task=${t.id} type=${t.type}: ${e.message}`);
                     await conductorFailTask(t.id, `inproc_error: ${e.message}`);
@@ -320,9 +531,23 @@ async function conductorLoop(cfg, hooks) {
                     id: task.id, type: task.type, targetType: task.targetType,
                     targetId: task.targetId, sessionId: task.sessionId, input: _taskInput
                 };
-                // Append (do NOT prepend) so the skill's YAML frontmatter stays at the top
-                // for goose's --instructions parser. Packet + terse directive both ride the
-                // end of the instructions (recency position, strong for instruction-following).
+                // TOKEN DIET: strip the YAML frontmatter block (name/description/triggers) —
+                // it exists for skill DISCOVERY, not execution; the worker already has its
+                // assignment, and every char here is re-billed on every worker turn.
+                skillContent = skillContent.replace(/^---\r?\n[\s\S]*?\r?\n---\r?\n/, '');
+                // TOKEN DIET: for the VP-consuming worker types, inject the slim VALUE_PROP
+                // slice into the packet so the worker skips its get_config / read-VALUE_PROP
+                // turn entirely (a whole turn on the highest-count worker type).
+                if (task.type === 'APPLY_FACTLET' || task.type === 'DRILL_CONTAINER') {
+                    const vp = require('./runtime').VALUE_PROP || {};
+                    _packet.vp = {
+                        trade: vp.trade, geography: vp.geography, buyerRoles: vp.buyerRoles,
+                        audienceSegments: vp.audienceSegments, notBuyer: vp.notBuyer,
+                        relevanceSignals: vp.relevanceSignals, notRelevantSignals: vp.notRelevantSignals
+                    };
+                }
+                // Packet + terse directive ride the end of the instructions (recency
+                // position, strong for instruction-following).
                 skillContent = skillContent +
                     '\n\n## ASSIGNED TASK — do NOT call get_task; this IS your task packet\n' +
                     '```json\n' + JSON.stringify(_packet, null, 2) + '\n```' +
@@ -335,24 +560,31 @@ async function conductorLoop(cfg, hooks) {
                 // operator inside the batch file is interpreted by cmd.exe correctly —
                 // no quoting issues, no Node.js pipe race conditions.
                 let proc;
+                // goose scoped-worker mode (EXT_SCOPE on): spawn from a per-task RECIPE that names
+                // extensions correctly (precrime / tavily / precrime-rss) and carries ?scope=<type>
+                // for schema pruning. Claude / flag-off uses the plain --instructions path below.
+                const useRecipe = EXT_SCOPE;
+                const tmpRecipe = useRecipe ? path.join(os.tmpdir(), `precrime-${task.id}.yaml`) : null;
+                if (useRecipe) fs.writeFileSync(tmpRecipe, buildWorkerRecipe(task.type, skillContent), 'utf8');
                 if (process.platform === 'win32') {
                     const tmpMd  = path.join(os.tmpdir(), `precrime-${task.id}.md`);
                     const tmpBat = path.join(os.tmpdir(), `precrime-${task.id}.bat`);
-                    fs.writeFileSync(tmpMd, skillContent, 'utf8');
-                    // Pass the skill FILE PATH as the prompt, not the skill content.
-                    // Skill files exceed cmd.exe's 8191-char arg limit and contain
-                    // markdown special chars that break cmd.exe quoting. Passing the
-                    // path instead lets the worker read the file via its Read tool
-                    // (claude) or --instructions file path (goose Phase 2) and execute
-                    // from there. Stdin redirect is avoided entirely — this also
-                    // sidesteps the stdin-pipe/tool-call bug (GH #28010).
-                    const skillPrompt = workerInstFlag
-                        ? `${workerInstFlag} "${tmpMd}"`
-                        : `"Read the skill file at ${tmpMd} using the Read tool, then execute every instruction in it exactly. This is an automated PRECRIME worker task — use the precrime__pipeline MCP tools as the file directs. Do not ask for confirmation; proceed immediately."`;
-                    // Scope the worker to only the MCP extensions its task type needs
-                    // (goose only; see gooseExtArgs). Cuts the per-turn tool-schema tax.
-                    const extFlags = EXT_SCOPE ? ` --no-profile ${gooseExtArgs(task.type).join(' ')}` : '';
-                    const cmdLine = `${workerBin} ${workerBaseArgs.join(' ')}${extFlags} ${skillPrompt}`;
+                    // Deterministic session name -> per-type token/cost attribution in sessions.db.
+                    const nameFlags = workerNameFlag ? ` ${workerNameFlag} "precrime-${task.type}-${task.id}"` : '';
+                    let cmdLine;
+                    if (useRecipe) {
+                        // The recipe carries BOTH instructions and named/scoped extensions -> no --instructions.
+                        cmdLine = `${workerBin} ${workerBaseArgs.join(' ')} --recipe "${tmpRecipe}"${nameFlags}`;
+                    } else {
+                        // Pass the skill FILE PATH as the prompt, not the content: skill files exceed
+                        // cmd.exe's 8191-char arg limit and contain markdown that breaks cmd quoting.
+                        // goose reads it via --instructions; claude via its Read tool.
+                        fs.writeFileSync(tmpMd, skillContent, 'utf8');
+                        const skillPrompt = workerInstFlag
+                            ? `${workerInstFlag} "${tmpMd}"`
+                            : `"Read the skill file at ${tmpMd} using the Read tool, then execute every instruction in it exactly. This is an automated PRECRIME worker task — use the precrime__pipeline MCP tools as the file directs. Do not ask for confirmation; proceed immediately."`;
+                        cmdLine = `${workerBin} ${workerBaseArgs.join(' ')}${nameFlags} ${skillPrompt}`;
+                    }
                     fs.writeFileSync(tmpBat,
                         `@echo off\r\n${cmdLine}\r\nexit /b %errorlevel%\r\n`,
                         'utf8');
@@ -368,19 +600,27 @@ async function conductorLoop(cfg, hooks) {
                     const _clean = () => setTimeout(() => {
                         try { fs.unlinkSync(tmpMd);  } catch (_) {}
                         try { fs.unlinkSync(tmpBat); } catch (_) {}
+                        try { if (tmpRecipe) fs.unlinkSync(tmpRecipe); } catch (_) {}
                     }, 500);
                     proc.once('exit',  _clean);
                     proc.once('error', _clean);
                 } else {
-                    const argv = workerInstFlag
-                        ? [...workerBaseArgs, workerInstFlag, skillContent]
-                        : [...workerBaseArgs, skillContent];
-                    // GUARD: log argv (skill body elided) so the active flag is visible.
-                    console.error(`[conductor] spawn → task=${task.id} cmd=${workerBin} ${argv.slice(0, -1).join(' ')} <skill>`);
+                    const nameArgv = workerNameFlag ? [workerNameFlag, `precrime-${task.type}-${task.id}`] : [];
+                    const argv = useRecipe
+                        ? [...workerBaseArgs, '--recipe', tmpRecipe, ...nameArgv]
+                        : (workerInstFlag
+                            ? [...workerBaseArgs, ...nameArgv, workerInstFlag, skillContent]
+                            : [...workerBaseArgs, ...nameArgv, skillContent]);
+                    // GUARD: log argv (skill body elided unless recipe) so the active flag is visible.
+                    console.error(`[conductor] spawn → task=${task.id} cmd=${workerBin} ${argv.slice(0, useRecipe ? argv.length : -1).join(' ')}${useRecipe ? '' : ' <skill>'}`);
                     proc = spawn(workerBin, argv, {
                         env:   { ...process.env, PRECRIME_TASK_ID: task.id },
                         stdio: ['ignore', 'pipe', 'pipe']
                     });
+                    if (tmpRecipe) {
+                        const _rm = () => setTimeout(() => { try { fs.unlinkSync(tmpRecipe); } catch (_) {} }, 500);
+                        proc.once('exit', _rm); proc.once('error', _rm);
+                    }
                 }
 
                 const killTimer = setTimeout(async () => {
@@ -438,17 +678,20 @@ async function conductorLoop(cfg, hooks) {
                     active.delete(task.id);
                 });
 
-                active.set(task.id, { proc, killTimer });
+                active.set(task.id, { proc, killTimer, type: task.type, desc: taskDesc(task), startedAt: Date.now() });
                 console.error(`[conductor] spawned — ${task.type}: ${taskDesc(task)}`);
 
-                // Per-run backstop: cap total workers and wall-clock so no loop can run away
-                // unattended. Trips the breaker after the current batch; in-flight finish.
+                // Per-WINDOW backstop: cap workers and wall-clock per work window, then REST
+                // (not halt) so an unattended run paces its spend and resumes on its own after
+                // the breather. Trips after the current batch; in-flight workers finish.
                 workersSpawned++;
                 if (!firstSpawnAt) firstSpawnAt = Date.now();
-                if (!haltReason && workersSpawned >= maxWorkersPerRun) {
-                    haltReason = `worker ceiling reached (${workersSpawned} workers this run)`;
-                } else if (!haltReason && Date.now() - firstSpawnAt >= maxRunMs) {
-                    haltReason = `run-time ceiling reached (${Math.round((Date.now() - firstSpawnAt) / 60000)} min)`;
+                if (!restReason && workersSpawned >= maxWorkersPerRun) {
+                    restReason = `worker ceiling (${workersSpawned} this window)`;
+                    restUntil = Date.now() + restMs;
+                } else if (!restReason && Date.now() - firstSpawnAt >= maxRunMs) {
+                    restReason = `run-time ceiling (${Math.round((Date.now() - firstSpawnAt) / 60000)} min this window)`;
+                    restUntil = Date.now() + restMs;
                 }
 
                 if (spawnStaggerMs > 0 && tasks.indexOf(task) < tasks.length - 1) {
@@ -469,11 +712,16 @@ async function conductorLoop(cfg, hooks) {
                 try {
                     const r = (await replan()) || {};
                     console.error(`[conductor] replan — created=${r.createdTotal || 0} backlog=${r.backlogRemaining} strategy=${r.strategy}${r.sessionClosed ? ` sessionClosed(${r.closeReason})` : ''}`);
-                    // Budget exhausted = this session hit its creation cap. Do NOT immediately
-                    // open a fresh session and re-create the same work (the churn that burned
-                    // credits). Halt self-feed; the user restarts to run another session.
+                    // Budget exhausted = this session hit its creation cap (it WAS productive —
+                    // it created work right up to the limit). Don't die: take a pacing rest, then
+                    // the next replan opens a FRESH session with a fresh budget and we keep going.
+                    // The REST (rather than an immediate re-plan) is what prevents the old churn /
+                    // credit-burn — we pace, we don't stop. In-flight workers finish during the rest.
                     if (r.sessionClosed && /budget_exhausted/i.test(r.closeReason || '')) {
-                        haltReason = `session budget exhausted (${r.closeReason})`;
+                        if (!restReason) {
+                            restReason = `session budget reached (${r.closeReason})`;
+                            restUntil = Date.now() + restMs;
+                        }
                         continue;
                     }
                     if ((r.createdTotal || 0) > 0) continue; // dispatch new tasks now
@@ -495,4 +743,4 @@ function startConductor(cfg, hooks) {
     conductorLoop(cfg, hooks).catch(e => console.error('[conductor] fatal loop crash:', e));
 }
 
-module.exports = { startConductor, armConductor, isArmed };
+module.exports = { startConductor, armConductor, isArmed, buildWorkerRecipe, recipeExtLines, conductorStatus };

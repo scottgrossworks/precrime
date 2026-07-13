@@ -125,8 +125,8 @@ def handle_tools_list(req_id):
                     "name": "tavily_extract",
                     "description": (
                         "Extract content from a single URL via Tavily. Default mode='full' "
-                        "returns the cleaned full page content (markdown image syntax and link "
-                        "URLs stripped, structure preserved) plus candidates: obvious emails, "
+                        "returns cleaned page content, length-capped (markdown image syntax and "
+                        "link URLs stripped, structure preserved) plus candidates: obvious emails, "
                         "phones, outbound URLs, and heading/card-like lines. The candidates are "
                         "hints, not final classification; the LLM should emit strict clients / "
                         "factlets / sources JSON against VALUE_PROP. Use this for vendor lists, "
@@ -168,12 +168,17 @@ def handle_tools_call(req_id, params):
                 return err(req_id, -32602, "tavily_search requires 'query'")
             result = search_lean(
                 query=query,
-                max_results=int(args.get("max_results", 5)),
+                # Clamp: a worker asking for 10-20 hits multiplies the payload (re-billed on
+                # every later turn) without adding signal past the top 5. Depth stays
+                # caller-controllable (advanced is legitimate for hard queries).
+                max_results=min(5, max(1, int(args.get("max_results", 5)))),
                 include_answer=bool(args.get("include_answer", True)),
                 search_depth=str(args.get("search_depth", "basic")),
             )
             call_log("tavily_search", query, result.get("stats", {}))
-            return ok(req_id, {"content": [{"type": "text", "text": json.dumps(result, ensure_ascii=False, indent=2)}]})
+            # Compact JSON (no indent): pretty-printing pads every search result with
+            # whitespace the worker re-pays for on each subsequent turn.
+            return ok(req_id, {"content": [{"type": "text", "text": json.dumps(result, ensure_ascii=False, separators=(",", ":"))}]})
 
         if name == "tavily_extract":
             url = args.get("url")
@@ -185,7 +190,7 @@ def handle_tools_call(req_id, params):
                 mode=str(args.get("mode", "full")),
             )
             call_log("tavily_extract", url, result.get("stats", {}))
-            return ok(req_id, {"content": [{"type": "text", "text": json.dumps(result, ensure_ascii=False, indent=2)}]})
+            return ok(req_id, {"content": [{"type": "text", "text": json.dumps(result, ensure_ascii=False, separators=(",", ":"))}]})
 
         return err(req_id, -32601, f"Unknown tool: {name}")
 

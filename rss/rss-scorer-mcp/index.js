@@ -59,11 +59,30 @@ function loadFeedsFromSkill() {
 }
 CONFIG.feeds = loadFeedsFromSkill();
 
+// Approach A: scoring keywords are derived from VALUE_PROP.md at startup (the single source of
+// truth) -- NOT a hardcoded list in rss_config.json. Edit VALUE_PROP.md, restart the scorer, and
+// the keywords follow. Pulls the buying-occasion / audience / buyer terms straight from the doc.
+// Falls back to rss_config.json's keywords.global only if VALUE_PROP is missing or too sparse.
+function loadKeywordsFromValueProp() {
+  try {
+    const raw = readFileSync(join(__dirname, '../../DOCS/VALUE_PROP.md'), 'utf8');
+    const after = raw.split(/^###\s+Audience Segments\s*$/mi)[1] || '';
+    const block = after.split(/^#{1,6}\s/m)[0];               // stop at the next heading
+    return block.split(/\r?\n/)
+      .map(l => (l.match(/^\s*-\s+(.+?)\s*$/) || [])[1])       // bullet text only
+      .filter(Boolean)
+      .map(s => s.toLowerCase());                             // as-is, no mangling
+  } catch { return []; }
+}
+const vpKeywords = loadKeywordsFromValueProp();
+if (vpKeywords.length) CONFIG.keywords.global = vpKeywords;
+CONFIG._keywordSource = vpKeywords.length ? 'VALUE_PROP.md' : 'rss_config.json fallback';
+
 console.error('='.repeat(60));
 console.error('Pre-Crime RSS Scorer MCP Server');
 console.error('='.repeat(60));
 console.error(`Feeds loaded from data/sources/rss.md: ${CONFIG.feeds.length}`);
-console.error(`Global keywords: ${CONFIG.keywords.global.length}`);
+console.error(`Global keywords (${CONFIG._keywordSource}): ${CONFIG.keywords.global.length}`);
 console.error(`Relevance threshold: ${CONFIG.processing.relevanceThreshold} points`);
 console.error('='.repeat(60));
 

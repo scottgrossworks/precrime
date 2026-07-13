@@ -9,8 +9,8 @@ triggers:
 
 # url-loop — SCRAPE_SOURCE worker
 
-Process ONE already-claimed SCRAPE_SOURCE task, then stop. Never call `claim_task`,
-`plan_tasks`, `next_source`, `report_session`, `judge_affected`, or `rescore`.
+Process ONE already-claimed SCRAPE_SOURCE task, then stop. Only the tools advertised
+to you exist.
 
 ## Step 0 — Load task
 - `taskId = env.PRECRIME_TASK_ID`. Missing → complete `failed` `missing_task_id`, stop.
@@ -31,16 +31,17 @@ Process ONE already-claimed SCRAPE_SOURCE task, then stop. Never call `claim_tas
 From content, extract only VALUE_PROP-relevant:
 - Clients: business/person records (sparse company-only allowed). A vendor/planner/venue
   profile with no specific dated event is a CLIENT.
-- Factlets: reusable evidence (event date, buying occasion, venue/budget/market/demand signal) — see `skills/shared/factlet-rules.md`.
+- Factlets: reusable evidence (event date, buying occasion, venue/budget/market/demand signal).
+  Rules: exactly 2-3 sentences — what happened (numbers/dates/names), why it matters to the
+  target audience, optional urgency. Facts only, never mention the product, one factlet per
+  story, source = the live URL proving the claim.
 - **Bookings: a SPECIFIC UPCOMING DATED EVENT IS a booking — capture it.** If the page
   names a real event with a FUTURE date + location (a con, festival, fair, expo, gala,
   fundraiser, school/corporate event, party, "upcoming events" calendar entry, etc.),
-  create ONE Booking per dated event following `skills/shared/booking-detect.md`
-  (trade + `dateText` verbatim from the page + location/zip + `sourceUrl`; the server
-  resolves the date). Do NOT require a separate RFP/inquiry — the dated event is the
-  signal. A page listing many events (a con schedule, a festival calendar) yields many
-  bookings. Event calendars and individual profiles are equally valuable: don't skip
-  either.
+  create ONE Booking per dated event: `dateText` **verbatim** from the page (never invent
+  ISO dates — the server resolves it), `location`/`zip`, `sourceUrl` = the live page proving
+  the event. Do NOT set a trade (server stamps it). Do NOT require a separate RFP/inquiry —
+  the dated event is the signal. A page listing many events yields many bookings.
 - New Sources: URLs likely to reveal more clients/factlets.
 - Feeds: detect feed links (`rel="alternate"`, `/feed`, `/rss.xml`, `/atom.xml`, `?feed=`, anchor RSS/Subscribe/Atom) → save `{ url:"<feedUrl>", channel:"rss", subtype:"feed", discoveredFrom:"<scraped url>" }`.
 

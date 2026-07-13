@@ -134,6 +134,41 @@ function factletMentionsValueProp(factlet, booking, cfg) {
     return false;
 }
 
+// A factlet whose EVENT DATE has passed is dead evidence ("World Cup is over") and must
+// score ZERO immediately -- age-decay alone let it keep points for staleDays (60d) after
+// the event, which held dossierScore hot long after the opportunity died. Detection is
+// conservative: only kill when the text carries a concrete, year-bearing date signal and
+// the LATEST such reference is in the past (1-day grace). A month+day with NO year is
+// ambiguous (could be the upcoming occurrence) -> never kill on it. No date signal -> keep.
+const _FACTLET_MON = { jan: 0, feb: 1, mar: 2, apr: 3, may: 4, jun: 5, jul: 6, aug: 7, sep: 8, oct: 9, nov: 10, dec: 11 };
+function factletEventPassed(f) {
+    const text = `${(f && f.content) || ''} ${(f && f.source) || ''}`;
+    if (!text.trim()) return false;
+    let latest = null;   // latest concrete time reference in the text
+    const bump = (d) => { if (d && !isNaN(d.getTime()) && (!latest || d > latest)) latest = d; };
+    let m;
+    // month-name day[, year] -- e.g. "June 14, 2026" / "Jul 4 2025"
+    const mdRe = /\b(jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)[a-z]*\.?\s+(\d{1,2})(?:st|nd|rd|th)?(?:,?\s*(20\d{2}))?\b/gi;
+    while ((m = mdRe.exec(text)) !== null) {
+        const day = parseInt(m[2], 10);
+        if (day < 1 || day > 31) continue;
+        if (!m[3]) return false;   // year-less date is ambiguous -> conservative: keep the factlet
+        bump(new Date(parseInt(m[3], 10), _FACTLET_MON[m[1].slice(0, 3).toLowerCase()], day));
+    }
+    // numeric m/d/yyyy -- e.g. "6/14/2026"
+    const numRe = /\b(\d{1,2})\/(\d{1,2})\/(20\d{2})\b/g;
+    while ((m = numRe.exec(text)) !== null) {
+        const mon = parseInt(m[1], 10) - 1, day = parseInt(m[2], 10);
+        if (mon >= 0 && mon < 12 && day >= 1 && day <= 31) bump(new Date(parseInt(m[3], 10), mon, day));
+    }
+    // bare year -- "World Cup 2025". Treated as Dec 31 of that year, so it only kills
+    // once the whole year is over.
+    const yrRe = /\b(20\d{2})\b/g;
+    while ((m = yrRe.exec(text)) !== null) bump(new Date(parseInt(m[1], 10), 11, 31));
+    if (!latest) return false;
+    return latest.getTime() < Date.now() - 24 * 60 * 60 * 1000;
+}
+
 function computeFactletStats(factletRows, staleDays, opts = {}) {
     const now = Date.now();
     let score = 0;
@@ -143,6 +178,7 @@ function computeFactletStats(factletRows, staleDays, opts = {}) {
     const demandFactletIds = [];
     for (const f of factletRows) {
         if (!f || !f.createdAt) continue;
+        if (factletEventPassed(f)) continue;   // event over -> zero points, no demand credit
         const ageDays = (now - new Date(f.createdAt).getTime()) / (1000 * 60 * 60 * 24);
         const weight = Math.max(0, 1 - ageDays / staleDays);
         if (weight > 0) freshCount++;
@@ -293,9 +329,19 @@ async function judgeLeed(vp, dossier, booking, mode, cfg) {
     const modeGuidance = (PROMPTS.judgeMode && (PROMPTS.judgeMode[mode] || PROMPTS.judgeMode.outreach)) || '';
     const isoDate = booking.startDate ? new Date(booking.startDate).toISOString().slice(0, 10) : '';
     const bookingLine = `title ${booking.title || ''} | date ${isoDate} | location ${booking.location || ''} | trade ${booking.trade || ''} | notes ${String(booking.notes || '').slice(0, 500)}`;
+    // TOKEN DIET: this is the highest-volume LLM call (per hot-eligible booking, judge
+    // budget 400/session). Send ONLY the fit-relevant VP fields, compact JSON (the old
+    // full pretty-printed VP wasted ~half the prompt on indentation + signature /
+    // forbiddenPhrases / zip lists the judge never uses). Dossier: newest-last append log,
+    // so take the TAIL (latest evidence), not the head (oldest).
+    const judgeVp = {
+        trade: vp.trade, pitch: vp.pitch, buyerRoles: vp.buyerRoles,
+        audienceSegments: vp.audienceSegments, notBuyer: vp.notBuyer,
+        relevanceSignals: vp.relevanceSignals
+    };
     const prompt = (PROMPTS.judge && Array.isArray(PROMPTS.judge.lines) ? PROMPTS.judge.lines.join('\n') : '')
-        .replace('{valueProp}', JSON.stringify(vp, null, 2))
-        .replace('{dossier}', String(dossier || '(empty dossier)').slice(0, 6000))
+        .replace('{valueProp}', JSON.stringify(judgeVp))
+        .replace('{dossier}', String(dossier || '(empty dossier)').slice(-2000))
         .replace('{bookingLine}', bookingLine)
         .replace('{modeGuidance}', modeGuidance);
 
@@ -441,6 +487,7 @@ module.exports = {
     classifyBookingProcedural,
     bookingActionToMode,
     factletMentionsValueProp,
+    factletEventPassed,
     collectValuePropDemandTerms,
     normalizeDemandText,
     VALUE_PROP_TOKEN_STOPWORDS,

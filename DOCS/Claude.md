@@ -29,6 +29,7 @@ turn vague instructions into verifiable success criteria before writing a single
 - Check globals.css BEFORE writing CSS
 - Check existing patterns BEFORE creating new ones
 - Understand what exists BEFORE adding anything
+- Check DOCS/solutions/ FIRST — documented solutions & patterns from past debugging (YAML frontmatter, organized by category: logic-errors, architecture-patterns, integration-issues, …). A bug you are chasing may already be solved there.
 
 ### RULE: REUSE, NEVER DUPLICATE
 - If a class exists in the current codebase, USE IT - never reimplement it

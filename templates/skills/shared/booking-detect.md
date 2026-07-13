@@ -1,10 +1,13 @@
 # Booking Detection
 
-When scraped content contains someone requesting a specific service at a specific time and place, check for ALL THREE:
+When scraped content names a specific bookable event, check for BOTH:
 
-1. **Trade** -- matches a known Leedz trade name (from `precrime__trades()`)
-2. **Date** -- a specific date or date range
-3. **Location/zip** -- a specific venue, city, or zip code
+1. **Date** -- a specific date or date range
+2. **Location/zip** -- a specific venue, city, or zip code
+
+Do NOT detect or match a "trade": this is a single-trade business and the server stamps
+`Booking.trade` from VALUE_PROP automatically. A booking's eligibility is the event + date +
+venue; relevance to the service is judged from VALUE_PROP, not from a trade guess.
 
 ## All Three Present AND leadCaptureEnabled
 
@@ -23,7 +26,6 @@ Attach the booking:
 ```
 precrime__pipeline({ action: "save", judge: false, id: clientId, patch: {
   bookings: [{
-    trade: "[detected trade -- must match precrime__trades exactly]",
     dateText: "[verbatim date/time text copied from the source page]",
     location: "[location text]",
     zip: "[zip code -- extract or geocode]",
@@ -42,7 +44,7 @@ Do not invent ISO dates or epoch values. The model's job is to copy raw date tex
 
 Create the client as LEAD THIN (via classify-contact.md PATH C) and note what's missing in the dossier:
 ```
-"BOOKING_PARTIAL: has [trade] + [date] but missing [location]. Source: [URL]"
+"BOOKING_PARTIAL: has [date] but missing [location]. Source: [URL]"
 ```
 
 The enrichment pipeline may fill in the missing field later. Save sparse relevant records; do not promote them manually.
@@ -50,10 +52,6 @@ The enrichment pipeline may fill in the missing field later. Save sparse relevan
 ## leadCaptureEnabled = false
 
 Do not create client or booking. Log `LEAD_CAPTURE_OFF` and move on.
-
-## Trade Matching
-
-The trade name MUST come from `precrime__trades()`. Do not invent, paraphrase, or guess trade names. If the detected service doesn't match any trade in the list, do not create a booking.
 
 ## Booking vs Client — capture dated events
 
@@ -76,8 +74,8 @@ These are real prospects — the Booking appears later if a dated event for them
 Individual profiles and event calendars are equally valuable: profiles become clients,
 dated events become bookings; capture both.
 
-**Exclude entirely:** PAST events (already happened), and events with no plausible fit
-for the trade.
+**Exclude entirely:** PAST events (already happened), and events with no plausible
+VALUE_PROP fit (see DOCS/VALUE_PROP.md RELEVANCE SIGNALS).
 
 The cost of a MISSED dated event (silently dropping a real upcoming event) is worse
 than a speculative one: the Judge holds a contact-less event at `brewing` until it is
