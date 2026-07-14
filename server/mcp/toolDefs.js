@@ -21,7 +21,7 @@ const TOOL_DEFS = [
                         '',
                         'action="save": Atomically persist client work in a single transaction. Two modes: (1) UPDATE existing client - pass id and patch with any of: dossierAppend, draft, draftStatus, targetUrls, intelScore, name, email, phone, company, website, clientNotes, segment, factlets[], bookings[]. (2) CREATE new client - omit id, patch must include name OR company. Company-only sparse records are allowed when relevant; enrichment fills person/email later. Optional fields: email, phone, website, segment, source, factlets[], bookings[]. After persisting, refreshes the client enrichment signal AND re-classifies every booking under that client to cold / brewing / hot via the procedural gates (server/mcp/classification.js) plus the LLM product-market-fit judge. See DOCS/CLASSIFICATION.md.',
                         '',
-                        'action="delete": Permanently remove a record. Pass target ("booking" | "client" | "factlet") and id. For target="client", any attached bookings and factlet links are removed too (cascade). Returns { deleted: true, target, id, cascadedBookings, cascadedFactlets }. Use this when the user says "delete this booking", "remove this client", "drop this factlet", or any imperative removal.',
+                        'action="delete": Permanently remove records. Pass target ("booking" | "client" | "factlet") plus ONE of: id (single record), ids (array of ids), or search (substring matched across the record\'s identity fields — client: name/company/segment/email; booking: title/description/location; factlet: title/content). For target="client", attached bookings cascade. Open tasks targeting deleted rows are auto-cancelled. Returns { deleted, target, matched, deletedClients, deletedBookings, deletedFactlets, cancelledOpenTasks }. Use this for ANY removal, including bulk ("delete ALL comic con rows" -> one call with search:"comic con"). NEVER touch the database by any other means — no shell, no scripts, no sqlite: this action is the only sanctioned delete path.',
                         '',
                         'action="rescore": Re-classify every booking to cold / brewing / hot (procedural gates + LLM judge). Use after editing DOCS/CLASSIFICATION.md policy or DOCS/SCORING.json knobs. Pass scope="all" (default), scope="hot" to sanity-check the current hot queue, or scope=<clientId> to limit to one client. Add procedural=true for a TOKEN-FREE demote-only sweep (gates only, no LLM) -- e.g. {scope:"hot", procedural:true} cheaply scrubs legacy mis-scored hot leedz. Returns counts: rescored, changed, before/after status distribution.',
                         '',
@@ -41,14 +41,16 @@ const TOOL_DEFS = [
                         '',
                         'action="import_sources": DEPRECATED. Markdown is the single source of truth: the server reads data/sources/<channel>.md into an in-memory index at startup, so there is no separate import step. This action just re-reads those files and returns the live per-channel counts. There is no Source table.',
                         '',
-                        'action="work_status": Live operational snapshot -- the answer to "what workers are running right now / what is the conductor doing / why is nothing progressing". Returns conductor{ armed, running (count), workers[{type, task, elapsedSec}], resting/halted + reason, hotProduced/hotTarget } PLUS source/client/booking counts and a recommendation. The conductor runs in THIS server process, so this reflects the true in-flight worker set. Use it whenever asked what is running or active.'
+                        'action="work_status": Live operational snapshot -- the answer to "what workers are running right now / what is the conductor doing / why is nothing progressing". Returns conductor{ armed, running (count), workers[{type, task, elapsedSec}], resting/halted + reason, hotProduced/hotTarget } PLUS source/client/booking counts and a recommendation. The conductor runs in THIS server process, so this reflects the true in-flight worker set. Use it whenever asked what is running or active.',
+                        '',
+                        'action="bounce_sweep": Run a Gmail bounce check RIGHT NOW, synchronously, and return the REAL result -- { addresses, scanned, flagged, reason, summary }. Use this whenever the user says "run BOUNCE_SWEEP", "check for bounces", or "did the bounce sweep run". Do NOT call plan_tasks for this and do NOT report success from a "queue seeded" message -- plan_tasks only ENQUEUES a background sweep (cooldown-gated, may create nothing) and tells you nothing about the outcome. This action bypasses the queue and the cooldown entirely; ALWAYS quote the literal result (per the tool-call honesty rule) -- reason:"no_gmail_token" or "gmail_readonly_scope_missing" means the Gmail extension token needs refreshing, not a fabricated success.'
                     ].join('\n'),
                     inputSchema: {
                         type: 'object',
                         properties: {
                             action: {
                                 type: 'string',
-                                enum: ['status', 'configure', 'get_config', 'get_task', 'next', 'save', 'delete', 'rescore', 'resolve_dates', 'share_booking', 'dismiss_booking', 'report_session', 'audit_session', 'next_source', 'mark_source', 'add_sources', 'import_sources', 'work_status', 'judge_affected', 'plan_tasks', 'claim_task', 'complete_task', 'tasks', 'recycler'],
+                                enum: ['status', 'configure', 'get_config', 'get_task', 'next', 'save', 'delete', 'rescore', 'resolve_dates', 'share_booking', 'dismiss_booking', 'report_session', 'audit_session', 'next_source', 'mark_source', 'add_sources', 'import_sources', 'work_status', 'judge_affected', 'plan_tasks', 'claim_task', 'complete_task', 'tasks', 'recycler', 'bounce_sweep'],
                                 description: 'Which pipeline operation to run.'
                             },
                             text: {
@@ -216,7 +218,16 @@ const TOOL_DEFS = [
                             target: {
                                 type: 'string',
                                 enum: ['booking', 'client', 'factlet'],
-                                description: 'For action=delete only. Which kind of record to delete. id must point to a record of this type.'
+                                description: 'For action=delete only. Which kind of record to delete. id/ids/search must resolve to records of this type.'
+                            },
+                            ids: {
+                                type: 'array',
+                                items: { type: 'string' },
+                                description: 'For action=delete only. Multiple record IDs to delete in one call (alternative to id/search).'
+                            },
+                            search: {
+                                type: 'string',
+                                description: 'For action=delete only. Delete EVERY record of the target type whose identity fields contain this substring (case-insensitive). One call replaces any bulk-delete loop — never script deletions yourself.'
                             },
                             patch: {
                                 type: 'object',

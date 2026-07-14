@@ -264,6 +264,16 @@ async function computeClientScore(clientId, intelOverride, opts = {}) {
 // Generic one-shot LLM completion. Provider, base URL, and model are all
 // configurable (Config.llmProvider / llmBaseUrl / llmModel) so deployments can
 // point at OpenRouter and trial cheap models. Returns the text, or null on failure.
+// LLM_TIMEOUT_MS: this call is AWAITED INLINE in the conductor's main dispatch loop
+// (JUDGE_AFFECTED is not backgrounded -- it gates the planner). Node's fetch has NO
+// default timeout, so an unresponsive endpoint would freeze the ENTIRE conductor --
+// every claim, every spawn, every self-feed replan -- indefinitely behind this one
+// call. Observed live 2026-07-13: 4 ready tasks (JUDGE_AFFECTED, SCRAPE_SOURCE x2,
+// BOUNCE_SWEEP) sat unclaimed 24+ minutes with maxWorkers=10 wide open -- the
+// dispatch loop had stalled on exactly this kind of unbounded call. Bounded here so
+// a hung provider fails in 20s (existing catch -> null -> judgeLeed returns
+// 'judge_unavailable'/brewing) instead of hanging the whole system forever.
+const LLM_TIMEOUT_MS = 20000;
 async function _llmComplete(prompt, cfg, maxTokens = 64) {
     if (!cfg || !cfg.llmApiKey) return null;
     const provider = (cfg.llmProvider || 'anthropic').toLowerCase();
@@ -280,7 +290,8 @@ async function _llmComplete(prompt, cfg, maxTokens = 64) {
                     model: cfg.llmModel || 'claude-haiku-4-5-20251001',
                     max_tokens: maxTokens,
                     messages: [{ role: 'user', content: prompt }]
-                })
+                }),
+                signal: AbortSignal.timeout(LLM_TIMEOUT_MS)
             });
             if (!res.ok) { console.error(`[judge-llm] http ${res.status}`); return null; }
             const j = await res.json();
@@ -302,13 +313,14 @@ async function _llmComplete(prompt, cfg, maxTokens = 64) {
                 model: cfg.llmModel || 'gpt-4o-mini',
                 max_tokens: maxTokens,
                 messages: [{ role: 'user', content: prompt }]
-            })
+            }),
+            signal: AbortSignal.timeout(LLM_TIMEOUT_MS)
         });
         if (!res.ok) { console.error(`[judge-llm] http ${res.status}`); return null; }
         const j = await res.json();
         return (j.choices && j.choices[0] && j.choices[0].message && j.choices[0].message.content || '').trim();
     } catch (e) {
-        console.error('[judge-llm] error:', e.message);
+        console.error(`[judge-llm] error (${e.name === 'TimeoutError' || e.name === 'AbortError' ? 'timeout' : 'error'}):`, e.message);
         return null;
     }
 }
@@ -440,7 +452,14 @@ async function computeBookingTargetScore(bookingId) {
     // dossierScore is an internal enrichment-priority signal, never a promotion gate.
     if (client) await computeClientScore(client.id, null, { client, liveFactlets });
 
-    await prisma.booking.update({ where: { id: bookingId }, data: { status } });
+    // Write status ONLY when it actually changed. The old unconditional update bumped
+    // booking.updatedAt on every judge pass even when nothing moved, which made the
+    // booking look "changed" to the proactive sweep's watermark and fed a re-judge
+    // churn loop (measured live: half of all judged bookings re-judged 2-6x in 48h,
+    // always landing in the same bucket).
+    if (status !== booking.status) {
+        await prisma.booking.update({ where: { id: bookingId }, data: { status } });
+    }
 
     return {
         targetType: 'booking',

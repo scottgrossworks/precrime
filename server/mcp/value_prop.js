@@ -85,6 +85,12 @@ function parse(md) {
         // Parsed so workers (drill-container fit gate) get it from the packet instead of
         // shell-reading all of VALUE_PROP.md (a whole worker turn, re-billed every turn).
         notRelevantSignals: _bullets(((sec['RELEVANCE SIGNALS'] || { sub: {} }).sub || {})['Not Relevant Signals']),
+        // The '### Banned Terms' sub-section — a HARD save-time blocklist (2026-07-13,
+        // comic-con incident). Prose rules ("Does NOT work comic-cons") were ignored by
+        // scrape workers, so banned categories kept re-entering the DB after the user
+        // deleted them. pipeline.save (saveClient.js) refuses any NEW Client or Booking
+        // whose identity text contains one of these terms (case-insensitive substring).
+        bannedTerms: _bullets(((sec['RELEVANCE SIGNALS'] || { sub: {} }).sub || {})['Banned Terms']),
         forbiddenPhrases: _bullets((sec['FORBIDDEN PHRASES'] || {}).intro),
         signature:        _joinNonEmpty(outreach['Signature']),
         sampleEmail:      _joinNonEmpty(outreach['Sample Email'])

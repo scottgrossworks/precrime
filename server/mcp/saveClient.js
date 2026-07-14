@@ -13,6 +13,7 @@ const { prisma } = require('./db');
 const { createSuccessResponse, createErrorResponse } = require('./responses');
 const verify = require('./verify');
 const { isGenericEmail } = require('./factlets');
+const { stripBannedDashes } = require('./textSanitize');
 const { normalizeBookingDatesForSave } = require('./dates');
 const { judgeAffected, actedOnData } = require('./judge');
 const { logSessionEvent } = require('./sessionLog');
@@ -31,6 +32,23 @@ function buildSeedBooking() {
         source: 'seed:booking-at-creation',
         notes: 'Auto-created stub so the client enters the enrichment/drill funnel. Drill replaces this with the real event.'
     };
+}
+
+// HARD BLOCKLIST (2026-07-13, comic-con incident): the VALUE_PROP '### Banned Terms'
+// bullets are enforced PROCEDURALLY here. The prose rules ("Does NOT work comic-cons",
+// "Who Is Not A Buyer") were ignored by scrape workers, so banned categories kept
+// re-entering the DB after the user deleted them. Any NEW Client or Booking whose
+// identity text contains a banned term (case-insensitive substring) is refused at
+// save time. Deleted stays deleted. Returns the matched term, or null.
+function bannedTermHit(text) {
+    const terms = (VALUE_PROP && VALUE_PROP.bannedTerms) || [];
+    if (!terms.length || !text) return null;
+    const hay = String(text).toLowerCase();
+    for (const t of terms) {
+        const needle = String(t || '').trim().toLowerCase();
+        if (needle && hay.includes(needle)) return needle;
+    }
+    return null;
 }
 
 function createSaveHandler(deps) {
@@ -260,6 +278,29 @@ async function pipelineSave(id, clientId, patch, sessionId, judge, factletId) {
 
         if (!clientId) {
             isCreate = true;
+            // BANNED-TERM GATE (create only): refuse the whole new client when its
+            // identity (or any supplied booking's) matches a VALUE_PROP banned term.
+            // SUCCESS response (not error) so a worker's folded completeTask still
+            // fires and the task completes instead of stranding claimed.
+            {
+                const idText = [
+                    patch.name, patch.company, patch.segment,
+                    ...(Array.isArray(patch.bookings)
+                        ? patch.bookings.map(b => `${b.title || ''} ${b.description || ''} ${b.location || ''}`)
+                        : [])
+                ].filter(Boolean).join(' ');
+                const hit = bannedTermHit(idText);
+                if (hit) {
+                    console.error(`[save] BANNED TERM "${hit}" — refused new client "${patch.name || patch.company || '(unnamed)'}" (VALUE_PROP ### Banned Terms)`);
+                    await logSessionEvent(sessionId, 'save_blocked_banned_term', {
+                        name: patch.name, company: patch.company, term: hit
+                    });
+                    return createSuccessResponse(id, JSON.stringify({
+                        saved: false, blocked: true, bannedTerm: hit,
+                        note: `Refused: "${patch.name || patch.company}" matches VALUE_PROP banned term "${hit}". This category is permanently excluded. Do not retry, rename, or work around.`
+                    }));
+                }
+            }
             try {
                 const created = await prisma.client.create({
                     data: {
@@ -304,6 +345,14 @@ async function pipelineSave(id, clientId, patch, sessionId, judge, factletId) {
             if (patch[field] !== undefined) {
                 clientData[field] = patch[field];
             }
+        }
+        // Procedural dash filter on the outreach draft (standing rule 2026-07-13): the
+        // drafter skill's prose "no em/en dash" instruction is advisory only and the model
+        // repeatedly ignored it. This is the DB-side backstop -- show-hot-leedz displays this
+        // exact stored text for interactive review before it ever reaches gmail_send's own
+        // filter, so it must already be clean here.
+        if (clientData.draft !== undefined) {
+            clientData.draft = stripBannedDashes(clientData.draft);
         }
 
         // dossierAppend: timestamp + append to existing dossier
@@ -420,6 +469,14 @@ async function pipelineSave(id, clientId, patch, sessionId, judge, factletId) {
                             ` (worker passed a stale/hallucinated id); rest of the patch still saved.`);
                     }
                 } else {
+                    // BANNED-TERM GATE (new bookings): an existing (allowed) client can
+                    // still be handed a banned-category event by a scrape/drill worker.
+                    // Skip creating it; the rest of the save persists.
+                    const bHit = bannedTermHit(`${bookingData.title || ''} ${bookingData.description || ''} ${bookingData.location || ''}`);
+                    if (bHit) {
+                        console.error(`[save] BANNED TERM "${bHit}" — skipped new booking "${bookingData.title || '(untitled)'}" (VALUE_PROP ### Banned Terms)`);
+                        continue;
+                    }
                     // Booking dedup: an event is uniquely (title + start date) for a given
                     // client. The container drill kept re-adding the SAME event (e.g. "San
                     // Diego Comic-Con 2026") to the SAME exhibitor client -> 98 LEGO rows.
@@ -430,7 +487,11 @@ async function pipelineSave(id, clientId, patch, sessionId, judge, factletId) {
                     // Distinct companies are distinct clients, so this never blocks new exhibitors.
                     let dup = null;
                     if (bookingData.title) {
-                        const norm = s => (s || '').trim().toLowerCase().replace(/\s+/g, ' ');
+                        // Strip ALL non-alphanumerics, not just collapse spaces: "TheFitExpo
+                        // Anaheim 2026" and "The FitExpo Anaheim 2026" are the same event but
+                        // survived the old space-collapsing norm as distinct keys -> duplicate
+                        // rows that each got judged separately (seen live).
+                        const norm = s => (s || '').toLowerCase().replace(/[^a-z0-9]+/g, '');
                         const wantT = norm(bookingData.title);
                         const wantD = bookingData.startDate ? +new Date(bookingData.startDate) : null;
                         const siblings = await tx.booking.findMany({
@@ -440,7 +501,7 @@ async function pipelineSave(id, clientId, patch, sessionId, judge, factletId) {
                             && (wantD === null || !s.startDate || +new Date(s.startDate) === wantD)) || null;
                     }
                     if (dup) {
-                        console.error(`[save] booking dedup — client ${clientId} already has "${bookingData.title}" on that date; duplicate create skipped.`);
+                        console.error(`[save] booking dedup — "${(existing && (existing.company || existing.name)) || clientId}" already has "${bookingData.title}" on that date; duplicate create skipped.`);
                     } else {
                         await tx.booking.create({ data: bookingData });
                     }

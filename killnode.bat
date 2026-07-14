@@ -8,6 +8,7 @@
 ::   *mcp_server.js*  -> the PRECRIME MCP server + conductor (holds the Prisma lock)
 ::   *--print*        -> one-shot Claude workers
 ::   *--no-session*   -> one-shot Goose workers (Phase 2)
+::   *mcp_gmail.js*   -> the Gmail send/token MCP (holds port 3001; goose respawns it)
 :: Interactive Claude Code / Goose sessions carry none of those, so they survive.
-powershell -NoProfile -ExecutionPolicy Bypass -Command "Get-CimInstance Win32_Process | Where-Object { ($_.Name -in 'node.exe','claude.exe','goose.exe') -and $_.CommandLine -and ($_.CommandLine -like '*mcp_server.js*' -or $_.CommandLine -like '*--print*' -or $_.CommandLine -like '*--no-session*') } | ForEach-Object { Write-Host ('  killed ' + $_.Name + ' PID ' + $_.ProcessId); Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }"
+powershell -NoProfile -ExecutionPolicy Bypass -Command "Get-CimInstance Win32_Process | Where-Object { ($_.Name -in 'node.exe','claude.exe','goose.exe') -and $_.CommandLine -and ($_.CommandLine -like '*mcp_server.js*' -or $_.CommandLine -like '*mcp_gmail.js*' -or $_.CommandLine -like '*--print*' -or $_.CommandLine -like '*--no-session*') } | ForEach-Object { Write-Host ('  killed ' + $_.Name + ' PID ' + $_.ProcessId); Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }"
 echo  PRECRIME processes stopped. Interactive Claude/Goose sessions were NOT touched.

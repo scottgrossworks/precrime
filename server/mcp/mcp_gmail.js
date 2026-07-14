@@ -20,6 +20,7 @@ const http = require('http');
 const fs = require('fs');
 const path = require('path');
 const axios = require('axios');
+const { stripBannedDashes } = require('./textSanitize');
 
 // ==============================================================================
 // CONFIGURATION AND GLOBALS
@@ -385,8 +386,20 @@ async function handleToolCall(id, params) {
         const action = isDraft ? 'Creating draft' : 'Sending email';
         console.error(`[Gmail MCP] ${action} to ${to}${attachments ? ` with ${attachments.length} attachment(s)` : ''}`);
 
+        // PROCEDURAL DASH FILTER — the last-mile choke point (standing rule 2026-07-13).
+        // The outreach-drafter skill's prose "HARD RULE: no em/en dash" is advisory and the
+        // model repeatedly ignored it. Every send/draft path (drafter, show-hot-leedz interactive
+        // edits, headless_flow) converges here before touching Gmail, so a regex filter HERE
+        // guarantees zero em/en dashes leave the system regardless of which skill or model wrote
+        // the text -- no prompt can talk its way past it.
+        const subjectClean = stripBannedDashes(subject);
+        const bodyClean = stripBannedDashes(body);
+        if (subjectClean !== subject || bodyClean !== body) {
+            console.error('[Gmail MCP] dash-filter: em/en dash or double-hyphen replaced with comma before send.');
+        }
+
         // Build MIME email message
-        const mimeMessage = buildMimeMessage(to, subject, body, cc, bcc, attachments);
+        const mimeMessage = buildMimeMessage(to, subjectClean, bodyClean, cc, bcc, attachments);
 
         // Send via Gmail API or create draft
         const result = await sendGmailMessage(mimeMessage, isDraft);
@@ -469,6 +482,7 @@ function encodeBodyBase64(text) {
     return b64.replace(/.{1,76}/g, '$&\r\n').trimEnd();
 }
 
+/**
 /**
  * Build RFC 2822 MIME email message
  * Supports plain text emails and multipart messages with attachments

@@ -39,7 +39,7 @@ const EXT_SCOPE = _extScopeRaw !== '' && _extScopeRaw !== '0' && _extScopeRaw !=
 // tracked background jobs instead (counted against maxWorkers via `active`). Cheap
 // in-process types (JUDGE_AFFECTED, SHOW_HOT_LEEDZ) still run inline because JUDGE
 // gates the planner and both finish in well under a second.
-const INPROC_BACKGROUND = new Set(['LAST_30_DAYS']);
+const INPROC_BACKGROUND = new Set(['LAST_30_DAYS', 'BOUNCE_SWEEP']);
 
 // Injected at the END of EVERY spawned worker's instructions (one place -> system-wide).
 // A worker is an automated tool-caller, not a chat assistant. Every token the model EMITS
@@ -161,23 +161,27 @@ function buildWorkerRecipe(taskType, instructions) {
 function taskDesc(task) {
     let inp = {};
     try { inp = task.input ? JSON.parse(task.input) : {}; } catch (_) {}
-    const tail = task.targetId ? task.targetId.slice(-6) : null;
+    // Human label (client company / booking "title — company") attached by
+    // attachTaskLabels at claim time; raw id tail is the last-resort fallback only.
+    const tail = task.label || (task.targetId ? task.targetId.slice(-6) : null);
     switch (task.type) {
         case 'DRILL_DOWN': {
             const missing = Array.isArray(inp.missing) && inp.missing.length
                 ? ` missing=[${inp.missing.join(',')}]` : '';
             const what = task.targetType === 'Client' ? 'client' : 'booking';
-            return `${what} ${tail}${missing}`;
+            return `${what} "${tail}"${missing}`;
         }
         case 'DRILL_CONTAINER': {
-            const t = inp.containerContext && inp.containerContext.title;
+            const t = (inp.containerContext && inp.containerContext.title) || task.label;
             return `container "${t || tail}" -> organizer+vendors`;
         }
         case 'LAST_30_DAYS': return 'last30days demand scan (VALUE_PROP topics)';
+        case 'BOUNCE_SWEEP': return 'gmail bounce poll';
         case 'SCRAPE_SOURCE': return `source ${inp.url || inp.channel || tail || ''}`.trim();
         case 'ENRICH_CLIENT':
-        case 'FIND_CLIENT_SOURCES': return `${task.targetType.toLowerCase()} ${tail || ''}`.trim();
-        case 'APPLY_FACTLET': return `factlet -> ${task.targetType.toLowerCase()} ${tail || ''}`.trim();
+        case 'FIND_CLIENT_SOURCES': return `${task.targetType.toLowerCase()} "${tail || ''}"`.trim();
+        case 'APPLY_FACTLET': return `factlet -> ${task.targetType.toLowerCase()} "${tail || ''}"`.trim();
+        case 'DRAFT_OUTREACH': return `draft outreach for "${tail || ''}"`.trim();
         case 'DISCOVER_SOURCES': return 'find new scrape sources';
         default: return task.targetId ? `${task.targetType} ${tail}` : task.targetType;
     }
@@ -428,7 +432,13 @@ async function conductorLoop(cfg, hooks) {
                     console.error(`[conductor] in-process started (background) — ${t.type}: ${taskDesc(t)}`);
                     Promise.resolve()
                         .then(() => runInProcess(t))
-                        .then(() => { if (!settled) console.error(`[conductor] in-process done — ${t.type}: ${taskDesc(t)}`); })
+                        .then((r) => {
+                            // Log the ACTUAL result summary (e.g. "scanned 3, 1 bounced address(es),
+                            // dead-flagged 1") when the handler returns one, not the generic
+                            // taskDesc() placeholder -- taskDesc has no case for background types
+                            // like BOUNCE_SWEEP (targetType:"none") and was silently printing "none".
+                            if (!settled) console.error(`[conductor] in-process done — ${t.type}: ${(r && r.summary) || taskDesc(t)}`);
+                        })
                         .catch(async (e) => {
                             if (settled) return;
                             console.error(`[conductor] in-process error — task=${t.id} type=${t.type}: ${e.message}`);
@@ -469,7 +479,12 @@ async function conductorLoop(cfg, hooks) {
                     const detail = r.summary
                         || `${r.changed != null ? `changed=${r.changed}` : ''}${r.hotCount != null ? ` hot=${r.hotCount}` : ''}`.trim()
                         || taskDesc(t);
-                    console.error(`[conductor] in-process done — ${t.type}: ${detail}${hotTarget ? ` [hot ${hotProduced}/${hotTarget}]` : ''}`);
+                    // SIGNAL over noise: a judge pass that moved NOTHING is not an event a
+                    // human needs to read -- dozens of "unchanged" lines per cycle buried
+                    // the real transitions. Log judge completions ONLY when a bucket moved;
+                    // everything else (transitions, other in-process types, errors) prints.
+                    const quiet = t.type === 'JUDGE_AFFECTED' && r.changed === 0;
+                    if (!quiet) console.error(`[conductor] in-process done — ${t.type}: ${detail}${hotTarget ? ` [hot ${hotProduced}/${hotTarget}]` : ''}`);
                 } catch (e) {
                     console.error(`[conductor] in-process error — task=${t.id} type=${t.type}: ${e.message}`);
                     await conductorFailTask(t.id, `inproc_error: ${e.message}`);
@@ -594,7 +609,7 @@ async function conductorLoop(cfg, hooks) {
                         console.error(`[conductor] cmd task=${task.id.slice(-6)}: ${cmdLine.slice(0, 160)}${cmdLine.length > 160 ? '…' : ''}`);
                     }
                     proc = spawn('cmd.exe', ['/c', tmpBat], {
-                        env:   { ...process.env, PRECRIME_TASK_ID: task.id },
+                        env:   { ...process.env, PRECRIME_TASK_ID: task.id, PRECRIME_TASK_TYPE: task.type },
                         stdio: ['ignore', 'pipe', 'pipe']
                     });
                     const _clean = () => setTimeout(() => {
@@ -614,7 +629,7 @@ async function conductorLoop(cfg, hooks) {
                     // GUARD: log argv (skill body elided unless recipe) so the active flag is visible.
                     console.error(`[conductor] spawn → task=${task.id} cmd=${workerBin} ${argv.slice(0, useRecipe ? argv.length : -1).join(' ')}${useRecipe ? '' : ' <skill>'}`);
                     proc = spawn(workerBin, argv, {
-                        env:   { ...process.env, PRECRIME_TASK_ID: task.id },
+                        env:   { ...process.env, PRECRIME_TASK_ID: task.id, PRECRIME_TASK_TYPE: task.type },
                         stdio: ['ignore', 'pipe', 'pipe']
                     });
                     if (tmpRecipe) {

@@ -80,7 +80,7 @@ The skill file is the source of truth for that skill, not your prior knowledge.
 
 | Tool | Purpose |
 |---|---|
-| `precrime__pipeline` | One DB / workflow endpoint. Actions used in this architecture: `status`, `configure`, `plan_tasks`, `claim_task`, `complete_task`, `tasks`, `judge_affected`, `save` (always `judge:false` from workers), `share_booking`, `resolve_dates`, `add_sources`, `import_sources`, `next_source` / `mark_source` (only inside `url-loop.md` while it owns a SCRAPE_SOURCE claim), `report_session` / `audit_session` (read-only run summaries), `recycler`. `start_session` is DISABLED -- the Node conductor owns all dispatch; the orchestrator never opens a session or runs a cycle. Legacy actions (`next`, `rescore`, etc.) are not called by skills in this architecture. |
+| `precrime__pipeline` | One DB / workflow endpoint. Actions used in this architecture: `status`, `configure`, `plan_tasks`, `claim_task`, `complete_task`, `tasks`, `judge_affected`, `save` (always `judge:false` from workers), `share_booking`, `resolve_dates`, `add_sources`, `import_sources`, `next_source` / `mark_source` (only inside `url-loop.md` while it owns a SCRAPE_SOURCE claim), `report_session` / `audit_session` (read-only run summaries), `recycler`, `bounce_sweep` (synchronous, on-demand Gmail bounce check -- use for "run BOUNCE_SWEEP" / "check for bounces"; NEVER answer that request via plan_tasks or a "queue seeded" message, since that only enqueues a cooldown-gated background sweep and tells you nothing about the outcome -- always quote this action's literal result). `start_session` is DISABLED -- the Node conductor owns all dispatch; the orchestrator never opens a session or runs a cycle. Legacy actions (`next`, `rescore`, etc.) are not called by skills in this architecture. |
 | `precrime__find` | `action=clients` / `bookings` / `factlets` / `drafts`. Read-only. |
 | `precrime__trades` | Canonical Leedz trade names. 10-min cache. |
 | `precrime_rss__get_top_articles` | RSS factlet harvester (used by SCRAPE_SOURCE when `channel:"rss"`). |
@@ -115,7 +115,7 @@ Call these names verbatim. Do not invent variants. Do not call `precrime_mcp__*`
 ## Goose-specific constraints
 
 - You are already inside a goose session. Do not invoke `goose.bat` or `goose`.
-- Use `precrime__*` MCP tools for DB work. Never call `sqlite3`. Never read `.sqlite` files directly.
+- **DATABASE ACCESS GOES THROUGH `precrime__*` TOOLS ONLY. NO EXCEPTIONS. EVER.** Never open, read, or write the `.sqlite` file by ANY other means: no `sqlite3` CLI, no Python/Node one-liners or scripts that import a sqlite library, no copying or editing the file. Writing your own script to touch the database is the single worst violation this system defines — it bypasses cascade rules, task hygiene, judge state, and the live server's lock, and can corrupt a running deployment. If no pipeline action can do what the user asked, SAY the capability is missing and stop; naming the gap is correct behavior, improvising a script never is. (Bulk delete EXISTS: `precrime__pipeline({ action:"delete", target, search:"<term>" })` or `{ ids:[...] }` removes every match in one call.)
 - Windows shell: `cmd.exe /c` when shell is needed. Prefer MCP tools over shell.
 - **Small MCP surface.** Do not compensate for weak behavior by adding more MCP servers. Prefer one action-rich endpoint per domain: Pre-Crime pipeline, Tavily search/extract, Gmail send, Leedz proxy. MCP bloat becomes context bloat.
 

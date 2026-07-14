@@ -87,10 +87,14 @@ async function judgeAffected({ clientIds, bookingIds, reason, writeStatus, intel
     // client with several bookings this judges only the live one(s) — typically the most recent.
     const bookingIdSet = new Set(Array.isArray(bookingIds) ? bookingIds.filter(Boolean) : []);
     if (Array.isArray(clientIds) && clientIds.length > 0) {
+        // Future-dated bookings ONLY. Past-due are dead (expiry owns them), and DATELESS
+        // seeds ("(seed) awaiting real event") can never change bucket without a date --
+        // judging 50+ of them per pass was pure churn (seen live). When a real date lands,
+        // that save's reactive judge covers the booking by id.
         const rows = await prisma.booking.findMany({
             where: {
                 clientId: { in: clientIds.filter(Boolean) },
-                OR: [{ startDate: null }, { startDate: { gte: new Date() } }]
+                startDate: { gte: new Date() }
             },
             select: { id: true }
         });
@@ -99,9 +103,15 @@ async function judgeAffected({ clientIds, bookingIds, reason, writeStatus, intel
 
     const bookings = await prisma.booking.findMany({
         where: { id: { in: Array.from(bookingIdSet) } },
-        select: { id: true, status: true, clientId: true, startDate: true,
+        select: { id: true, status: true, clientId: true, startDate: true, title: true,
                   client: { select: { email: true, name: true, company: true, website: true } } }
     });
+    // Human label per booking ("title — company") so judge log lines name what was
+    // actually judged instead of printing bare counts and opaque ids.
+    const labelOf = (b) => {
+        const org = b.client && (b.client.company || b.client.name);
+        return `${b.title || '(untitled)'}${org ? ' — ' + org : ''}`;
+    };
 
     // Org-level acted-on veto: a booking may score hot on its own fields, but if its ORG was
     // ALREADY emailed/dismissed/shared -- matched by email, normalized company name, or website
@@ -111,10 +121,12 @@ async function judgeAffected({ clientIds, bookingIds, reason, writeStatus, intel
 
     const changed = [];
     const errors  = [];
+    const labels  = [];   // human names of the bookings actually judged (not skipped)
     for (const b of bookings) {
         try {
             // Past-due hard skip: zero classification, zero LLM. Expiry demotes it.
             if (b.startDate && new Date(b.startDate) < new Date()) continue;
+            labels.push(labelOf(b));
             const score = await computeBookingTargetScore(b.id);
             if (!score || !score.status) continue;
             let target = score.status;
@@ -125,7 +137,7 @@ async function judgeAffected({ clientIds, bookingIds, reason, writeStatus, intel
                 if (writeStatus) {
                     await prisma.booking.update({ where: { id: b.id }, data: { status: target } });
                 }
-                changed.push({ bookingId: b.id, from: b.status, to: target });
+                changed.push({ bookingId: b.id, from: b.status, to: target, label: labelOf(b) });
             }
         } catch (e) {
             errors.push({ bookingId: b.id, error: e.message });
@@ -151,6 +163,7 @@ async function judgeAffected({ clientIds, bookingIds, reason, writeStatus, intel
         affectedBookingIds: Array.from(bookingIdSet),
         affectedClientIds:  uniqueClientIds,
         changed,
+        labels,
         clientScores,
         clientScore: lastScore,
         errors,

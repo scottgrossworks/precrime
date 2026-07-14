@@ -18,6 +18,7 @@ Register in goose config.yaml as extension `tavily` (stdio type).
 """
 
 import json
+import os
 import sys
 import traceback
 from datetime import datetime
@@ -67,6 +68,26 @@ def call_log(tool: str, payload: str, stats: dict) -> None:
         log(f"call_log failed: {e}")
 
 
+def _clamp_depth(args: dict) -> str:
+    """CREDIT GUARD (#4): return 'advanced' ONLY when the caller passed both
+    search_depth='advanced' and allow_advanced=true; otherwise 'basic'. Advanced bills
+    2 credits vs 1, so this is default-deny. Log any downgrade so the clamp is visible."""
+    requested = str(args.get("search_depth", "basic")).lower()
+    if requested == "advanced" and bool(args.get("allow_advanced", False)):
+        return "advanced"
+    if requested == "advanced":
+        log("depth clamp: advanced -> basic (allow_advanced not set); saved 1 credit")
+    return "basic"
+
+
+def _find_client_sources_worker() -> bool:
+    """CREDIT GUARD (#1b): true when this Tavily wrapper is running inside a
+    FIND_CLIENT_SOURCES worker. The conductor stamps PRECRIME_TASK_TYPE on the worker
+    env and goose passes it through to this stdio child, so we can enforce snippet-first
+    (no extract) here rather than trusting skill prose."""
+    return (os.environ.get("PRECRIME_TASK_TYPE") or "").strip() == "FIND_CLIENT_SOURCES"
+
+
 def ok(req_id, result):
     return {"jsonrpc": "2.0", "id": req_id, "result": result}
 
@@ -111,7 +132,11 @@ def handle_tools_list(req_id):
                             "search_depth": {
                                 "type": "string",
                                 "enum": ["basic", "advanced"],
-                                "description": "basic (cheap) or advanced (deeper). Default basic.",
+                                "description": "basic (1 credit) or advanced (2 credits, deeper). Default basic. Advanced is IGNORED unless allow_advanced=true is also passed.",
+                            },
+                            "allow_advanced": {
+                                "type": "boolean",
+                                "description": "Must be true together with search_depth='advanced' to actually run advanced (2-credit) search; otherwise the call is clamped to basic. Reserved for stubborn decision-maker email hunts (DRILL_DOWN prime directive).",
                             },
                             "include_answer": {
                                 "type": "boolean",
@@ -173,7 +198,12 @@ def handle_tools_call(req_id, params):
                 # caller-controllable (advanced is legitimate for hard queries).
                 max_results=min(5, max(1, int(args.get("max_results", 5)))),
                 include_answer=bool(args.get("include_answer", True)),
-                search_depth=str(args.get("search_depth", "basic")),
+                # CREDIT GUARD (#4): advanced search bills 2 Tavily credits vs 1 for basic.
+                # Default-DENY advanced: a caller only gets it by passing BOTH search_depth=
+                # "advanced" AND allow_advanced=true (reserved for the DRILL_DOWN decision-maker
+                # hunt). Everything else is clamped to basic here -- enforced in code, not by
+                # skill prose the weak model ignores. Downgrades are logged to stderr.
+                search_depth=_clamp_depth(args),
             )
             call_log("tavily_search", query, result.get("stats", {}))
             # Compact JSON (no indent): pretty-printing pads every search result with
@@ -184,6 +214,19 @@ def handle_tools_call(req_id, params):
             url = args.get("url")
             if not url:
                 return err(req_id, -32602, "tavily_extract requires 'url'")
+            # CREDIT GUARD (#1b): FIND_CLIENT_SOURCES is snippet-first -- it stores the
+            # search-result snippets as each source summary and never extracts (per-URL
+            # extract is the dominant Tavily sink). If a FIND worker calls extract anyway,
+            # refuse it and return a 0-credit note so the worker proceeds with its snippets
+            # instead of spending. Belt-and-suspenders with the skill rewrite.
+            if _find_client_sources_worker():
+                log(f"extract blocked for FIND_CLIENT_SOURCES (snippet-first); saved 1 credit | {url[:120]}")
+                return ok(req_id, {"content": [{"type": "text", "text": json.dumps({
+                    "skipped": True,
+                    "reason": "extract_disabled_for_find_client_sources",
+                    "hint": "FIND_CLIENT_SOURCES is snippet-first: use the search-result snippet as the summary; do not extract.",
+                    "url": url,
+                }, ensure_ascii=False, separators=(",", ":"))}]})
             result = extract_lean(
                 url=url,
                 query_hint=str(args.get("query_hint", "")),

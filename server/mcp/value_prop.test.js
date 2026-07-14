@@ -66,6 +66,11 @@ conventions, and festivals throughout Southern California.
 
 - Pure catering or venue rental.
 
+### Banned Terms
+
+- comic con
+- comic-con
+
 ---
 
 ## SERVICE AREA DETAILS
@@ -112,6 +117,7 @@ test('parses bullet sections', () => {
     assert.deepEqual(vp.audienceSegments, ['Birthdays', 'Proms', 'Comic conventions']);
     assert.equal(vp.notBuyer.length, 1);
     assert.equal(vp.forbiddenPhrases.length, 2);
+    assert.deepEqual(vp.bannedTerms, ['comic con', 'comic-con']);
 });
 
 test('relevance signals stop before Not Relevant subsection', () => {

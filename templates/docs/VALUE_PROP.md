@@ -188,6 +188,18 @@ Example: "save the date", "planning for", "event is in [month]"]*
 *[Topics that look adjacent but aren't. Keeps the relevance filter tight.
 Example: "digital art commission", "graphic design job posting"]*
 
+### Banned Terms
+
+<!-- HARD blocklist, enforced PROCEDURALLY by the server at save time (saveClient.js) --
+     this is not advisory prose. Any NEW client or booking whose name, company, segment,
+     title, description, or location contains one of these terms (case-insensitive
+     substring) is refused and never enters the database. Use it for categories you have
+     permanently rejected (e.g. after deleting them: they stay deleted). One term per
+     bullet; keep terms specific -- every save is substring-matched against them. -->
+
+*[List permanently banned terms, one per bullet, e.g.:]*
+*[- comic con]*
+
 ---
 
 ## SOURCE DISCOVERY

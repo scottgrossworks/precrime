@@ -277,7 +277,7 @@ async function handlePipeline(id, params) {
         case 'complete_task':  return await pipelineCompleteTask(id, args);
         case 'tasks':          return await pipelineTasks(id, args);
         case 'recycler':       return await pipelineRecycler(id, args);
-        case 'delete':         return await pipelineDelete(id, args.target, args.id, args.confirm === true || args.force === true);
+        case 'delete':         return await pipelineDelete(id, args);
         case 'rescore':        return await pipelineRescore(id, args.scope || 'all', args.procedural === true);
         case 'resolve_dates':  return createSuccessResponse(id, JSON.stringify(await resolveEventDates(args), null, 2));
         case 'share_booking':  return await pipelineShareBooking(id, args);
@@ -301,8 +301,10 @@ async function handlePipeline(id, params) {
         case 'import_sources': return await pipelineImportSources(id);
         case 'work_status':    return await pipelineWorkStatus(id);
         case 'mark_sent':      return await pipelineMarkSent(id, args);
+        case 'mark_bounced':   return await pipelineMarkBounced(id, args);
+        case 'bounce_sweep':   return await pipelineBounceSweep(id, args);
         default:
-            return createErrorResponse(id, -32602, `Unknown pipeline action: "${action}". Must be: status, configure, get_config, get_task, next, save, delete, rescore, resolve_dates, share_booking, dismiss_booking, mark_sent, report_session, audit_session, next_source, mark_source, add_sources, import_sources, work_status, judge_affected, plan_tasks, claim_task, complete_task, tasks, recycler.`);
+            return createErrorResponse(id, -32602, `Unknown pipeline action: "${action}". Must be: status, configure, get_config, get_task, next, save, delete, rescore, resolve_dates, share_booking, dismiss_booking, mark_sent, mark_bounced, bounce_sweep, report_session, audit_session, next_source, mark_source, add_sources, import_sources, work_status, judge_affected, plan_tasks, claim_task, complete_task, tasks, recycler.`);
     }
 }
 
@@ -314,71 +316,146 @@ async function handlePipeline(id, params) {
 const { isHttpUrl, pipelineNextSource, pipelineMarkSource, pipelineAddSources, pipelineImportSources } = require('./sourceQueue').createSourceQueue({ sourceStore });
 
 /**
- * Delete a record by id and target type.
+ * Delete records by target type -- single id, id list, or search term.
  *
- * target='booking'  -> deletes one Booking row.
- * target='factlet'  -> deletes one Factlet row. Factlets are standalone in the
- *                     new architecture (no join table); content/source overlap
- *                     drives client relevance at scoring time.
- * target='client'   -> deletes the Client row and its attached Bookings.
+ * args: { target: "booking"|"client"|"factlet",
+ *         id?: "<one id>", ids?: ["<id>", ...], search?: "<substring>" }
+ *
+ * target='booking'  -> deletes Booking rows.
+ * target='factlet'  -> deletes Factlet rows (standalone; no join table).
+ * target='client'   -> deletes Client rows AND their attached Bookings.
  *                     Factlets are broadcast-scoped and never auto-deleted with
  *                     a Client; the recycler handles factlet staleness.
  *
- * Returns { deleted: true, target, id, cascadedBookings }.
- * Returns -32602 if target is missing/unknown or the record doesn't exist.
+ * search matches case-insensitively across the record's identity fields
+ * (client: name/company/segment/email; booking: title/description/location;
+ * factlet: title/content).
+ *
+ * BULK (2026-07-13, comic-con incident): "delete ALL <term> rows" must be ONE
+ * pipeline call. The old single-id-only surface left a tool gap that the
+ * interactive LLM filled by writing raw sqlite Python against the live DB --
+ * bypassing cascades, task hygiene, and the Prisma lock. Never leave that gap
+ * again: the server does the whole job here, including cancelling any open
+ * (ready/claimed) Tasks that target the deleted rows so the conductor never
+ * spawns a worker at a missing record.
+ *
+ * Returns { deleted, target, matched, deletedClients, deletedBookings,
+ *           deletedFactlets, cancelledOpenTasks } (+ legacy id/cascadedBookings
+ * fields when a single id was passed).
  */
-async function pipelineDelete(id, target, recordId, confirm = false) {
-    if (!target) {
+async function pipelineDelete(id, args) {
+    const target = args && args.target;
+    if (!target || !['booking', 'client', 'factlet'].includes(target)) {
         return createErrorResponse(id, -32602, `delete requires target ("booking" | "client" | "factlet").`);
-    }
-    if (!recordId) {
-        return createErrorResponse(id, -32602, `delete requires id (the record to remove).`);
     }
 
     // STANDING RULE (user, 2026-07-13, supersedes the old never-delete rule): interactive
     // mode can delete ANYTHING -- client, booking, factlet -- immediately, no refusal, no
     // confirm gate, no redirect to dismiss_booking. The user's word is the confirmation.
-    // (confirm/force args are still accepted for backward compatibility but ignored.)
+
+    // Resolve the id set: id (one) > ids (list) > search (substring match).
+    let targetIds = [];
+    if (args.id) {
+        targetIds = [args.id];
+    } else if (Array.isArray(args.ids) && args.ids.length) {
+        targetIds = args.ids.filter(Boolean);
+    } else if (args.search && String(args.search).trim()) {
+        const q = String(args.search).trim();
+        let rows = [];
+        if (target === 'client') {
+            rows = await prisma.client.findMany({
+                where: { OR: [
+                    { name:    { contains: q } },
+                    { company: { contains: q } },
+                    { segment: { contains: q } },
+                    { email:   { contains: q } }
+                ] },
+                select: { id: true }
+            });
+        } else if (target === 'booking') {
+            rows = await prisma.booking.findMany({
+                where: { OR: [
+                    { title:       { contains: q } },
+                    { description: { contains: q } },
+                    { location:    { contains: q } }
+                ] },
+                select: { id: true }
+            });
+        } else {
+            rows = await prisma.factlet.findMany({
+                where: { OR: [
+                    { title:   { contains: q } },
+                    { content: { contains: q } }
+                ] },
+                select: { id: true }
+            });
+        }
+        targetIds = rows.map(r => r.id);
+        if (!targetIds.length) {
+            return createSuccessResponse(id, JSON.stringify({
+                deleted: false, target, search: q, matched: 0,
+                note: 'no records matched the search; nothing deleted'
+            }));
+        }
+    }
+    if (!targetIds.length) {
+        return createErrorResponse(id, -32602, `delete requires id, ids[], or search.`);
+    }
 
     try {
-        if (target === 'booking') {
-            const existing = await prisma.booking.findUnique({ where: { id: recordId } });
-            if (!existing) {
-                return createErrorResponse(id, -32602, `delete: no booking with id "${recordId}".`);
-            }
-            await prisma.booking.delete({ where: { id: recordId } });
-            return createSuccessResponse(id, JSON.stringify({
-                deleted: true, target: 'booking', id: recordId,
-                cascadedBookings: 0, cascadedFactlets: 0
-            }));
-        }
-
-        if (target === 'factlet') {
-            const existing = await prisma.factlet.findUnique({ where: { id: recordId } });
-            if (!existing) {
-                return createErrorResponse(id, -32602, `delete: no factlet with id "${recordId}".`);
-            }
-            await prisma.factlet.delete({ where: { id: recordId } });
-            return createSuccessResponse(id, JSON.stringify({
-                deleted: true, target: 'factlet', id: recordId,
-                cascadedBookings: 0
-            }));
-        }
+        let deletedClients = 0, deletedBookings = 0, deletedFactlets = 0, cancelledTasks = 0;
 
         if (target === 'client') {
-            const existing = await prisma.client.findUnique({ where: { id: recordId } });
-            if (!existing) {
-                return createErrorResponse(id, -32602, `delete: no client with id "${recordId}".`);
+            // Cascade: these clients' bookings go too. Collect booking ids FIRST so
+            // open tasks targeting them can be cancelled below.
+            const bookingRows = await prisma.booking.findMany({
+                where: { clientId: { in: targetIds } }, select: { id: true }
+            });
+            const bookingIds = bookingRows.map(b => b.id);
+            deletedBookings = (await prisma.booking.deleteMany({ where: { clientId: { in: targetIds } } })).count;
+            deletedClients  = (await prisma.client.deleteMany({ where: { id: { in: targetIds } } })).count;
+            cancelledTasks  = (await prisma.task.updateMany({
+                where: { status: { in: ['ready', 'claimed'] }, OR: [
+                    { targetType: 'Client',  targetId: { in: targetIds } },
+                    { targetType: 'Booking', targetId: { in: bookingIds } }
+                ] },
+                data: { status: 'cancelled', error: 'target_deleted' }
+            })).count;
+            if (deletedClients === 0) {
+                return createErrorResponse(id, -32602, `delete: no client rows matched.`);
             }
-            const bookingResult = await prisma.booking.deleteMany({ where: { clientId: recordId } });
-            await prisma.client.delete({ where: { id: recordId } });
-            return createSuccessResponse(id, JSON.stringify({
-                deleted: true, target: 'client', id: recordId,
-                cascadedBookings: bookingResult.count
-            }));
+        } else if (target === 'booking') {
+            deletedBookings = (await prisma.booking.deleteMany({ where: { id: { in: targetIds } } })).count;
+            cancelledTasks  = (await prisma.task.updateMany({
+                where: { status: { in: ['ready', 'claimed'] }, targetType: 'Booking', targetId: { in: targetIds } },
+                data: { status: 'cancelled', error: 'target_deleted' }
+            })).count;
+            if (deletedBookings === 0) {
+                return createErrorResponse(id, -32602, `delete: no booking rows matched.`);
+            }
+        } else {
+            deletedFactlets = (await prisma.factlet.deleteMany({ where: { id: { in: targetIds } } })).count;
+            cancelledTasks  = (await prisma.task.updateMany({
+                where: { status: { in: ['ready', 'claimed'] }, targetType: 'Factlet', targetId: { in: targetIds } },
+                data: { status: 'cancelled', error: 'target_deleted' }
+            })).count;
+            if (deletedFactlets === 0) {
+                return createErrorResponse(id, -32602, `delete: no factlet rows matched.`);
+            }
         }
 
-        return createErrorResponse(id, -32602, `delete: unknown target "${target}". Must be: booking, client, factlet.`);
+        const out = {
+            deleted: true, target,
+            matched: targetIds.length,
+            deletedClients, deletedBookings, deletedFactlets,
+            cancelledOpenTasks: cancelledTasks
+        };
+        // Legacy single-delete response fields, preserved for existing skills.
+        if (targetIds.length === 1) {
+            out.id = targetIds[0];
+            out.cascadedBookings = target === 'client' ? deletedBookings : 0;
+        }
+        return createSuccessResponse(id, JSON.stringify(out));
     } catch (err) {
         return createErrorResponse(id, -32603, `delete failed: ${err.message}`);
     }
@@ -780,6 +857,7 @@ const { pipelineSave } = require('./saveClient').createSaveHandler({ isHttpUrl }
 // handlers. Imported by same names so save, the executor, and the share.js
 // factory wiring below resolve unchanged. See judge.js.
 const { judgeAffected, pipelineDismissBooking, pipelineJudgeAffected, actedOnData, buildActedVetoSets, actedVetoHit } = require('./judge');
+const { sweepBounces } = require('./bounceSweep');
 
 // ============================================================================
 // SHARE BOOKING -- the only sanctioned marketplace posting path (Phase 5)
@@ -811,7 +889,8 @@ const _TASK_TYPE_LIMITS_DEFAULT = {
     JUDGE_AFFECTED:   25,  // in-process + cheap; let the proactive sweep (Stage 2b) drain eligible bookings fast
     SHOW_HOT_LEEDZ:   1,
     SHARE_BOOKING:    3,
-    DRAFT_OUTREACH:   5
+    DRAFT_OUTREACH:   5,
+    BOUNCE_SWEEP:     1    // in-process Gmail poll; one at a time, cooldown-gated in the planner
 };
 const _CFG_TASK_LIMITS = (PRECRIME_CONFIG && PRECRIME_CONFIG.tasks && PRECRIME_CONFIG.tasks.limits) || {};
 const TASK_TYPE_LIMITS = Object.assign({}, _TASK_TYPE_LIMITS_DEFAULT, _CFG_TASK_LIMITS);
@@ -833,7 +912,8 @@ const _TASK_SESSION_BUDGETS_DEFAULT = {
     JUDGE_AFFECTED:   150,  // proactive sweep can queue every eligible booking in one session
     SHOW_HOT_LEEDZ:   1,
     SHARE_BOOKING:    10,
-    DRAFT_OUTREACH:   25
+    DRAFT_OUTREACH:   25,
+    BOUNCE_SWEEP:     30    // cheap Gmail polls; cooldown in the planner is the real throttle
 };
 
 // ----------------------------------------------------------------------------
@@ -868,6 +948,10 @@ const _CFG_WORKFLOW_STRATEGY = (PRECRIME_CONFIG && PRECRIME_CONFIG.tasks && PREC
 const FACTLET_BACKLOG_DISCOVERY_PAUSE = Number.isFinite(_CFG_WORKFLOW_STRATEGY.factletBacklogDiscoveryPause)
     ? _CFG_WORKFLOW_STRATEGY.factletBacklogDiscoveryPause
     : 25;
+// How often the planner may emit a BOUNCE_SWEEP (Gmail poll). The self-feed loop
+// replans as fast as every 30s; this throttles the actual Gmail API polling.
+const _CFG_BOUNCE_COOLDOWN = _CFG_WORKFLOW_STRATEGY.bouncePollCooldownMs;
+const BOUNCE_POLL_COOLDOWN_MS = Number.isFinite(_CFG_BOUNCE_COOLDOWN) ? _CFG_BOUNCE_COOLDOWN : 5 * 60 * 1000;
 const TASK_TERMINAL_STATUSES = ['done', 'failed', 'cancelled'];
 // Claim order mirrors the business loop (DOCS/WHAT_I_LEARNED.md):
 //   judge first   -- we must know if hot work already exists before doing
@@ -1206,18 +1290,25 @@ async function runInProcessTask(task) {
         const clientIds  = Array.isArray(input && input.clientIds)  ? input.clientIds  : [];
         const bookingIds = Array.isArray(input && input.bookingIds) ? input.bookingIds : [];
         let transitions = [];
+        let judgedLabels = [];
         if (clientIds.length || bookingIds.length) {
             const result = await judgeAffected({ clientIds, bookingIds, reason: 'judge_affected_task', writeStatus: true });
             transitions = (result && Array.isArray(result.changed)) ? result.changed : [];
+            judgedLabels = (result && Array.isArray(result.labels)) ? result.labels : [];
         }
         const changed = transitions.length;
-        const judgedN = clientIds.length + bookingIds.length;
-        // Human-readable: name the actual bucket moves (e.g. "brewing->hot"), or say
-        // plainly that nothing re-bucketed. "changed=N" alone was inscrutable.
-        const moves = transitions.map(t => `${t.from}->${t.to}`).join(', ');
+        // Human-readable: NAME what was judged and what moved. "re-judged 1 leed(s):
+        // no status changes (still same buckets)" repeated forever was inscrutable --
+        // a user must be able to follow the run from the log alone.
+        const nameList = (arr) => {
+            const shown = arr.slice(0, 2).map(l => `"${l}"`).join(', ');
+            return arr.length > 2 ? `${shown} +${arr.length - 2} more` : shown;
+        };
         const summary = changed
-            ? `re-judged ${judgedN} leed(s): ${changed} changed status (${moves})`
-            : `re-judged ${judgedN} leed(s): no status changes (still same buckets)`;
+            ? transitions.map(t => `"${t.label || t.bookingId}" ${t.from}->${t.to}`).join('; ')
+            : (judgedLabels.length
+                ? `${nameList(judgedLabels)}: unchanged`
+                : 'nothing live to judge (past-due or empty)');
         await pipelineCompleteTask('inproc-judge', {
             taskId: task.id, status: 'done',
             output: { clientIds, bookingIds, changed, transitions, summary }
@@ -1237,6 +1328,11 @@ async function runInProcessTask(task) {
             output: { hotCount, summary }
         });
         return { type: task.type, hotCount, summary };
+    }
+    if (task.type === 'BOUNCE_SWEEP') {
+        const result = await runBounceSweepOnce();
+        await pipelineCompleteTask('inproc-bounce', { taskId: task.id, status: 'done', output: result });
+        return { type: task.type, summary: result.summary };
     }
     if (task.type === 'LAST_30_DAYS') {
         // Procedural (zero-model) worker: runs the last30days CLI, parses/filters its JSON in
@@ -1441,12 +1537,23 @@ async function pipelinePlanTasks(id, args) {
             take: 50
         });
         const judgeNeededInputs = [];
+        // Cross-entry dedup: several done worker tasks often name the SAME booking/client
+        // (drill + apply + scrape all touching one org). Each source task still gets its own
+        // JUDGE task (its judgedAt stamp requires one), but a booking/client is JUDGED by
+        // only the FIRST entry of the pass -- later entries carry the leftover novel ids.
+        // Before this, the same booking was re-judged once per source task per pass (seen
+        // live: identical "Hyatt Vacation Club" judge lines back to back).
+        const seenB = new Set(), seenC = new Set();
         for (const t of doneTasks) {
             const out = t.output ? safeJsonParse(t.output) : null;
             if (!out || out.judgedAt) continue;
             const { clientIds: cIds, bookingIds: bIds } = extractAffectedIds(out);
             if (cIds.length === 0 && bIds.length === 0) continue;
-            judgeNeededInputs.push({ sourceTaskId: t.id, clientIds: cIds, bookingIds: bIds });
+            const novelC = cIds.filter(id => !seenC.has(id));
+            const novelB = bIds.filter(id => !seenB.has(id));
+            for (const id of novelC) seenC.add(id);
+            for (const id of novelB) seenB.add(id);
+            judgeNeededInputs.push({ sourceTaskId: t.id, clientIds: novelC, bookingIds: novelB });
         }
 
         // ---------- Stage 2b: PROACTIVE judge of eligible-but-unjudged bookings ----------
@@ -2018,29 +2125,56 @@ async function pipelinePlanTasks(id, args) {
             );
             const MAX_FIND_PASSES = 3;
 
-            // Enrich ONLY LIVE clients — those with a FUTURE booking. Dead clients (no
-            // future booking) are never enriched: that IS the pruning, and it removes the
-            // need for a separate deprecation rule. Priority falls out of the data: a live
-            // client missing a direct contact (contactGate=false) gets a contact_email FIND
-            // (the near-hot chase — one field from hot); a client with pending source
-            // summaries gets ENRICH; otherwise a general FIND. Keep the full DB; prune the WORK.
+            // Enrich ONLY LIVE clients — those with a FUTURE booking — and only while
+            // the lead is FRESH. Heat-first + fallow (2026-07-13):
+            //   - ACTIVITY WINDOW: a client qualifies only if some live booking saw
+            //     activity (created OR updated — a fresh factlet bumps updatedAt) within
+            //     ACTIVITY_WINDOW_DAYS. Anything older lies FALLOW: zero FIND/ENRICH
+            //     spend until a new booking/factlet revives it (annual re-ignition —
+            //     the new booking arrives shared=false with a fresh updatedAt).
+            //   - HEAT ORDER: clients holding a brewing/hot live booking first, then
+            //     newest activity first. The old `lastEnriched asc` (stalest-first) was
+            //     literally coldest-first: it ground ~2k stale clients while this week's
+            //     discoveries waited in line. Same budget, opposite yield.
+            //   - The near-hot decision-maker email chase is NOT routed through FIND
+            //     anymore: Stage 4.5 DRILL_DOWN owns it (tiered caps, extract allowed).
+            //     FIND is the cheap snippet-only wide net for fresh leads.
+            //   - Dismissed (shared=true) and acted-on bookings stay excluded as before.
+            const ACTIVITY_WINDOW_DAYS = 14;
             if (windowSize > 0) {
+                const activityCutoff = new Date(Date.now() - ACTIVITY_WINDOW_DAYS * 24 * 3600 * 1000);
+                const liveBookingWhere = {
+                    startDate: { gt: new Date() },
+                    status: { in: ['cold', 'brewing', 'hot'] },
+                    shared: false
+                };
                 const liveClients = await prisma.client.findMany({
                     where: {
-                        // A client is LIVE only if it has a non-dismissed future booking. A
-                        // dismissed booking (shared=true) is a DEAD opportunity and must not keep
-                        // its client on the enrichment treadmill (that dead-booking enrichment was
-                        // a real cost leak). The CLIENT revives the moment a NEW booking (or a
-                        // factlet that creates one) lands -- that new booking is shared=false.
-                        bookings: { some: {
-                            startDate: { gt: new Date() },
-                            status: { in: ['cold', 'brewing', 'hot'] },
-                            shared: false
-                        } }
+                        // LIVE and FRESH: at least one non-dismissed future booking touched
+                        // inside the window. (updatedAt is stamped on create too, so brand-new
+                        // bookings qualify without a separate createdAt check.)
+                        bookings: { some: { ...liveBookingWhere, updatedAt: { gte: activityCutoff } } }
                     },
-                    orderBy: [{ lastEnriched: 'asc' }],   // stalest live client first
-                    take: planCap + skipC.size + 20,
-                    select: { id: true, contactGate: true, targetUrls: true }
+                    // The 14-day window keeps this population small by design; over-fetch and
+                    // heat-sort in JS (Prisma can't ORDER BY a bookings aggregate).
+                    take: 500,
+                    select: { id: true, targetUrls: true,
+                        bookings: { where: liveBookingWhere, select: { status: true, updatedAt: true } } }
+                });
+                // Heat sort: brewing/hot-bearing clients first, then newest live activity first.
+                const clientHeat = (c) => {
+                    let warm = false, newest = 0;
+                    for (const b of (c.bookings || [])) {
+                        if (b.status === 'brewing' || b.status === 'hot') warm = true;
+                        const t = +new Date(b.updatedAt);
+                        if (t > newest) newest = t;
+                    }
+                    return { warm, newest };
+                };
+                liveClients.sort((a, b) => {
+                    const ha = clientHeat(a), hb = clientHeat(b);
+                    if (ha.warm !== hb.warm) return ha.warm ? -1 : 1;
+                    return hb.newest - ha.newest;
                 });
                 for (const c of liveClients) {
                     if (clientWorkPlanned >= planCap) break;
@@ -2067,11 +2201,12 @@ async function pipelinePlanTasks(id, args) {
                         }
                         clientWorkPlanned++;
                     } else if ((findPassCount.get(c.id) || 0) < MAX_FIND_PASSES) {
-                        // Producer: find sources. No contact yet → aim at the decision-maker
-                        // email (the near-hot chase); otherwise a general source search.
+                        // Producer: general snippet-only source search. The decision-maker
+                        // email hunt is DRILL_DOWN's mission (Stage 4.5), not FIND's — the
+                        // old focus:'contact_email' variant needed full-page extracts that
+                        // FIND no longer performs (snippet-first credit guard).
                         if ((await createBudget('FIND_CLIENT_SOURCES')).eff <= 0) continue;
-                        const input = c.contactGate === false ? { focus: 'contact_email' } : {};
-                        const row = await createTask('FIND_CLIENT_SOURCES', { targetType: 'Client', targetId: c.id, input });
+                        const row = await createTask('FIND_CLIENT_SOURCES', { targetType: 'Client', targetId: c.id, input: {} });
                         if (row) clientWorkPlanned++;
                     }
                 }
@@ -2165,6 +2300,22 @@ async function pipelinePlanTasks(id, args) {
                 // Topic is chosen deterministically in Node (nextTopic rotates a buyer-occasion
                 // list), NOT by the model at runtime. The worker reads it from task.input.topic.
                 if (!(await createTask('LAST_30_DAYS', { targetType: 'none', input: { topic: nextTopic() } }))) break;
+            }
+        }
+
+        // ---------- Stage 9: BOUNCE_SWEEP -- poll Gmail for hard bounces ----------
+        // Runs in EVERY mode (bounces must be caught whether discovering or consuming),
+        // but COOLDOWN-gated: the self-feed loop replans as often as every 30s, and Gmail
+        // must not be polled that fast. Emit at most one BOUNCE_SWEEP per BOUNCE_POLL_COOLDOWN_MS
+        // (default 5 min) by checking the newest BOUNCE_SWEEP task's age. In-process + cheap.
+        {
+            const latest = await prisma.task.findFirst({
+                where: { type: 'BOUNCE_SWEEP' }, orderBy: { createdAt: 'desc' }, select: { createdAt: true }
+            });
+            const dueMs = Date.now() - BOUNCE_POLL_COOLDOWN_MS;
+            const due = !latest || new Date(latest.createdAt).getTime() < dueMs;
+            if (due && (await createBudget('BOUNCE_SWEEP')).eff > 0) {
+                await createTask('BOUNCE_SWEEP', { targetType: 'none' });
             }
         }
     }
@@ -2366,6 +2517,73 @@ async function pipelineMarkSent(id, args) {
     });
     logInfo(`mark_sent: ${email || clientId} -> ${ids.length} client(s) sent, ${bk.count} booking(s) reset out of hot.`);
     return createSuccessResponse(id, JSON.stringify({ marked: ids.length, bookingsReset: bk.count }, null, 2));
+}
+
+// mark_bounced -- DEAD-FLAG an undeliverable address (standing rule 2026-07-13). Called
+// by the BOUNCE_SWEEP task when Gmail reports a hard bounce for an address we emailed.
+// Policy = dead-flag: clear the bad email (so the client fails contactGate and can never
+// re-promote to hot on it), tag the client with a dated dossier note recording the bounce,
+// and leave its bookings cold. The org-level acted veto (company/domain) already keeps the
+// org out of hot, so a re-ingested variant row won't resurface either.
+async function pipelineMarkBounced(id, args) {
+    const email = args && args.email ? String(args.email).trim().toLowerCase() : '';
+    if (!email) return createErrorResponse(id, -32602, 'mark_bounced requires email.');
+    // Case-insensitive email match (SQLite `=` is case-sensitive).
+    const withEmail = await prisma.client.findMany({ where: { email: { not: null } }, select: { id: true, email: true, dossier: true } });
+    const hits = withEmail.filter(c => String(c.email).trim().toLowerCase() === email);
+    if (hits.length === 0) {
+        return createSuccessResponse(id, JSON.stringify({ marked: 0, note: `no client with email ${email}` }, null, 2));
+    }
+    const stamp = new Date().toISOString().slice(0, 10);
+    for (const c of hits) {
+        const note = `[${stamp}] [PERMANENT] BOUNCED: ${email} is undeliverable (mailer-daemon). Email cleared; find a new contact.`;
+        const dossier = (c.dossier ? c.dossier + '\n\n' : '') + note;
+        // Clear email + fail the contact gate; record the bounce in the dossier.
+        await prisma.client.update({
+            where: { id: c.id },
+            data: { email: null, contactGate: false, draftStatus: 'sent', dossier }
+        });
+    }
+    // Keep their bookings out of the live/hot set (dead-flag). Idempotent.
+    const ids = hits.map(c => c.id);
+    const bk = await prisma.booking.updateMany({
+        where: { clientId: { in: ids }, shared: false },
+        data: actedOnData('bounced')
+    });
+    logInfo(`mark_bounced: ${email} -> dead-flagged ${ids.length} client(s), ${bk.count} booking(s) cleared out of hot.`);
+    return createSuccessResponse(id, JSON.stringify({ marked: ids.length, bookingsCleared: bk.count }, null, 2));
+}
+
+// Shared sweep logic: poll Gmail for hard bounces, dead-flag each undeliverable client.
+// Used by BOTH the automatic in-process task (cooldown-gated, planner-driven) AND the
+// on-demand `bounce_sweep` action below. Never throws -- a missing token / scope returns
+// { reason } cleanly so the caller always gets a real, quotable result, never a crash.
+async function runBounceSweepOnce() {
+    const { addresses, scanned, reason } = await sweepBounces();
+    let flagged = 0;
+    for (const email of addresses) {
+        const r = await pipelineMarkBounced('inproc-bounce', { email });
+        try {
+            const txt = r && r.result && r.result.content && r.result.content[0] && r.result.content[0].text;
+            flagged += (JSON.parse(txt || '{}').marked || 0);
+        } catch (_) {}
+    }
+    const summary = reason
+        ? `bounce sweep skipped: ${reason}`
+        : `bounce sweep: scanned ${scanned} daemon msg(s), ${addresses.length} bounced address(es), dead-flagged ${flagged} client(s)`;
+    return { addresses, scanned, flagged, reason: reason || null, summary };
+}
+
+// bounce_sweep -- ON-DEMAND, synchronous action (standing rule 2026-07-13, mirrors
+// judge_affected's directly-callable pattern). The automatic path is cooldown-gated in
+// the planner and silent to the user; "run BOUNCE_SWEEP" typed in chat has no meaning
+// there -- the orchestrator would just call plan_tasks and report the generic "queue
+// seeded" success WITHOUT knowing whether a sweep actually ran or what it found (a
+// tool-honesty violation). This action runs the real sweep NOW and returns the real,
+// quotable result -- no queue, no cooldown, no ambiguity about what happened.
+async function pipelineBounceSweep(id, args) {
+    const result = await runBounceSweepOnce();
+    return createSuccessResponse(id, JSON.stringify(result, null, 2));
 }
 
 async function pipelineCompleteTask(id, args) {

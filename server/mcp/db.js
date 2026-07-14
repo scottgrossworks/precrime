@@ -32,16 +32,43 @@ const WORKER_TYPES = Object.keys(WORKER_SKILL_MAP);
 // the planner when left pending, so the conductor must drain them. SHARE_BOOKING
 // is intentionally EXCLUDED — it posts to the external Leedz marketplace and must
 // stay an explicit, user-driven action, never auto-run by the conductor.
-const IN_PROCESS_TYPES = ['JUDGE_AFFECTED', 'SHOW_HOT_LEEDZ', 'LAST_30_DAYS'];
+// BOUNCE_SWEEP polls Gmail for hard-bounce notices and dead-flags the undeliverable
+// clients (procedural, zero-model, like LAST_30_DAYS). Runs in-process; the conductor
+// treats it as a background job (network I/O) so it never blocks worker dispatch.
+const IN_PROCESS_TYPES = ['JUDGE_AFFECTED', 'SHOW_HOT_LEEDZ', 'LAST_30_DAYS', 'BOUNCE_SWEEP'];
+
+// Attach a HUMAN label to each task row: the client's company/name/email, or the
+// booking's "title — company". Conductor log lines print this instead of opaque
+// record ids ("client xz58qd" told a human nothing; "client Ape Fitness" does).
+// Two batched selects per poll — negligible against the worker spawn they precede.
+async function attachTaskLabels(rows) {
+    const cIds = [...new Set(rows.filter(r => r.targetType === 'Client' && r.targetId).map(r => r.targetId))];
+    const bIds = [...new Set(rows.filter(r => r.targetType === 'Booking' && r.targetId).map(r => r.targetId))];
+    const [cs, bs] = await Promise.all([
+        cIds.length ? prisma.client.findMany({ where: { id: { in: cIds } }, select: { id: true, name: true, company: true, email: true } }) : [],
+        bIds.length ? prisma.booking.findMany({ where: { id: { in: bIds } }, select: { id: true, title: true, client: { select: { company: true, name: true } } } }) : []
+    ]);
+    const cm = new Map(cs.map(c => [c.id, c.company || c.name || c.email || c.id.slice(-6)]));
+    const bm = new Map(bs.map(b => {
+        const org = b.client && (b.client.company || b.client.name);
+        return [b.id, `${b.title || '(untitled)'}${org ? ' — ' + org : ''}`];
+    }));
+    for (const r of rows) {
+        if (r.targetType === 'Client') r.label = cm.get(r.targetId);
+        else if (r.targetType === 'Booking') r.label = bm.get(r.targetId);
+    }
+    return rows;
+}
 
 // Poll for ready Tasks that have a worker skill. Returns rows with an extra
-// `skillFile` field. Ordered by createdAt ASC (oldest first).
+// `skillFile` field + a human `label`. Ordered by createdAt ASC (oldest first).
 async function conductorGetReadyTasks(limit) {
     const rows = await prisma.task.findMany({
         where:   { status: 'ready', type: { in: WORKER_TYPES } },
         orderBy: { createdAt: 'asc' },
         take:    limit || 10
     });
+    await attachTaskLabels(rows);
     return rows.map(r => ({ ...r, skillFile: WORKER_SKILL_MAP[r.type] }));
 }
 
