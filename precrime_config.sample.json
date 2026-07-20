@@ -4,6 +4,8 @@
   "_databaseFile_note": "The ONE place that selects PRECRIME's SQLite DB. Change this line + restart to switch databases. Accepts a path relative to the project root (e.g. data/myproject.sqlite) OR an absolute path (e.g. C:/Users/Scott/.../leedz.sqlite).",
   "databaseFile": "data/myproject.sqlite",
   "defaultMode": "interactive",
+  "_chromeScrape_note": "true = background fb/ig SCRAPE workers drive your logged-in Chrome via the mcp-chrome bridge (:12306), in EVERY mode. Requires mcp-chrome-bridge + the extension. The bridge is single-client and the pipeline owns it: the conductor serializes browser workers to one at a time. The orchestrator has no chrome tools.",
+  "chromeScrape": false,
   "apiKeys": {
     "openai": "",
     "anthropic": "",

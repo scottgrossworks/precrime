@@ -39,7 +39,7 @@
     ]
   },
   "judgeMode": {
-    "outreach": "6. Would this Client plausibly be receptive to an email from this business describing the match between the VALUE_PROP and this booking?",
+    "outreach": "6. Would this Client plausibly be receptive to an email from this business describing the match between the VALUE_PROP and this booking? INFERRED DEMAND COUNTS (the Prom Pattern): if the dossier shows this client RUNS RECURRING events featuring family entertainment, interactive activations, guest engagement, or hired vendors (heritage nights, kids days, pregame festivals, community celebrations), AND the contact is a named decision-maker for those events, that pattern IS demand -- answer hot even without an explicit looking-for post. A free/promotional event still hires entertainment; do not treat free admission as absence of demand.",
     "marketplace": "6. Would another provider of the VALUE_PROP trade find this Client + Booking genuinely valuable -- enough to pitch their own service to this Client for this event? The bar is HIGHER: another vendor will spend real time and money on it."
   }
 }

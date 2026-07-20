@@ -349,7 +349,14 @@ async function judgeLeed(vp, dossier, booking, mode, cfg) {
     const judgeVp = {
         trade: vp.trade, pitch: vp.pitch, buyerRoles: vp.buyerRoles,
         audienceSegments: vp.audienceSegments, notBuyer: vp.notBuyer,
-        relevanceSignals: vp.relevanceSignals
+        relevanceSignals: vp.relevanceSignals,
+        // Geography WAS omitted by the token diet -- but the judge prompt says
+        // "A notBuyer or out-of-area event is an automatic no" and weighs
+        // "geography / serviceZips", so omitting them made that clause dead: the
+        // model was asked to check the service area with no service area in the
+        // payload. The geography string + zip prefixes are ~40 tokens.
+        geography: vp.geography || '',
+        serviceZipPrefixes: vp.serviceZipPrefixes || []
     };
     const prompt = (PROMPTS.judge && Array.isArray(PROMPTS.judge.lines) ? PROMPTS.judge.lines.join('\n') : '')
         .replace('{valueProp}', JSON.stringify(judgeVp))
@@ -434,6 +441,8 @@ async function computeBookingTargetScore(bookingId) {
     const proc = classification.classify(client, booking, {
         futureMinHours, mode, defaultTrade,
         genericEmailPrefixes: (SCORING.booking && SCORING.booking.genericEmailPrefixes) || [],
+        bannedTerms: (VALUE_PROP && VALUE_PROP.bannedTerms) || [],   // banned categories are cold forever (retro-enforced in classify)
+        serviceZipPrefixes: (VALUE_PROP && VALUE_PROP.serviceZipPrefixes) || [],   // out-of-area zips are cold forever (same choke point)
         orgNameTokens: (SCORING.classification && SCORING.classification.orgNameTokens) || []
     });
 
@@ -491,11 +500,14 @@ function classifyBookingProcedural(booking, client) {
     return classification.classify(client, booking, {
         futureMinHours, mode, defaultTrade,
         genericEmailPrefixes: (SCORING.booking && SCORING.booking.genericEmailPrefixes) || [],
+        bannedTerms: (VALUE_PROP && VALUE_PROP.bannedTerms) || [],   // banned categories are cold forever (retro-enforced in classify)
+        serviceZipPrefixes: (VALUE_PROP && VALUE_PROP.serviceZipPrefixes) || [],   // out-of-area zips are cold forever (same choke point)
         orgNameTokens: (SCORING.classification && SCORING.classification.orgNameTokens) || []
     });
 }
 
 module.exports = {
+    llmComplete: _llmComplete,
     isGenericEmail,
     getFactletStaleDays,
     findLiveFactletsForClient,

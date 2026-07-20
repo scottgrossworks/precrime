@@ -21,6 +21,21 @@ if (PRECRIME_CONFIG.fallbacks && PRECRIME_CONFIG.fallbacks.length) {
 // process.env.X at import time. Hydrate from config. Not user-facing.
 applyApiKeysToProcessEnv(PRECRIME_CONFIG);
 
+// ---------------------------------------------------------------------------
+// CHROME_SCRAPE_ACTIVE -- background fb/ig chrome workers, ACTIVE IN EVERY MODE
+// when chromeScrape=true. The mcp-chrome bridge (:12306) is SINGLE-CLIENT and
+// the PIPELINE owns it: the conductor serializes browser workers to one at a
+// time, and the orchestrator no longer registers the bridge (2026-07-19:
+// private demand lives behind logged-in fb/ig -- the workers that scrape it
+// get the browser, not an idle orchestrator; the old interactiveChrome mode
+// gate meant NOBODY ever used Chrome in interactive runs).
+// ---------------------------------------------------------------------------
+const PRECRIME_MODE = String(process.env.PRECRIME_MODE || PRECRIME_CONFIG.defaultMode || 'interactive').trim().toLowerCase();
+const CHROME_SCRAPE_ACTIVE = PRECRIME_CONFIG.chromeScrape === true;
+if (CHROME_SCRAPE_ACTIVE) {
+    console.error(`[MCP] chromeScrape ACTIVE (mode=${PRECRIME_MODE}): planner emits fb/ig SCRAPE tasks; conductor drives the :12306 bridge, serialized to one worker.`);
+}
+
 const SCORING_POLICY_PATH = path.resolve(PRECRIME_ROOT, 'DOCS', 'SCORING.json');
 let SCORING;
 try {
@@ -129,4 +144,4 @@ try {
     console.error(`[MCP] DOCS/PROMPTS.json missing or malformed: ${e.message}`);
 }
 
-module.exports = { PRECRIME_CONFIG, RUNTIME_CONFIG, VALUE_PROP, SCORING, PROMPTS };
+module.exports = { PRECRIME_CONFIG, RUNTIME_CONFIG, VALUE_PROP, SCORING, PROMPTS, PRECRIME_MODE, CHROME_SCRAPE_ACTIVE };

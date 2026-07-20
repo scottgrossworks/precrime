@@ -117,6 +117,22 @@ function createSourceStore({ root }) {
     //                         scrapedThisRun, claimed, clientsFound, lastError }
     const index = new Map();
 
+    // PERSISTED SCRAPE RECENCY (2026-07-14): scrapedThisRun is per-process, so every
+    // restart made readySources hand out the SAME first-N sources in file order --
+    // restart-heavy use re-scraped the same 3 directories forever while fb/ig (late in
+    // file order) never surfaced. This sidecar maps dedupKey -> lastScrapedAt epoch ms;
+    // readySources prefers never-scraped, then longest-ago. Markdown files stay the
+    // single source of truth for WHAT the sources are; this file only records WHEN.
+    const scrapeStatePath = path.resolve(root, 'data', '.source_scrape_state.json');
+    let scrapeState = {};
+    function loadScrapeState() {
+        try { scrapeState = JSON.parse(fs.readFileSync(scrapeStatePath, 'utf8')) || {}; }
+        catch (_) { scrapeState = {}; }
+    }
+    function saveScrapeState() {
+        try { fs.writeFileSync(scrapeStatePath, JSON.stringify(scrapeState)); } catch (_) {}
+    }
+
     function fullPath(channel) {
         return path.resolve(root, CHANNEL_FILES[channel].rel);
     }
@@ -124,6 +140,7 @@ function createSourceStore({ root }) {
     // Read every channel file into the index. Missing files are simply empty.
     function load() {
         index.clear();
+        loadScrapeState();
         for (const channel of Object.keys(CHANNEL_FILES)) {
             const file = fullPath(channel);
             if (!fs.existsSync(file)) continue;
@@ -225,12 +242,21 @@ function createSourceStore({ root }) {
     function readySources({ limit = 1, excludeChannels = [], excludeUrls = [] } = {}) {
         const exclude = new Set((excludeUrls || []).map(dedupKey));
         const skipChan = new Set(excludeChannels || []);
-        const picked = [];
+        // Collect ALL eligible entries, then order by persisted recency: never-scraped
+        // first (0), then longest-ago-scraped. This is what gives every source -- fb/ig
+        // included -- a fair turn across restarts, instead of file-order-forever.
+        const candidates = [];
         for (const entry of index.values()) {
-            if (picked.length >= limit) break;
             if (entry.scrapedThisRun || entry.claimed) continue;
             if (skipChan.has(entry.channel)) continue;
             if (exclude.has(dedupKey(entry.url))) continue;
+            candidates.push(entry);
+        }
+        candidates.sort((a, b) =>
+            (scrapeState[dedupKey(a.url)] || 0) - (scrapeState[dedupKey(b.url)] || 0));
+        const picked = [];
+        for (const entry of candidates) {
+            if (picked.length >= limit) break;
             entry.claimed = true;
             picked.push({
                 url: entry.url, channel: entry.channel,
@@ -240,7 +266,8 @@ function createSourceStore({ root }) {
         return picked;
     }
 
-    // Record a scrape result in memory only (never written to markdown).
+    // Record a scrape result: in-memory flags + the persisted recency sidecar (never
+    // written to markdown -- the markdown stays pure source-of-truth for WHAT to scrape).
     function markSource(url, { clientsFound = 0, failedReason = null } = {}) {
         const entry = index.get(dedupKey(url));
         if (!entry) return { status: 'NOT_FOUND', url };
@@ -248,6 +275,8 @@ function createSourceStore({ root }) {
         entry.claimed = false;
         entry.clientsFound = clientsFound;
         entry.lastError = failedReason;
+        scrapeState[dedupKey(url)] = Date.now();
+        saveScrapeState();
         return { status: 'MARKED', url: entry.url, clientsFound, failedReason };
     }
 

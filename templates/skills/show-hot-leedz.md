@@ -55,7 +55,10 @@ If a booking is OUTREACH ONLY because it lacks `zip` or `contactGate`, note it i
 `⚠ Cannot share: missing zip` or `⚠ Cannot share: no verified contact email`
 A missing `description` is NOT a share blocker and must NOT be flagged — it is synthesized from the dossier at share time.
 
-Order: soonest `startDate` first.
+Order: PRIVATE celebrations FIRST — a single host's own wedding, birthday, quinceañera,
+bar/bat mitzvah, sweet 16, shower, graduation or similar life event (the ideal client:
+a one-to-one booking, whatever the trade). Then other direct bookings (corporate parties,
+galas). Then container-derived vendor leads last. Within each group, soonest `startDate` first.
 
 ## Step 4 -- User Action
 
@@ -79,7 +82,7 @@ Ask once per Booking:
 
 - `outreach`: user wants the gig; email the client. Compose per `skills/outreach-drafter.md` style (real dossier facts, RATE, verbatim signature from `get_config`, NO em/en dashes). Show the draft; on the user's approval SEND via `gmail__gmail_send`.
   **This is NOT the marketplace path. Compose the email INLINE from data already in your context: the Client record, the booking card you already showed in Step 3, the VALUE_PROP, and the `get_config` signature. Do NOT call `share_booking` (that builds a marketplace brief, not a client email). Do NOT call any `tavily__*` tool. Do NOT call `pipeline.save` or write factlets. Do NOT research the client or event on the web — an outreach email needs none of that; every fact you need is already loaded.** If the user supplies a template path, you MAY read it once with `developer__shell` `type` and follow its structure — that is the ONLY additional read allowed on this branch. Keep it brief when asked.
-  You do NOT record the send. The gmail send tool marks the client sent and resets its bookings out of hot PROCEDURALLY — the action records itself, no save from you. (A client already at `draftStatus:"sent"` is a prior send: it should not be in your hot list at all; if you somehow see one, warn "already emailed" and skip.)
+  You do NOT record the send. The gmail send tool marks the client sent and resets its bookings out of hot PROCEDURALLY — the action records itself, no save from you. This applies to BOTH a real send AND `draft:true`: a Gmail draft consumes the leed exactly like a send — the client goes cold and never returns to the hot list. Never re-present a leed after drafting for it, and never claim the client was not contacted when a draft exists. (A client already at `draftStatus:"sent"` is prior outreach: it should not be in your hot list at all; if you somehow see one, warn "already emailed" and skip.)
 
 - `skip`: PERMANENT dismissal. The user rejected this leed; it must never be presented as hot again. Call:
   ```
@@ -89,7 +92,7 @@ Ask once per Booking:
 
 Collect acted-on `bookingIds` and `clientIds`.
 
-- `enrich` / `drill` (user asks to enrich or drill leedz deeper): hand it to the background conductor — call `precrime__pipeline({ action:"plan_tasks", mode:"workflow" })` ONCE. That arms the Node conductor, which runs discovery / DRILL_DOWN / ENRICH_CLIENT in its own window while you keep presenting. Tell the user it's running in the background and to re-list hot leedz later to see the enrichment. Do NOT claim or run worker skills yourself, and do NOT block waiting on it. (You do NOT need this to SHARE — the share blurb is synthesized from the dossier at share time. Enrichment deepens the dossier; it is not a share prerequisite.)
+- `enrich` / `drill` / `workflow` (user asks to enrich or drill leedz deeper, OR says anything like "run the workflow", "continue workflow", "start the workflow", "fill the queue", "keep working" — ESPECIALLY when there are zero hot leedz to present): hand it to the background conductor — call `precrime__pipeline({ action:"plan_tasks", mode:"workflow" })` ONCE. Never answer a workflow request with `claim_task`, a status report alone, or a question — the ONE correct action is that single plan_tasks call, then report "Queue seeded — conductor running." That arms the Node conductor, which runs discovery / DRILL_DOWN / ENRICH_CLIENT in its own window while you keep presenting. Tell the user it's running in the background and to re-list hot leedz later to see the enrichment. Do NOT claim or run worker skills yourself, and do NOT block waiting on it. (You do NOT need this to SHARE — the share blurb is synthesized from the dossier at share time. Enrichment deepens the dossier; it is not a share prerequisite.)
 
 Forbidden in this worker: `pipeline.save`, `pipeline.rescore`, `pipeline.judge_affected`, `pipeline.resolve_dates`, ALL `tavily__*` tools (`tavily_search` AND `tavily_extract` — the presenter never web-searches; outreach composes inline, share research belongs to the conductor's enrichment tasks), claiming or running worker task skills yourself, external Leedz tools. You never write bookings, scores, draftStatus, or status by hand — action side effects are procedural (the send marks sent; dismiss/share mark acted-on). Allowed: `dismiss_booking` (skip), `share_booking` with a synthesized `dtDraft` (share), `gmail__gmail_send` (outreach — the send records itself), and a SINGLE `plan_tasks({mode:"workflow"})` to hand enrichment to the conductor when the user asks.
 

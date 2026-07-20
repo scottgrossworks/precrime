@@ -75,8 +75,12 @@ class Last30DaysWorker extends ProceduralWorker {
             };
             try {
                 const resp = await this.deps.pipelineSave('inproc-l30d', null, patch, null, false);
+                // pipelineSave returns a full JSON-RPC envelope: the payload lives at
+                // resp.result.content[0].text. The old read (resp.content[0].text) was
+                // always undefined -> body {} -> clientId never captured -> DRILL_DOWN
+                // was NEVER queued from last30days saves. (Found 2026-07-19.)
                 let body = {};
-                try { body = JSON.parse(resp.content[0].text); } catch (_) {}
+                try { body = JSON.parse(resp.result.content[0].text); } catch (_) {}
                 if (body.clientId) clientIds.push(body.clientId);
                 const bid = Array.isArray(body.affectedBookingIds) ? body.affectedBookingIds[0] : null;
                 if (bid) {

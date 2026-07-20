@@ -410,22 +410,24 @@ async function handleToolCall(id, params) {
 
         console.error(`[Gmail MCP] ${successMsg}`);
 
-        // DETERMINISTIC outreach record: the instant a REAL email goes out, tell the PreCrime
-        // server to mark that recipient's Client "sent" and reset its bookings out of the hot
-        // queue. This does NOT depend on any orchestrator/LLM remembering to save -- sending IS
-        // the record. Fire-and-forget: a failure here never fails the send (the email still went).
-        if (!isDraft) {
-            const primaryTo = String(to || '').split(',')[0].trim();
-            if (primaryTo) {
-                const body = JSON.stringify({
-                    jsonrpc: '2.0', id: 'gmail-mark-sent', method: 'tools/call',
-                    params: { name: 'pipeline', arguments: { action: 'mark_sent', email: primaryTo } }
-                });
-                axios.post('http://127.0.0.1:5179/mcp', body, {
-                    headers: { 'Content-Type': 'application/json' }, timeout: 4000
-                }).then(() => console.error(`[Gmail MCP] mark_sent recorded for ${primaryTo}`))
-                  .catch(e => console.error(`[Gmail MCP] WARN mark_sent failed for ${primaryTo}: ${e.message} (email still sent)`));
-            }
+        // DETERMINISTIC outreach record: the instant an email goes out OR a draft is created,
+        // tell the PreCrime server to mark that recipient's Client "sent" and reset its bookings
+        // out of the hot queue. A DRAFT counts (standing rule 2026-07-19): once outreach is
+        // composed for a contact the resource is CONSUMED -- the leed goes cold and must never
+        // resurface as hot. (Previously this fired only on real sends; a drafted hot leed came
+        // straight back to the user, who was then told it was never emailed.) This does NOT
+        // depend on any orchestrator/LLM remembering to save -- composing IS the record.
+        // Fire-and-forget: a failure here never fails the send (the email/draft still exists).
+        const primaryTo = String(to || '').split(',')[0].trim();
+        if (primaryTo) {
+            const rpcBody = JSON.stringify({
+                jsonrpc: '2.0', id: 'gmail-mark-sent', method: 'tools/call',
+                params: { name: 'pipeline', arguments: { action: 'mark_sent', email: primaryTo } }
+            });
+            axios.post('http://127.0.0.1:5179/mcp', rpcBody, {
+                headers: { 'Content-Type': 'application/json' }, timeout: 4000
+            }).then(() => console.error(`[Gmail MCP] mark_sent recorded for ${primaryTo} (${isDraft ? 'draft' : 'send'})`))
+              .catch(e => console.error(`[Gmail MCP] WARN mark_sent failed for ${primaryTo}: ${e.message} (${isDraft ? 'draft' : 'email'} still created)`));
         }
 
         return createSuccessResponse(id, successMsg);

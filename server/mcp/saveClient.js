@@ -51,6 +51,22 @@ function bannedTermHit(text) {
     return null;
 }
 
+// SERVICE-AREA GATE (2026-07-16): VALUE_PROP geography was prose-only, so scrape
+// workers minted Illinois/NY/Atlanta clients+bookings the deployment can never
+// serve, and every downstream stage (enrich, drill, judge) burned tokens on them.
+// serviceZipPrefixes (parsed from VALUE_PROP '## SERVICE AREA DETAILS': "900xx"
+// entries + prefixes of listed zips) is the enforceable form. A booking whose zip
+// parses as a US zip OUTSIDE every prefix is out of the service area. Returns true
+// only on a confident out-of-area verdict: no/invalid zip or an empty prefix list
+// returns false (those bookings are held at brewing by location_with_zip and judged
+// by the LLM, which now receives geography).
+function outOfAreaZip(zip) {
+    const prefixes = (VALUE_PROP && VALUE_PROP.serviceZipPrefixes) || [];
+    if (!prefixes.length) return false;
+    const m = String(zip || '').trim().match(/^(\d{3})\d{2}/);
+    return !!(m && !prefixes.includes(m[1]));
+}
+
 function createSaveHandler(deps) {
     const { isHttpUrl } = deps;
 
@@ -300,6 +316,25 @@ async function pipelineSave(id, clientId, patch, sessionId, judge, factletId) {
                         note: `Refused: "${patch.name || patch.company}" matches VALUE_PROP banned term "${hit}". This category is permanently excluded. Do not retry, rename, or work around.`
                     }));
                 }
+                // SERVICE-AREA GATE (create only): when EVERY supplied booking has a
+                // confidently out-of-area zip, the whole new client is out of the
+                // service area — refuse it (same success-shaped response as banned
+                // terms so a folded completeTask still fires). Mixed/unknown zips
+                // fall through: in-area bookings keep their client, and zip-less
+                // bookings are judged later by classify + the geo-aware LLM judge.
+                if (Array.isArray(patch.bookings) && patch.bookings.length) {
+                    const zips = patch.bookings.map(b => String((b && b.zip) || '').trim());
+                    if (zips.every(z => outOfAreaZip(z)) && zips.some(z => z)) {
+                        console.error(`[save] OUT OF AREA — refused new client "${patch.name || patch.company || '(unnamed)'}" (every booking zip [${zips.filter(Boolean).join(', ')}] is outside VALUE_PROP service area)`);
+                        await logSessionEvent(sessionId, 'save_blocked_out_of_area', {
+                            name: patch.name, company: patch.company, zips
+                        });
+                        return createSuccessResponse(id, JSON.stringify({
+                            saved: false, blocked: true, outOfArea: true,
+                            note: `Refused: every booking for "${patch.name || patch.company}" is outside the VALUE_PROP service area (zips: ${zips.filter(Boolean).join(', ')}). Out-of-area events are permanently excluded. Do not retry, rename, or work around.`
+                        }));
+                    }
+                }
             }
             try {
                 const created = await prisma.client.create({
@@ -345,6 +380,18 @@ async function pipelineSave(id, clientId, patch, sessionId, judge, factletId) {
             if (patch[field] !== undefined) {
                 clientData[field] = patch[field];
             }
+        }
+        // TYPE NORMALIZATION (2026-07-16): every clientField column is a String in
+        // Prisma, but workers pass targetUrls as a real array ([{url,type,label}] --
+        // the documented shape) and weak models occasionally pass objects for other
+        // fields. Prisma then throws "Expected String ... provided (Object, ...)",
+        // which rolls back the WHOLE save and orphans the worker (the folded
+        // completeTask only fires on a successful save). Serialize instead of dying:
+        // arrays/objects become their JSON string (exactly what targetUrls stores
+        // anyway), other non-string primitives become String(v).
+        for (const [k, v] of Object.entries(clientData)) {
+            if (v === null || typeof v === 'string') continue;
+            clientData[k] = (typeof v === 'object') ? JSON.stringify(v) : String(v);
         }
         // Procedural dash filter on the outreach draft (standing rule 2026-07-13): the
         // drafter skill's prose "no em/en dash" instruction is advisory only and the model
@@ -475,6 +522,12 @@ async function pipelineSave(id, clientId, patch, sessionId, judge, factletId) {
                     const bHit = bannedTermHit(`${bookingData.title || ''} ${bookingData.description || ''} ${bookingData.location || ''}`);
                     if (bHit) {
                         console.error(`[save] BANNED TERM "${bHit}" — skipped new booking "${bookingData.title || '(untitled)'}" (VALUE_PROP ### Banned Terms)`);
+                        continue;
+                    }
+                    // SERVICE-AREA GATE (new bookings): skip events with a confidently
+                    // out-of-area zip; the rest of the save persists.
+                    if (outOfAreaZip(bookingData.zip)) {
+                        console.error(`[save] OUT OF AREA — skipped new booking "${bookingData.title || '(untitled)'}" (zip ${bookingData.zip} outside VALUE_PROP service area)`);
                         continue;
                     }
                     // Booking dedup: an event is uniquely (title + start date) for a given

@@ -68,6 +68,12 @@ if "%PRECRIME_OBJECTIVE%"=="" (
   if /i "%PRECRIME_MODE%"=="headless" ( set "PRECRIME_OBJECTIVE=marketplace" ) else ( set "PRECRIME_OBJECTIVE=hybrid" )
 )
 
+:: Chrome (Claude-in-Chrome, --chrome) for the INTERACTIVE orchestrator (user is at
+:: their own logged-in Chrome). Headless drops it. NOTE: this is claude's own extension,
+:: NOT the :12306 mcp-chrome bridge -- that bridge belongs to background fb/ig workers.
+set "CHROME_FLAG="
+if /i "%PRECRIME_MODE%"=="interactive" set "CHROME_FLAG=--chrome"
+
 :: ---------------------------------------------------------------------------
 :: DB selection -- precrime_config.json "databaseFile" is the SINGLE knob.
 :: bootstrap_config.js (above) emitted it as PRECRIME_DATABASE_FILE. To switch
@@ -221,7 +227,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -Command "$d=[DateTime]::Now.AddSe
 set "PRECRIME_TRIGGER="
 
 :: Default terse SYS = workflow/headless (background). pick_hot overrides it below.
-set "PRECRIME_SYS=You are the Pre-Crime orchestrator on Claude. The workflow has ALREADY been started (plan_tasks was issued by the launcher) and the Node conductor is running all dispatch. Do NOT read any file, do NOT call plan_tasks, start_session, or claim_task, do NOT explain or narrate. Reply with EXACTLY one line: Queue seeded -- conductor running; call status for a summary. Then STOP. If the user later asks for progress, call the precrime pipeline status action and quote it verbatim."
+set "PRECRIME_SYS=You are the Pre-Crime orchestrator on Claude. The workflow has ALREADY been started (plan_tasks was issued by the launcher) and the Node conductor is running all dispatch. Do NOT read any file, do NOT call plan_tasks, start_session, or claim_task, do NOT explain or narrate. ON THE FIRST TURN ONLY, reply with EXACTLY one line: Queue seeded -- conductor running; call status for a summary. Then STOP. That line is the first-turn reply ONLY -- NEVER say it again on any later turn. ON EVERY LATER TURN: when the user asks for status, results, progress, a report, or a summary, call the precrime pipeline status action and reply with ONLY the report field from its JSON result, copied verbatim (it is pre-formatted); add nothing else and never answer a status request from memory or with the Queue-seeded line."
 
 :: Headless: no menu. Seed the workflow trigger, then arm + launch via :pick_workflow.
 if /i "%PRECRIME_MODE%"=="headless" (
@@ -267,7 +273,7 @@ call :arm_conductor
 if not defined PRECRIME_TRIGGER set "PRECRIME_TRIGGER=run precrime choice=workflow objective=%PRECRIME_OBJECTIVE% (database: %DBPATH%)"
 :: Set the workflow SYS explicitly (NOT relying on the pre-menu default) so a [1]->[2] loop does
 :: not inherit the SHOW HOT LEEDZ prompt left by pick_hot.
-set "PRECRIME_SYS=You are the Pre-Crime orchestrator on Claude. The workflow has ALREADY been started (plan_tasks was issued by the launcher) and the Node conductor is running all dispatch. Do NOT read any file, do NOT call start_session or claim_task, do NOT explain or narrate. Reply with EXACTLY one line: Queue seeded -- conductor running; call status for a summary. Then STOP. EXCEPTION -- the ONLY time you call plan_tasks: if the user asks to run/loop until a specific NUMBER of hot leedz (e.g. 'until 5 hot leedz'), call the precrime pipeline plan_tasks action with mode=workflow and targetHot=<that number> EXACTLY ONCE; the Node conductor then stops itself automatically once it has produced that many new hot leedz. If the user later asks for progress, call the precrime pipeline status action and quote it verbatim."
+set "PRECRIME_SYS=You are the Pre-Crime orchestrator on Claude. The workflow has ALREADY been started (plan_tasks was issued by the launcher) and the Node conductor is running all dispatch. Do NOT read any file, do NOT call start_session or claim_task, do NOT explain or narrate. ON THE FIRST TURN ONLY, reply with EXACTLY one line: Queue seeded -- conductor running; call status for a summary. Then STOP. That line is the first-turn reply ONLY -- NEVER say it again on any later turn. ON EVERY LATER TURN: when the user asks for status, results, progress, a report, or a summary, call the precrime pipeline status action and reply with ONLY the report field from its JSON result, copied verbatim (it is pre-formatted); add nothing else and never answer a status request from memory or with the Queue-seeded line. EXCEPTION -- the ONLY time you call plan_tasks: if the user asks to run/loop until a specific NUMBER of hot leedz (e.g. 'until 5 hot leedz'), call the precrime pipeline plan_tasks action with mode=workflow and targetHot=<that number> EXACTLY ONCE; the Node conductor then stops itself automatically once it has produced that many new hot leedz."
 goto :launch
 
 :quit
@@ -283,7 +289,7 @@ exit /b
 
 :launch
 echo  Mode: %PRECRIME_MODE%   Objective: %PRECRIME_OBJECTIVE%
-claude --dangerously-skip-permissions --chrome --model claude-sonnet-4-5 --append-system-prompt "%PRECRIME_SYS%" "%PRECRIME_TRIGGER%"
+claude --dangerously-skip-permissions %CHROME_FLAG% --model claude-sonnet-4-5 --append-system-prompt "%PRECRIME_SYS%" "%PRECRIME_TRIGGER%"
 :: When the interactive session ends, return to the menu so the user can pick again
 :: (e.g. [1] review -> back to menu -> [2] workflow) WITHOUT re-running the launcher or
 :: restarting the MCP server (it is still up). Headless is a single run -> exit.

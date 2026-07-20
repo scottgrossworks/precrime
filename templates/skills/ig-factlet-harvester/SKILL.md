@@ -11,7 +11,7 @@ triggers:
 
 Execute exactly one already-claimed `SCRAPE_SOURCE` Task whose `input.channel` is `ig`. The orchestrator already called `claim_task`. Do NOT call `claim_task`, `plan_tasks`, `next_source`, `start_session`, `report_session`, `judge_affected`, or `rescore`. Complete the Task and stop.
 
-Instagram requires a rendered browser session. Dispatched only in interactive mode where the `chrome` MCP (mcp-chrome) is connected, driving your installed, logged-in Chrome. If the `chrome` tools are not available, complete `cancelled` with `error:"browser_unavailable_ig"` and stop.
+Instagram requires a rendered browser session. Dispatched only when the deployment has browser scraping enabled (`chromeScrape: true` in precrime_config.json): your worker recipe carries the `chrome` MCP (mcp-chrome), which drives the user's installed, logged-in Chrome through the bridge. Browse HUMAN-PACED: one page at a time, no rapid-fire navigation — this is the user's real account. If the `chrome` tools are not available or the bridge refuses the connection, complete `cancelled` with `error:"browser_unavailable_ig"` and stop.
 
 ## Step 1 -- Accept Claimed Task
 

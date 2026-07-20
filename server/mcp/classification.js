@@ -87,6 +87,32 @@ function classify(client, booking, opts) {
     if (client && (client.draftStatus === 'sent' || client.sentAt)) return cold('acted_on_outreach');
     // Event already passed.
     if (booking && booking.startDate && new Date(booking.startDate).getTime() < now) return cold('event_passed');
+    // BANNED TERMS (retro-enforcement, 2026-07-14): save-time blocking only stops NEW
+    // rows -- grandfathered rows (and organizer variants like "Comikaze" that dodge the
+    // name match) kept re-entering brewing on every re-judge sweep. A banned category is
+    // COLD FOREVER, enforced at the one choke point every judge path flows through.
+    if (Array.isArray(o.bannedTerms) && o.bannedTerms.length) {
+        const hay = (`${(client && client.name) || ''} ${(client && client.company) || ''} ` +
+            `${(booking && booking.title) || ''} ${(booking && booking.description) || ''} ` +
+            `${(booking && booking.location) || ''}`).toLowerCase();
+        for (const t of o.bannedTerms) {
+            const needle = String(t || '').trim().toLowerCase();
+            if (needle && hay.includes(needle)) return cold('banned_term');
+        }
+    }
+    // SERVICE AREA (zip-prefix gate, 2026-07-16): VALUE_PROP's geography was prose-only
+    // -- the classifier checked that a zip EXISTS (location_with_zip) but never its
+    // VALUE, so Atlanta/Chicago/NY bookings sailed to brewing/hot while the deployment
+    // serves one metro. opts.serviceZipPrefixes (parsed from VALUE_PROP SERVICE AREA
+    // DETAILS: "900xx" entries + prefixes of listed 5-digit zips) is the enforceable
+    // form: a booking with a US zip OUTSIDE every prefix is out of the service area --
+    // COLD FOREVER, same retro-enforcement choke point as banned terms. Bookings with
+    // no/invalid zip are NOT judged here (they can never go hot anyway -- the
+    // location_with_zip prerequisite holds them at brewing). Empty prefix list = gate off.
+    if (Array.isArray(o.serviceZipPrefixes) && o.serviceZipPrefixes.length && booking) {
+        const zm = String(booking.zip || '').trim().match(/^(\d{3})\d{2}/);
+        if (zm && !o.serviceZipPrefixes.includes(zm[1])) return cold('out_of_area');
+    }
 
     // ---- HOT PREREQUISITES (all required) -> otherwise BREWING ----
     // MANDATORY authentic contact: a real PERSON (not an org/team/role) with a
@@ -188,13 +214,38 @@ function _hasWord(text, word) {
     return new RegExp(`\\b${word}\\b`, 'i').test(text);
 }
 
+// PRIVATE life-cycle celebrations -- a single host hiring a vendor for THEIR OWN
+// once-in-a-lifetime (or once-a-year) event. This is the system's IDEAL client class
+// for ANY vendor selling ANY service: a private one-to-one booking beats standing up
+// a booth at someone else's event no matter what you sell, so 'private' outranks
+// 'direct' outranks 'container' at every prioritization point (near-hot ranking,
+// enrichment heat sort, presentation order). GENERIC by design: these are universal
+// life events -- no deployment/VALUE_PROP-specific terms belong in these lists.
+// Container detection runs FIRST, so "bridal expo" / "wedding expo" stay containers.
+const PRIVATE_PHRASES = [
+    'birthday party', 'wedding reception', 'baby shower', 'bridal shower',
+    'engagement party', 'graduation party', 'grad party', 'grad night',
+    'retirement party', 'sweet 16', 'sweet sixteen', 'gender reveal',
+    'first communion', 'family reunion', 'class reunion', 'bachelor party',
+    'bachelorette party', 'anniversary party', 'celebration of life',
+    'quinceanera', 'quinceañera', 'quince años', 'quince anos', 'housewarming'
+];
+const PRIVATE_WORDS = [
+    'wedding', 'birthday', 'mitzvah', 'bris', 'baptism', 'christening',
+    'prom', 'homecoming'
+];
+
 /**
- * Classify a booking's event-class from its text. Returns 'direct' | 'container'.
- * A container is any public / multi-vendor / competitive event (the worker then judges
- * VALUE_PROP fit). Empty/absent text -> 'direct' (never throws).
+ * Classify a booking's event-class from its text.
+ * Returns 'container' | 'private' | 'direct'.
+ *   container -> public / multi-vendor / competitive event (worker judges fit)
+ *   private   -> a single host's own life-cycle celebration (the IDEAL client)
+ *   direct    -> any other single-prospect booking (corporate party, gala, ...)
+ * Container wins on overlap ("bridal expo" is a container, not a wedding).
+ * Empty/absent text -> 'direct' (never throws).
  *
  * @param {object} booking - Booking row (title, description, location)
- * @returns {'direct'|'container'}
+ * @returns {'container'|'private'|'direct'}
  */
 function classifyEventClass(booking) {
     if (!booking) return 'direct';
@@ -204,7 +255,26 @@ function classifyEventClass(booking) {
     const isContainer =
         CONTAINER_PHRASES.some(p => text.includes(p)) ||
         CONTAINER_WORDS.some(w => _hasWord(text, w));
-    return isContainer ? 'container' : 'direct';
+    if (isContainer) return 'container';
+    const isPrivate =
+        PRIVATE_PHRASES.some(p => text.includes(p)) ||
+        PRIVATE_WORDS.some(w => _hasWord(text, w));
+    return isPrivate ? 'private' : 'direct';
 }
 
-module.exports = { classify, isGenericEmail, isOrgName, classifyEventClass };
+// Pipeline priority rank for a booking, lower = worked first:
+//   0 private              -- the ideal client, always first in line
+//   1 direct               -- other single-prospect bookings
+//   2 container-minted     -- vendor leads a container drill expanded (once-removed
+//                             directs; they inherit the container's title so the
+//                             class check alone would mis-rank them 3)
+//   3 container            -- the raw multi-vendor event itself
+// Shared by near-hot ranking (factletMatch), the enrichment heat sort (planner
+// Stage 5), and anything else that must order bookings by desirability.
+function eventClassRank(booking) {
+    if (booking && typeof booking.source === 'string' && booking.source.startsWith('container:')) return 2;
+    const cls = classifyEventClass(booking);
+    return cls === 'private' ? 0 : (cls === 'container' ? 3 : 1);
+}
+
+module.exports = { classify, isGenericEmail, isOrgName, classifyEventClass, eventClassRank };

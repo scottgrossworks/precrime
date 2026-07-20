@@ -113,22 +113,9 @@ extensions:
     timeout: 60
     bundled: null
     available_tools: []
-  chrome:
-    # Disabled: Tavily (above) covers headless scraping. chrome is streamable_http
-    # to the shared mcp-chrome bridge (:12306); when another client already holds
-    # that transport it returns HTTP 500 "Already connected to a transport" at
-    # startup. Re-enable only for browser-gated sources (fb/ig) with the bridge free.
-    enabled: false
-    type: streamable_http
-    name: chrome
-    description: mcp-chrome (Chrome MCP Server). Drives your installed, logged-in Chrome via the companion extension. Tools chrome_navigate, chrome_get_web_content, etc. Requires mcp-chrome-bridge installed + the extension running (serves http://127.0.0.1:12306).
-    uri: http://127.0.0.1:12306/mcp
-    envs: {}
-    env_keys: []
-    headers: {}
-    timeout: 60
-    bundled: null
-    available_tools: []
+  # NO chrome extension here (2026-07-19): the :12306 bridge is single-client and
+  # the PIPELINE owns it -- background fb/ig SCRAPE workers, conductor-serialized.
+  # The orchestrator uses tavily for lookups.
   precrime:
     enabled: true
     type: streamable_http

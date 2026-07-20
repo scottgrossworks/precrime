@@ -11,7 +11,11 @@ const TOOL_DEFS = [
                 {
                     name: 'pipeline',
                     description: [
-                        'Pre-Crime workflow operations. IMPORTANT: the names below are ACTIONS of THIS one `pipeline` tool, NOT standalone tools — to run any of them, call the `pipeline` tool with action:"<name>". There is no separate save / audit_session / complete_task / report_session / etc. tool; calling one of those names directly will fail with "Unknown tool". Actions: status, configure, next, save, delete, rescore, resolve_dates, report_session, audit_session, next_source, mark_source, add_sources, import_sources, work_status.',
+                        'Pre-Crime workflow operations. IMPORTANT: the names below are ACTIONS of THIS one `pipeline` tool, NOT standalone tools — to run any of them, call the `pipeline` tool with action:"<name>". There is no separate save / audit_session / complete_task / report_session / etc. tool; calling one of those names directly will fail with "Unknown tool". Actions: status, configure, next, save, delete, rescore, resolve_dates, browse, plan_tasks, report_session, audit_session, next_source, mark_source, add_sources, import_sources, work_status.',
+                        '',
+                        'action="browse": Fetch a page THROUGH THE USER\'S OWN LOGGED-IN CHROME (mcp-chrome bridge, transient session). Pass url (http/https). Returns { url, text } — the rendered page text, lean-capped. This is THE way to reach Facebook, Instagram, or any signed-in site when the user asks you to look at one; use tavily for public web. Serialized with background chrome scrape workers; on "bridge busy" simply retry in a moment.',
+                        '',
+                        'action="plan_tasks" focus: optional user steering directive. focus:"factlets" = drain the unprocessed-factlet backlog and create NO other task types (only APPLY_FACTLET / JUDGE_AFFECTED / BOUNCE_SWEEP / SHOW_HOT_LEEDZ) until the backlog reaches the discovery-pause threshold, then focus auto-clears. focus:"none" clears immediately. In-flight tasks are never cancelled — focus only stops NEW work. When the user says "process the factlets, nothing else" call plan_tasks({ mode:"workflow", focus:"factlets" }). targetHot: the run goal — N>0 = auto-stop after N NEW hot leedz (launcher default 1); an explicit 0 = continuous ("don\'t bother me"). Update mid-session with one plan_tasks call.',
                         '',
                         'action="status": Read full system state in one call. Returns { config, stats, completeness, readyDrafts, brewingCount }. completeness is a derived check of whether config has the fields needed for the current defaultBookingAction. Use this at startup and between enrichment rounds.',
                         '',
@@ -231,7 +235,61 @@ const TOOL_DEFS = [
                             },
                             patch: {
                                 type: 'object',
-                                description: 'For action=save or action=configure. For save UPDATE: dossierAppend, draft, draftStatus, targetUrls, intelScore, name, email, phone, company, website, clientNotes, segment, factlets[], bookings[]. For save CREATE (no id): name OR company is required; sparse company-only records are allowed when relevant. Optional: email, phone, website, segment, source, factlets[], bookings[]. For configure: any Config model fields.'
+                                description: 'For action=save or action=configure. For save UPDATE: dossierAppend, draft, draftStatus, targetUrls, intelScore, name, email, phone, company, website, clientNotes, segment, factlets[], bookings[]. For save CREATE (no id): name OR company is required; sparse company-only records are allowed when relevant. Optional: email, phone, website, segment, source, factlets[], bookings[]. For configure: any Config model fields.',
+                                // Declared so strict upstream validators (Groq et al.) accept
+                                // legitimate worker saves; additionalProperties stays open via
+                                // relaxObjectNodes below.
+                                properties: {
+                                    name:          { type: 'string' },
+                                    email:         { type: 'string' },
+                                    phone:         { type: 'string' },
+                                    company:       { type: 'string' },
+                                    website:       { type: 'string' },
+                                    clientNotes:   { type: 'string' },
+                                    segment:       { type: 'string' },
+                                    source:        { type: 'string' },
+                                    dossierAppend: { type: 'string', description: 'Text appended to the client dossier (server stamps the date).' },
+                                    draft:         { type: 'string' },
+                                    draftStatus:   { type: 'string', enum: ['brewing', 'ready', 'sent'] },
+                                    targetUrls:    { description: 'JSON array [{url, type, label}] (array or pre-serialized string).' },
+                                    intelScore:    { type: 'number' },
+                                    factlets: {
+                                        type: 'array',
+                                        items: {
+                                            type: 'object',
+                                            properties: {
+                                                content: { type: 'string' },
+                                                source:  { type: 'string' }
+                                            },
+                                            required: ['content']
+                                        }
+                                    },
+                                    bookings: {
+                                        type: 'array',
+                                        items: {
+                                            type: 'object',
+                                            properties: {
+                                                title:       { type: 'string' },
+                                                description: { type: 'string' },
+                                                notes:       { type: 'string' },
+                                                location:    { type: 'string' },
+                                                startDate:   { type: 'string' },
+                                                endDate:     { type: 'string' },
+                                                startTime:   { type: 'string' },
+                                                endTime:     { type: 'string' },
+                                                duration:    { type: 'number' },
+                                                hourlyRate:  { type: 'number' },
+                                                flatRate:    { type: 'number' },
+                                                totalAmount: { type: 'number' },
+                                                status:      { type: 'string' },
+                                                source:      { type: 'string' },
+                                                sourceUrl:   { type: 'string' },
+                                                trade:       { type: 'string' },
+                                                zip:         { type: 'string' }
+                                            }
+                                        }
+                                    }
+                                }
                             },
                             taskId: {
                                 type: 'string',
@@ -243,7 +301,15 @@ const TOOL_DEFS = [
                             },
                             output: {
                                 type: 'object',
-                                description: 'For action=complete_task. Result blob, e.g. { clientIds:[], bookingIds:[], factletIds:[], sourceIds:[], summary, needsJudge }. Pass the object directly, NOT a JSON string.'
+                                description: 'For action=complete_task. Result blob, e.g. { clientIds:[], bookingIds:[], factletIds:[], sourceIds:[], summary, needsJudge }. Pass the object directly, NOT a JSON string.',
+                                properties: {
+                                    clientIds:  { type: 'array', items: { type: 'string' } },
+                                    bookingIds: { type: 'array', items: { type: 'string' } },
+                                    factletIds: { type: 'array', items: { type: 'string' } },
+                                    sourceIds:  { type: 'array', items: { type: 'string' } },
+                                    summary:    { type: 'string' },
+                                    needsJudge: { type: 'boolean' }
+                                }
                             },
                             error: {
                                 type: 'string',
@@ -278,7 +344,26 @@ const TOOL_DEFS = [
                             },
                             completeTask: {
                                 type: 'object',
-                                description: 'For action=save (optional): fold the terminal complete_task INTO this save to remove a whole turn. On a SUCCESSFUL save the server marks the task terminal — do NOT also call action=complete_task. Pass { taskId, status:"done"|"failed"|"cancelled", output?, error? }; output has the same shape as complete_task output (clientIds, bookingIds, factletIds, sourceIds, summary, needsJudge). Multi-save workers pass completeTask ONLY on their FINAL save, with output ids accumulated across all their saves.'
+                                description: 'For action=save (optional): fold the terminal complete_task INTO this save to remove a whole turn. On a SUCCESSFUL save the server marks the task terminal — do NOT also call action=complete_task. Pass { taskId, status:"done"|"failed"|"cancelled", output?, error? }; output has the same shape as complete_task output (clientIds, bookingIds, factletIds, sourceIds, summary, needsJudge). Multi-save workers pass completeTask ONLY on their FINAL save, with output ids accumulated across all their saves.',
+                                properties: {
+                                    taskId: { type: 'string' },
+                                    status: { type: 'string', enum: ['done', 'failed', 'cancelled'] },
+                                    output: {
+                                        type: 'object',
+                                        properties: {
+                                            clientIds:  { type: 'array', items: { type: 'string' } },
+                                            bookingIds: { type: 'array', items: { type: 'string' } },
+                                            factletIds: { type: 'array', items: { type: 'string' } },
+                                            sourceIds:  { type: 'array', items: { type: 'string' } },
+                                            summary:    { type: 'string' },
+                                            needsJudge: { type: 'boolean' }
+                                        }
+                                    },
+                                    error: { type: 'string' }
+                                }
+                                // NO nested `required`: a strict upstream rejecting the whole
+                                // call orphans the worker, while the server handles a missing
+                                // field gracefully. Requiredness is documented in the description.
                             }
                         },
                         required: ['action']
@@ -307,7 +392,23 @@ const TOOL_DEFS = [
                             },
                             filters: {
                                 type: 'object',
-                                description: 'Action-specific filters. clients: search, name, email, company, segment, draftStatus, warmthScore, minWarmthScore, maxWarmthScore. bookings: status, trade, search. factlets: sinceTimestamp, clientId. drafts: minScore.'
+                                description: 'Action-specific filters. clients: search, name, email, company, segment, draftStatus, warmthScore, minWarmthScore, maxWarmthScore. bookings: status, trade, search. factlets: sinceTimestamp, clientId. drafts: minScore.',
+                                properties: {
+                                    search:         { type: 'string' },
+                                    name:           { type: 'string' },
+                                    email:          { type: 'string' },
+                                    company:        { type: 'string' },
+                                    segment:        { type: 'string' },
+                                    draftStatus:    { type: 'string' },
+                                    warmthScore:    { type: 'number' },
+                                    minWarmthScore: { type: 'number' },
+                                    maxWarmthScore: { type: 'number' },
+                                    status:         { type: 'string' },
+                                    trade:          { type: 'string' },
+                                    sinceTimestamp: { type: 'string' },
+                                    clientId:       { type: 'string' },
+                                    minScore:       { type: 'number' }
+                                }
                             },
                             summary: {
                                 type: 'boolean',
@@ -404,11 +505,53 @@ function _prunePipeline(pipeline, allowedActions) {
     return { ...pipeline, description, inputSchema: { ...pipeline.inputSchema, properties: prunedProps } };
 }
 
+// Which of the precrime tools each worker scope's skill actually calls (2026-07-19
+// context trim): scrapers never call find/trades; only discover-sources uses trades.
+// Dropping an unused tool removes its whole schema from EVERY turn of that worker.
+const SCOPE_TOOLS = {
+    DRILL_DOWN:          ['pipeline', 'find'],
+    DRILL_CONTAINER:     ['pipeline', 'find'],
+    ENRICH_CLIENT:       ['pipeline', 'find'],
+    FIND_CLIENT_SOURCES: ['pipeline', 'find'],
+    APPLY_FACTLET:       ['pipeline', 'find'],
+    DRAFT_OUTREACH:      ['pipeline', 'find'],
+    SCRAPE_SOURCE:       ['pipeline'],
+    DISCOVER_SOURCES:    ['pipeline', 'trades'],
+};
+
 // Return the tools/list payload for a given connection scope. No/unknown scope => full set.
 function scopedToolDefs(scope) {
     const allowed = scope && SCOPE_ACTIONS[scope];
     if (!allowed) return TOOL_DEFS;
-    return TOOL_DEFS.map(t => t.name === 'pipeline' ? _prunePipeline(t, allowed) : t);
+    const keep = new Set(SCOPE_TOOLS[scope] || ['pipeline', 'find', 'trades']);
+    return TOOL_DEFS
+        .filter(t => keep.has(t.name))
+        .map(t => t.name === 'pipeline' ? _prunePipeline(t, allowed) : t);
 }
+
+// ---------------------------------------------------------------------------
+// Strict-upstream armor. Some OpenAI-compatible hosts reached via OpenRouter
+// (Groq, observed 2026-07-16) validate tool-call arguments STRICTLY against
+// this schema and treat any object node WITHOUT an explicit additionalProperties
+// as additionalProperties:false. A bare { type:'object' } then rejects EVERY
+// key inside it ("/patch: additionalProperties 'phone' not allowed") and the
+// worker dies orphaned mid-task — while lenient hosts accept the identical
+// call, so failures flake with provider routing. The server dispatch reads
+// only the args it knows and never validates against this schema, so unknown
+// keys are harmless: stamp additionalProperties:true on every object node
+// (a node that explicitly sets its own value is left alone). Runs once at
+// require time, before any tools/list is served; _prunePipeline copies
+// property nodes whole, so scoped worker schemas inherit the stamp.
+// ---------------------------------------------------------------------------
+function relaxObjectNodes(node) {
+    if (!node || typeof node !== 'object') return;
+    if (Array.isArray(node)) { node.forEach(relaxObjectNodes); return; }
+    if (node.type === 'object' && node.additionalProperties === undefined) {
+        node.additionalProperties = true;
+    }
+    if (node.properties) Object.values(node.properties).forEach(relaxObjectNodes);
+    if (node.items) relaxObjectNodes(node.items);
+}
+TOOL_DEFS.forEach(t => relaxObjectNodes(t.inputSchema));
 
 module.exports = { TOOL_DEFS, scopedToolDefs };

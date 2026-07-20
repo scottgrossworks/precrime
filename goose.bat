@@ -257,6 +257,13 @@ if errorlevel 1 (
 :: The goose 'precrime' extension is streamable_http -> http://127.0.0.1:5179/mcp,
 :: so the server MUST already be listening before goose launches, or the extension
 :: fails to initialize and goose runs with NO precrime tools. (Mirrors precrime.bat.)
+:: FIRST kill any stale server/worker from a prior run (parity with precrime.bat --
+:: goose.bat historically lacked this, so a relaunch could bind-fail against a stale
+:: server running OLD code, or goose could point at a dead :5179 -> "Transport send
+:: error"). Match COMMAND LINE only, never bare image names: interactive goose
+:: sessions and the user's Claude Code (also node.exe) must survive.
+powershell -NoProfile -ExecutionPolicy Bypass -Command "Get-CimInstance Win32_Process | Where-Object { ($_.Name -in 'node.exe','goose.exe') -and $_.CommandLine -and ($_.CommandLine -like '*mcp_server.js*' -or $_.CommandLine -like '*mcp_gmail.js*' -or $_.CommandLine -like '*--recipe*') } | ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }"
+timeout /t 1 /nobreak >nul
 :: Worker binary MUST be the absolute goose.exe path. The conductor spawns
 :: `<bin> run --instructions <skill>` via cmd.exe; bare `goose` would resolve to
 :: THIS goose.bat (same name, CWD searched before PATH) and recurse into the
@@ -292,7 +299,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -Command "$d=[DateTime]::Now.AddSe
 :: Default orchestrator system prompt (workflow + headless): seed the queue, then STOP --
 :: the Node conductor owns all dispatch. choice=hot OVERRIDES this in :pick_hot below,
 :: because SHOW HOT LEEDZ is a foreground presenter, not background work.
-set "PRECRIME_SYS=You are the Pre-Crime orchestrator on Goose. Do NOT read files first, do NOT print a menu, do NOT explain. Your FIRST tool call THIS TURN is mandatory and is the ONLY thing you must do: call precrime__pipeline with action=plan_tasks mode=workflow objective=%PRECRIME_OBJECTIVE%. Make that tool call immediately as your very first action. When it returns, reply with exactly one line: Queue seeded -- conductor running; call status for a summary. Then STOP. Never call claim_task, never dispatch worker skills, never poll or loop -- the Node conductor owns all dispatch from here."
+set "PRECRIME_SYS=You are the Pre-Crime orchestrator on Goose. Do NOT read files first, do NOT print a menu, do NOT explain. ON THE FIRST TURN ONLY: your first tool call is mandatory and is the only thing you do -- call precrime__pipeline with action=plan_tasks mode=workflow objective=%PRECRIME_OBJECTIVE%, and when it returns reply with exactly one line: Queue seeded -- conductor running; call status for a summary. Then STOP. The line 'Queue seeded...' is the reply to the SEEDING turn only -- NEVER say it on any later turn. ON EVERY LATER TURN: when the user asks for status, results, progress, a report, or a summary, call precrime__pipeline action=status and reply with ONLY the report field from its JSON result, copied verbatim (it is pre-formatted); add nothing else and never answer a status request from memory or with the Queue-seeded line. Never call claim_task, never dispatch worker skills, never poll or loop -- the Node conductor owns all dispatch from here."
 
 :: Headless: no menu, run straight through.
 if /i "%PRECRIME_MODE%"=="headless" (
@@ -326,9 +333,35 @@ set "GOOSE_TRIGGER=run precrime choice=hot objective=%PRECRIME_OBJECTIVE% (datab
 :: (hot_only does NOT arm the conductor, so it stays dormant and will not steal the task);
 :: the orchestrator then only has to CLAIM it and present. Priming here removes the flaky
 :: model from the seeding step.
+set "PRECRIME_TARGET_HOT="
 set "PRECRIME_PLAN_MODE=hot_only"
 call :arm_conductor
-set "PRECRIME_SYS=You are the Pre-Crime orchestrator on Goose running the interactive SHOW HOT LEEDZ review. The SHOW_HOT_LEEDZ task has already been seeded for you. This OVERRIDES any routing in GOOSE.md or init-wizard.md: do NOT read init-wizard.md, do NOT call plan_tasks, do NOT call start_session, and do NOT begin any session or cycle. Do these steps in order, then STOP. Step 1: call precrime__pipeline action=claim_task role=interactive-orchestrator with types listing only SHOW_HOT_LEEDZ. Step 2: if it returns a CLAIMED task, read the file skills/show-hot-leedz.md (print it with the developer shell) and follow it exactly against that claimed task id -- present each judged-hot booking and let the user pick share, email, or skip per booking, then complete that task id. If claim_task returns no task, reply exactly: No hot leedz to present. then stop. You MAY use find, share_booking, dismiss_booking, and outreach draft tools. Do NOT claim worker tasks such as DRILL_DOWN or DRILL_CONTAINER or SCRAPE_SOURCE, and do NOT dispatch worker skills."
+:: ZERO-HOT UX (deterministic, launcher-owned): check the hot count HERE and, when it is
+:: zero, present the goal menu in the SAME style as the main menu -- the LLM never formats
+:: UX. The user decides a goal before the session even opens; [N] opens it anyway.
+powershell -NoProfile -ExecutionPolicy Bypass -Command "$out = '0'; try { $b = @{ jsonrpc='2.0'; id=1; method='tools/call'; params=@{ name='pipeline'; arguments=@{ action='status' } } } | ConvertTo-Json -Depth 8; $r = Invoke-RestMethod -Uri 'http://127.0.0.1:5179/mcp' -Method Post -ContentType 'application/json' -Body $b -TimeoutSec 20; $j = $r.result.content[0].text | ConvertFrom-Json; $out = [string][int]$j.stats.bookings.hot } catch {}; Set-Content -Path (Join-Path $env:TEMP 'precrime_hot.txt') -Value $out"
+set "PRECRIME_HOT_COUNT=0"
+if exist "%TEMP%\precrime_hot.txt" set /p PRECRIME_HOT_COUNT=<"%TEMP%\precrime_hot.txt"
+set /a PRECRIME_HOT_COUNT+=0 2>nul
+if %PRECRIME_HOT_COUNT% GTR 0 goto :hot_present
+echo.
+echo   ============================================================
+echo      NO HOT LEEDZ ARE READY
+echo   ============================================================
+echo      [ENTER]  run the workflow -- auto-stops at the FIRST new hot leed
+echo      [I]      interactive mode -- explore the DB, work leedz by hand
+echo   ============================================================
+set "PRECRIME_GOAL="
+set /p PRECRIME_GOAL=   Choice [ENTER/I]:
+if /i "%PRECRIME_GOAL%"=="I" goto :hot_present
+if /i "%PRECRIME_GOAL%"=="N" goto :hot_present
+set "PRECRIME_TARGET_HOT=1"
+set "GOOSE_TRIGGER=run precrime choice=workflow objective=%PRECRIME_OBJECTIVE% (database: %DBPATH%)"
+set "PRECRIME_PLAN_MODE=workflow"
+call :arm_conductor
+goto :workflow_sys
+:hot_present
+set "PRECRIME_SYS=You are the Pre-Crime orchestrator on Goose running the interactive SHOW HOT LEEDZ review. The SHOW_HOT_LEEDZ task has already been seeded for you. This OVERRIDES any routing in GOOSE.md or init-wizard.md: do NOT read init-wizard.md, do NOT call plan_tasks on startup, do NOT call start_session, and do NOT begin any session or cycle. Do these steps in order, then STOP. Step 1: call precrime__pipeline action=claim_task role=interactive-orchestrator with types listing only SHOW_HOT_LEEDZ. Step 2: if it returns a CLAIMED task, read the file skills/show-hot-leedz.md (print it with the developer shell) and follow it exactly against that claimed task id -- present each judged-hot booking and let the user pick share, email, or skip per booking, then complete that task id. If claim_task returns no task, reply exactly: No hot leedz to present. Goal? [number] = run workflow until that many new hot leedz / [ALL] = run continuously. then stop. You MAY use find, share_booking, dismiss_booking, and outreach draft tools. Do NOT claim worker tasks such as DRILL_DOWN or DRILL_CONTAINER or SCRAPE_SOURCE, and do NOT dispatch worker skills. EXCEPTION -- RUN THE WORKFLOW: the startup trigger message (run precrime choice=hot ...) is NOT a workflow request -- on startup ALWAYS do Step 1 first. Only when the user TYPES a later message asking to run, start, or continue the workflow, to fill the queue, or answering with a goal (a bare number, or ALL), you MUST immediately call precrime__pipeline with action=plan_tasks mode=workflow, adding targetHot=<N> for a number, targetHot=0 for ALL/continuous/'don't bother me', or targetHot=1 when no goal was stated (default: stop at the first new hot leed) -- this is the ONE permitted plan_tasks call and it overrides the startup rule above. Then reply exactly: Queue seeded -- conductor running (auto-stops after the goal when a number was given); ask for status anytime. Do not check status first, do not re-claim, do not explain, do not refuse."
 goto :launch
 
 :pick_workflow
@@ -337,9 +370,15 @@ set "GOOSE_TRIGGER=run precrime choice=workflow objective=%PRECRIME_OBJECTIVE% (
 :: issuing the one required plan_tasks call (it improvised start_session and stalled, leaving
 :: the conductor DORMANT with no work running). Issue plan_tasks(workflow) ourselves; the Node
 :: conductor then owns all dispatch and self-feeds. The goose session below is only for status.
+:: GOAL default (2026-07-19): RUN WORKFLOW means run until ONE new hot leed, then
+:: stop and surface it. No goal submenu -- the goal is steered MID-SESSION by telling
+:: the orchestrator "until 5 hot leedz" (targetHot=5) or "don't bother me / keep
+:: going" (targetHot=0 = continuous). Node counts ->hot promotions; zero model math.
+set "PRECRIME_TARGET_HOT=1"
 set "PRECRIME_PLAN_MODE=workflow"
 call :arm_conductor
-set "PRECRIME_SYS=You are the Pre-Crime orchestrator on Goose. The workflow has ALREADY been started for you (plan_tasks was issued by the launcher) and the Node conductor is now running all dispatch autonomously. This OVERRIDES any routing in GOOSE.md or init-wizard.md: do NOT read any skill file, do NOT call start_session, claim_task, or begin any session or cycle. Reply with exactly one line: Queue seeded -- conductor running; call status for a summary. Then STOP. EXCEPTION -- the ONLY time you call plan_tasks: if the user asks to run/loop until a specific NUMBER of hot leedz (e.g. 'until 5 hot leedz'), call precrime__pipeline action=plan_tasks mode=workflow targetHot=<that number> EXACTLY ONCE; the Node conductor then stops itself automatically once it has produced that many new hot leedz. If the user later asks for progress, call precrime__pipeline action=status and quote the result verbatim."
+:workflow_sys
+set "PRECRIME_SYS=You are the Pre-Crime orchestrator on Goose. The workflow has ALREADY been started for you (plan_tasks was issued by the launcher) and the Node conductor is now running all dispatch autonomously. This OVERRIDES any routing in GOOSE.md or init-wizard.md: do NOT read any skill file, do NOT call start_session, claim_task, or begin any session or cycle. ON THE FIRST TURN ONLY, reply with exactly one line: Queue seeded -- conductor running; call status for a summary. Then STOP. That line is the first-turn reply ONLY -- NEVER say it again on any later turn. ON EVERY LATER TURN: when the user asks for status, results, progress, a report, or a summary, call precrime__pipeline action=status and reply with ONLY the report field from its JSON result, copied verbatim (it is pre-formatted); add nothing else and never answer a status request from memory or with the Queue-seeded line. GOAL: the conductor is running with a goal of 1 new hot leed (default) -- it stops and goes dormant when found. EXCEPTION -- the ONLY time you call plan_tasks: when the user changes the GOAL mid-session. A number ('until 5 hot leedz') -> call precrime__pipeline action=plan_tasks mode=workflow targetHot=<that number> EXACTLY ONCE. Continuous ('don't bother me', 'keep going', 'no limit', 'run continuously') -> the same call with targetHot=0 EXACTLY ONCE. Reply one line confirming the goal. Never refuse a goal change."
 goto :launch
 
 :quit
@@ -351,7 +390,7 @@ exit /b 0
 :: the one critical call the cheap model kept getting wrong (improvising start_session, then
 :: stalling); the launcher owns it now. Failure is non-fatal (WARN) -- goose still launches.
 :arm_conductor
-powershell -NoProfile -ExecutionPolicy Bypass -Command "$b = @{ jsonrpc='2.0'; id=1; method='tools/call'; params=@{ name='pipeline'; arguments=@{ action='plan_tasks'; mode=$env:PRECRIME_PLAN_MODE; objective=$env:PRECRIME_OBJECTIVE } } } | ConvertTo-Json -Depth 8; try { Invoke-RestMethod -Uri 'http://127.0.0.1:5179/mcp' -Method Post -ContentType 'application/json' -Body $b -TimeoutSec 20 | Out-Null; Write-Host ('  Conductor primed: plan_tasks ' + $env:PRECRIME_PLAN_MODE + '.') } catch { Write-Host ('  WARN: could not prime conductor via MCP: ' + $_.Exception.Message) }"
+powershell -NoProfile -ExecutionPolicy Bypass -Command "$a = @{ action='plan_tasks'; mode=$env:PRECRIME_PLAN_MODE; objective=$env:PRECRIME_OBJECTIVE }; $th = 0; [void][int]::TryParse($env:PRECRIME_TARGET_HOT, [ref]$th); if ($th -gt 0) { $a.targetHot = $th }; $b = @{ jsonrpc='2.0'; id=1; method='tools/call'; params=@{ name='pipeline'; arguments=$a } } | ConvertTo-Json -Depth 8; try { Invoke-RestMethod -Uri 'http://127.0.0.1:5179/mcp' -Method Post -ContentType 'application/json' -Body $b -TimeoutSec 20 | Out-Null; $goal = ''; if ($th -gt 0) { $goal = ' (goal: ' + $th + ' new hot leedz, then auto-stop)' }; Write-Host ('  Conductor primed: plan_tasks ' + $env:PRECRIME_PLAN_MODE + $goal + '.') } catch { Write-Host ('  WARN: could not prime conductor via MCP: ' + $_.Exception.Message) }"
 exit /b
 
 :launch

@@ -42,10 +42,31 @@ The launcher injects `objective=<value>` into the trigger prompt (and may set `P
 |---|---|
 | `headless` | Read `__PROJECT_ROOT__/skills/init-wizard.md` with `mode=headless` and the detected objective. Wizard hands off to `__PROJECT_ROOT__/skills/headless_flow.md`. |
 | any of: `run`, `start`, `go`, `precrime`, `workflow`, `interactive`, `wizard` (and not `headless`) | Read `__PROJECT_ROOT__/skills/init-wizard.md` with `mode=interactive` and the detected objective (defaults to `hybrid`). |
-| Config-review questions ("show me the config") | Call `precrime__pipeline({ action:"status" })` and report. Do not launch anything. |
+| Status / config questions ("status", "how many hot leedz", "show me the config") | Call `precrime__pipeline({ action:"status" })` and output the `report` field **verbatim** — it is pre-formatted (HOT/BREWING/COLD + latest bookings + factlet/client lines). Do NOT re-summarize the JSON into prose. Add specific config fields only if the user explicitly asked about config. Do not launch anything. |
 | None of the above | Normal conversation. Do not launch. |
 
 The presence of `headless` is the only signal for headless mode. Detect objective by scanning the prompt for `objective=<value>` or one of `--marketplace` / `--outreach` / `--hybrid`. Never ask the user to disambiguate.
+
+**MID-SESSION workflow requests:** when the user says "run the workflow", "continue workflow",
+"start the workflow", "fill the queue", or "keep working" at ANY point in an existing session,
+the ONE correct action is a single `precrime__pipeline({ action:"plan_tasks", mode:"workflow" })`
+call — that arms the Node conductor, which does everything else. Then reply exactly:
+`Queue seeded — conductor running; ask for status anytime.` NEVER respond to a workflow request
+with `claim_task`, a bare status report, or a question. (Zero hot leedz + an empty task queue is
+not an error — it means the workflow has not been armed; arm it.)
+
+**USER STEERING (interactive mode exists for this — never refuse):** when the user gives a
+direction like "process the unprocessed factlets now", "only factlets", "run down the backlog,
+nothing else", call `precrime__pipeline({ action:"plan_tasks", mode:"workflow", focus:"factlets" })`
+and reply: `Focus locked: factlets only — no new tasks of other types until the backlog drains
+(auto-resumes, in-flight tasks finish).` "Resume normal work" / "clear focus" →
+`plan_tasks({ mode:"workflow", focus:"none" })`. GOAL steering works the same way: the default
+goal is 1 new hot leed (the conductor stops and goes dormant when found). "until 5 hot leedz" →
+`plan_tasks({ mode:"workflow", targetHot:5 })`; "don't bother me" / "keep going" / "run
+continuously" → `plan_tasks({ mode:"workflow", targetHot:0 })`. Confirm in one line. NEVER tell
+the user you cannot steer the conductor — focus and targetHot are exactly those levers.
+
+**Browser — you DO have it, through the pipeline:** when the user asks you to look at Facebook, Instagram, or ANY page (especially one behind their login), call `precrime__pipeline({ action:"browse", url:"<https url>" })` — the server drives the user's OWN logged-in Chrome through the mcp-chrome bridge in a transient session and returns the rendered page text. Never answer "I can't use Chrome" — browse IS your Chrome access. The same bridge also powers the background fb/ig SCRAPE workers (serialized server-side); if browse returns "bridge busy", retry once after a moment. Use tavily for public-web search; browse for logged-in or user-pointed pages. You have no `chrome__*` goose tools and must NEVER `curl` the bridge directly.
 
 **Reading a skill file:**
 1. Open with `developer__shell(command="type \"<absolute path>\"")` first. The `type`
@@ -65,10 +86,9 @@ The skill file is the source of truth for that skill, not your prior knowledge.
 - **Worker** = LLM skill that executes exactly one claimed `Task` and stops:
   - `SCRAPE_SOURCE` -> `__PROJECT_ROOT__/skills/url-loop.md`
   - `ENRICH_CLIENT` -> `__PROJECT_ROOT__/skills/enrichment-agent.md`
-  - `APPLY_FACTLET` -> `__PROJECT_ROOT__/skills/apply-factlet.md`
   - `DRILL_DOWN` -> `__PROJECT_ROOT__/skills/drill-down.md` (close a near-hot booking: find its specific missing fields; research-only, never contacts anyone)
   - `SHOW_HOT_LEEDZ` -> `__PROJECT_ROOT__/skills/show-hot-leedz.md`
-- **Server-handled types**: `SHARE_BOOKING`, `JUDGE_AFFECTED`, `DISCOVER_SOURCES`. The orchestrator (`headless_flow.md`) calls `share_booking` / `judge_affected` / `tavily_search`+`add_sources` and completes the Task itself -- no worker skill exists for these.
+- **Server-handled types**: `SHARE_BOOKING`, `JUDGE_AFFECTED`, `DISCOVER_SOURCES`, `APPLY_FACTLET` (in-process since 2026-07-19: one LLM call applies a factlet to a BATCH of clients — no goose worker). The orchestrator (`headless_flow.md`) calls `share_booking` / `judge_affected` / `tavily_search`+`add_sources` and completes the Task itself -- no worker skill exists for these.
 - **Outreach Task**: `DRAFT_OUTREACH` -> dispatched through `__PROJECT_ROOT__/skills/outreach-drafter.md`. The Planner only schedules `DRAFT_OUTREACH` when objective is `outreach` or `hybrid`. The drafter composes via Gmail and (in headless) saves a Gmail draft rather than auto-sending unless explicitly told otherwise.
 - **Judge** = `precrime__pipeline({ action:"judge_affected" })`. The only sanctioned scoring caller in the new architecture. Workers always pass `judge:false` to `pipeline.save`.
 - **Presenter** = `show-hot-leedz.md` (interactive) -- reads judged state, routes user-approved shares through `share_booking`.

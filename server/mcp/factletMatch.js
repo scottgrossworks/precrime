@@ -151,6 +151,7 @@ async function computeNearHotBookings() {
         mode: bookingActionToMode(RUNTIME_CONFIG && RUNTIME_CONFIG.defaultBookingAction),
         defaultTrade: (VALUE_PROP && VALUE_PROP.trade) || (RUNTIME_CONFIG && RUNTIME_CONFIG.defaultTrade) || '',
         genericEmailPrefixes: (SCORING.booking && SCORING.booking.genericEmailPrefixes) || [],
+        bannedTerms: (VALUE_PROP && VALUE_PROP.bannedTerms) || [],   // banned categories are cold forever (retro-enforced in classify)
         orgNameTokens: (SCORING.classification && SCORING.classification.orgNameTokens) || []
     };
     const bookings = await prisma.booking.findMany({
@@ -172,11 +173,18 @@ async function computeNearHotBookings() {
         ranked.push({
             bookingId: b.id, clientId: b.clientId,
             missing, missingCount: missing.length,
-            startDate: b.startDate, daysToEvent
+            startDate: b.startDate, daysToEvent,
+            // Desirability class (private 0 > direct 1 > container-minted 2 > container 3):
+            // a private one-to-one booking is the ideal client for ANY vendor, so it gets
+            // the drill/enrich budget before container-derived work regardless of closeness.
+            classRank: classification.eventClassRank(b),
+            eventClass: classification.classifyEventClass(b)
         });
     }
-    // Closeness first (fewest missing), then urgency (soonest event).
-    ranked.sort((a, b) => (a.missingCount - b.missingCount) || (a.daysToEvent - b.daysToEvent));
+    // Class first (private beats container-derived no matter what), then closeness
+    // (fewest missing), then urgency (soonest event). DRILL_DOWN budget drains this
+    // list top-down, so the ordering IS the spend priority.
+    ranked.sort((a, b) => (a.classRank - b.classRank) || (a.missingCount - b.missingCount) || (a.daysToEvent - b.daysToEvent));
     return ranked;
 }
 

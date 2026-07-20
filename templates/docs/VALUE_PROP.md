@@ -202,6 +202,22 @@ Example: "digital art commission", "graphic design job posting"]*
 
 ---
 
+## SERVICE AREA DETAILS
+
+<!-- MACHINE-ENFORCED geography. The parser extracts every bare 5-digit zip AND every
+     "900xx"-style 3-digit prefix written in this section into serviceZipPrefixes.
+     When the list is non-empty the server enforces it PROCEDURALLY: pipeline.save
+     refuses new bookings (and all-out-of-area new clients) whose zip starts outside
+     these prefixes, and the judge forces such bookings COLD FOREVER (reason
+     out_of_area) on every re-judge sweep. Bookings with no zip are exempt here but
+     can never go hot (location_with_zip) and the LLM judge also receives Geography.
+     Leave the section empty to disable zip-based enforcement. -->
+
+*[Describe the service area, then list allowed zips or prefixes, e.g.:]*
+*[**Zip prefixes (machine-enforced):** 900xx 913xx 914xx]*
+
+---
+
 ## SOURCE DISCOVERY
 
 Everything an agent needs to CONSTRUCT a source-finding prompt should be above —

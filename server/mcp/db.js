@@ -12,7 +12,9 @@ const prisma = new PrismaClient();
 // JUDGE_AFFECTED, SHOW_HOT_LEEDZ, SHARE_BOOKING are handled in-process by
 // the MCP server pipeline actions -- no external worker skill exists for them.
 const WORKER_SKILL_MAP = {
-    APPLY_FACTLET:       'apply-factlet.md',
+    // APPLY_FACTLET moved to IN_PROCESS_TYPES (2026-07-19): one direct LLM call
+    // applies a factlet to a BATCH of clients (workers/ApplyFactletWorker.js) --
+    // no goose spawn per (factlet, client) pair, no ORPHAN failure mode.
     ENRICH_CLIENT:       'enrichment-agent.md',
     SCRAPE_SOURCE:       'url-loop.md',
     FIND_CLIENT_SOURCES: 'find-client-sources.md',
@@ -26,6 +28,26 @@ const WORKER_SKILL_MAP = {
 
 const WORKER_TYPES = Object.keys(WORKER_SKILL_MAP);
 
+// Browser-gated channels resolve to their own harvester skill instead of url-loop:
+// fb/ig cannot render via Tavily in ANY mode -- they need the user's logged-in Chrome,
+// driven through the mcp-chrome bridge (127.0.0.1:12306). The planner only emits fb/ig
+// SCRAPE_SOURCE tasks when precrime_config.json chromeScrape=true, and the conductor
+// (a) adds the `chrome` extension to these workers' recipes and (b) serializes them --
+// the bridge accepts ONE client at a time.
+const CHANNEL_SKILL_OVERRIDES = {
+    fb: 'fb-factlet-harvester/SKILL.md',
+    ig: 'ig-factlet-harvester/SKILL.md'
+};
+
+// SCRAPE_SOURCE task input carries { url, channel }; other types have no channel.
+function taskChannel(row) {
+    if (!row || row.type !== 'SCRAPE_SOURCE' || row.input == null) return null;
+    try {
+        const inp = typeof row.input === 'string' ? JSON.parse(row.input) : row.input;
+        return (inp && inp.channel) || null;
+    } catch (_) { return null; }
+}
+
 // Task types the conductor executes IN-PROCESS (via the runInProcess hook) rather
 // than by spawning a worker. JUDGE_AFFECTED promotes bookings to hot (the
 // hot-leedz maker); SHOW_HOT_LEEDZ marks hot leedz ready to present. Both gate
@@ -35,7 +57,9 @@ const WORKER_TYPES = Object.keys(WORKER_SKILL_MAP);
 // BOUNCE_SWEEP polls Gmail for hard-bounce notices and dead-flags the undeliverable
 // clients (procedural, zero-model, like LAST_30_DAYS). Runs in-process; the conductor
 // treats it as a background job (network I/O) so it never blocks worker dispatch.
-const IN_PROCESS_TYPES = ['JUDGE_AFFECTED', 'SHOW_HOT_LEEDZ', 'LAST_30_DAYS', 'BOUNCE_SWEEP'];
+// APPLY_FACTLET (2026-07-19): one bounded LLM call per factlet applied to a batch
+// of clients (workers/ApplyFactletWorker.js); background so it never blocks dispatch.
+const IN_PROCESS_TYPES = ['JUDGE_AFFECTED', 'SHOW_HOT_LEEDZ', 'LAST_30_DAYS', 'BOUNCE_SWEEP', 'APPLY_FACTLET'];
 
 // Attach a HUMAN label to each task row: the client's company/name/email, or the
 // booking's "title — company". Conductor log lines print this instead of opaque
@@ -69,7 +93,16 @@ async function conductorGetReadyTasks(limit) {
         take:    limit || 10
     });
     await attachTaskLabels(rows);
-    return rows.map(r => ({ ...r, skillFile: WORKER_SKILL_MAP[r.type] }));
+    return rows.map(r => {
+        const ch = taskChannel(r);
+        return {
+            ...r,
+            skillFile: (ch && CHANNEL_SKILL_OVERRIDES[ch]) || WORKER_SKILL_MAP[r.type],
+            // Set only for channels that need the single-client chrome bridge; the
+            // conductor uses it to gate on chromeScrape and serialize to one worker.
+            browserChannel: (ch && CHANNEL_SKILL_OVERRIDES[ch]) ? ch : null
+        };
+    });
 }
 
 // Poll for ready in-process Tasks (JUDGE_AFFECTED, SHOW_HOT_LEEDZ). Oldest first.
@@ -142,6 +175,7 @@ async function createTaskRow(type, fields) {
 module.exports = {
     prisma,
     WORKER_SKILL_MAP,
+    CHANNEL_SKILL_OVERRIDES,
     IN_PROCESS_TYPES,
     createTaskRow,
     conductorGetReadyTasks,

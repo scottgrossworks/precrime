@@ -106,10 +106,50 @@ test('classifyEventClass: tournaments / championships -> container (vendors + cr
     assert.equal(classifyEventClass({ title: 'SoCal Cup: The Showcase (Volleyball)' }), 'container');
 });
 
-test('classifyEventClass: direct is the default (single private host)', () => {
+test('classifyEventClass: direct is the default (single non-private host)', () => {
     assert.equal(classifyEventClass({ title: 'Acme Corp holiday party', description: 'private company event' }), 'direct');
-    assert.equal(classifyEventClass({ title: 'Smith wedding reception' }), 'direct');
-    assert.equal(classifyEventClass({ title: 'Mateo 5th birthday party' }), 'direct');
+    assert.equal(classifyEventClass({ title: 'Annual charity gala dinner' }), 'direct');
+});
+
+test('classifyEventClass: private life-cycle celebrations -> private (the ideal client)', () => {
+    assert.equal(classifyEventClass({ title: 'Smith wedding reception' }), 'private');
+    assert.equal(classifyEventClass({ title: 'Mateo 5th birthday party' }), 'private');
+    assert.equal(classifyEventClass({ title: 'Sofia quinceanera celebration' }), 'private');
+    assert.equal(classifyEventClass({ title: 'Jacob bar mitzvah', description: 'temple reception to follow' }), 'private');
+    assert.equal(classifyEventClass({ title: 'Ava sweet 16' }), 'private');
+    assert.equal(classifyEventClass({ title: 'graduation party for USC senior' }), 'private');
+    assert.equal(classifyEventClass({ title: 'backyard baby shower' }), 'private');
+    assert.equal(classifyEventClass({ title: 'Lincoln High prom 2027' }), 'private');
+});
+
+test('classifyEventClass: container beats private on overlap (bridal expo is a container)', () => {
+    assert.equal(classifyEventClass({ title: 'LA Bridal Expo 2026', description: 'wedding vendors and planning' }), 'container');
+    assert.equal(classifyEventClass({ title: 'Wedding Expo at the convention center' }), 'container');
+    assert.equal(classifyEventClass({ title: 'Birthday Bash Festival' }), 'container');
+});
+
+test('eventClassRank: private 0 < direct 1 < container-minted 2 < container 3', () => {
+    const { eventClassRank } = require('./classification');
+    assert.equal(eventClassRank({ title: 'Smith wedding reception' }), 0);
+    assert.equal(eventClassRank({ title: 'Acme Corp holiday party' }), 1);
+    assert.equal(eventClassRank({ title: 'LA Auto Show 2026', source: 'container:abc123' }), 2);
+    assert.equal(eventClassRank({ title: 'LA Auto Show 2026' }), 3);
+});
+
+test('classify: banned terms are cold forever (retro-enforcement)', () => {
+    const bOpts = { ...opts, bannedTerms: ['comic con', 'san diego'] };
+    const r1 = classify(hotClient(), { ...hotBooking(), title: 'L.A. Comic Con 2027' }, bOpts);
+    assert.equal(r1.state, 'cold');
+    assert.equal(r1.reason, 'banned_term');
+    // organizer variant caught via client company
+    const r2 = classify({ ...hotClient(), company: 'Comic Con Productions' }, hotBooking(), bOpts);
+    assert.equal(r2.state, 'cold');
+    // location hit, case-insensitive
+    const r3 = classify(hotClient(), { ...hotBooking(), location: 'San Diego Convention Center' }, bOpts);
+    assert.equal(r3.state, 'cold');
+    // no banned term -> unaffected
+    const r4 = classify(hotClient(), hotBooking(), bOpts);
+    assert.notEqual(r4.state, 'cold');
 });
 
 test('classifyEventClass: empty/null is direct, never throws', () => {

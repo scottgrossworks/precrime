@@ -30,6 +30,11 @@ const DEFAULTS = Object.freeze({
     deploymentName: 'MyProject',
     databaseFile:   'data/myproject.sqlite',
     defaultMode:    'interactive',
+    // Background fb/ig SCRAPE workers via the mcp-chrome bridge (:12306). Default
+    // OFF (requires mcp-chrome-bridge + extension). The bridge is single-client
+    // and the PIPELINE owns it: the conductor serializes browser workers to one
+    // at a time, in every mode. The orchestrator has no chrome tools.
+    chromeScrape: false,
     apiKeys: {
         openai:         '',
         anthropic:      '',
@@ -93,7 +98,13 @@ function resolveConfigPath(opts) {
 }
 
 function mergeDefaults(raw, fallbacks) {
-    const out = {};
+    // Start from a shallow copy of raw so UNKNOWN top-level keys PASS THROUGH.
+    // The old whitelist-only build silently dropped every key it didn't name --
+    // chromeScrape, bookingAction, and tasks.workflowStrategy all read as
+    // undefined server-side no matter what the user configured. Forbidden
+    // VALUE_PROP keys are already stripped (assertNoValuePropFields) before
+    // this runs, so passthrough leaks nothing identity-shaped.
+    const out = Object.assign({}, raw);
 
     function pick(key, defVal, label) {
         if (raw[key] === undefined || raw[key] === null) {
@@ -107,11 +118,12 @@ function mergeDefaults(raw, fallbacks) {
     pick('deploymentName', DEFAULTS.deploymentName);
     pick('databaseFile',   DEFAULTS.databaseFile);
     pick('defaultMode',    DEFAULTS.defaultMode);
+    pick('chromeScrape',   DEFAULTS.chromeScrape);
 
     out.apiKeys = Object.assign({}, DEFAULTS.apiKeys, raw.apiKeys || {});
     out.llm     = Object.assign({}, DEFAULTS.llm,     raw.llm     || {});
 
-    out.tasks = {
+    out.tasks = Object.assign({}, raw.tasks || {}, {
         limits: Object.assign({},
             DEFAULTS.tasks.limits,
             (raw.tasks && raw.tasks.limits) || {}),
@@ -119,7 +131,7 @@ function mergeDefaults(raw, fallbacks) {
         sessionBudgets: Object.assign({},
             DEFAULTS.tasks.sessionBudgets,
             (raw.tasks && raw.tasks.sessionBudgets) || {})
-    };
+    });
 
     out.recycler = Object.assign({}, DEFAULTS.recycler, raw.recycler || {});
     out.paths    = Object.assign({}, DEFAULTS.paths,    raw.paths    || {});
@@ -192,7 +204,12 @@ function loadPrecrimeConfig(opts) {
         try {
             const text = fs.readFileSync(cfgPath, 'utf8');
             raw = JSON.parse(text);
-            if (raw && typeof raw === 'object') delete raw._comment;
+            // Strip every "_"-prefixed annotation key (_comment, _*_note, ...):
+            // they are documentation for humans editing the JSON, not config, and
+            // must not ride the unknown-key passthrough into PRECRIME_CONFIG.
+            if (raw && typeof raw === 'object') {
+                for (const k of Object.keys(raw)) if (k.startsWith('_')) delete raw[k];
+            }
         } catch (e) {
             fallbacks.push(`precrime_config.json parse error (${e.message}), using defaults`);
             raw = {};

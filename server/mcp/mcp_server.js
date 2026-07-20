@@ -60,7 +60,7 @@ if (!fs.existsSync(resolvedDbPath)) {
 
 // Runtime/API config (Subproject 10). Optional file; loader returns defaults
 // if absent so the server still boots during the transition.
-const { PRECRIME_CONFIG, RUNTIME_CONFIG, VALUE_PROP, SCORING, PROMPTS } = require('./runtime');
+const { PRECRIME_CONFIG, RUNTIME_CONFIG, VALUE_PROP, SCORING, PROMPTS, CHROME_SCRAPE_ACTIVE } = require('./runtime');
 
 // DATABASE_URL is now guaranteed to be a `file:` URL pointing at an existing DB
 // (the safety block above falls back or exits). dbPath is reused in startup logs.
@@ -300,11 +300,24 @@ async function handlePipeline(id, params) {
         case 'add_sources':    return await pipelineAddSources(id, args.entries);
         case 'import_sources': return await pipelineImportSources(id);
         case 'work_status':    return await pipelineWorkStatus(id);
+        case 'browse': {
+            // Interactive Chrome (2026-07-19): fetch a page through the user's OWN
+            // logged-in Chrome via a transient mcp-chrome bridge session (chromeBridge.js).
+            // This is how the orchestrator reaches Facebook/Instagram/any signed-in site
+            // on user request -- it holds no bridge connection of its own.
+            const url = args && args.url ? String(args.url).trim() : '';
+            if (!/^https?:\/\//i.test(url)) {
+                return createErrorResponse(id, -32602, 'browse requires url (http/https).');
+            }
+            const r = await require('./chromeBridge').browseUrl(url);
+            if (!r.ok) return createErrorResponse(id, -32603, `browse failed: ${r.error}`);
+            return createSuccessResponse(id, JSON.stringify({ url: r.url, text: r.text }));
+        }
         case 'mark_sent':      return await pipelineMarkSent(id, args);
         case 'mark_bounced':   return await pipelineMarkBounced(id, args);
         case 'bounce_sweep':   return await pipelineBounceSweep(id, args);
         default:
-            return createErrorResponse(id, -32602, `Unknown pipeline action: "${action}". Must be: status, configure, get_config, get_task, next, save, delete, rescore, resolve_dates, share_booking, dismiss_booking, mark_sent, mark_bounced, bounce_sweep, report_session, audit_session, next_source, mark_source, add_sources, import_sources, work_status, judge_affected, plan_tasks, claim_task, complete_task, tasks, recycler.`);
+            return createErrorResponse(id, -32602, `Unknown pipeline action: "${action}". Must be: status, configure, get_config, get_task, next, save, delete, rescore, resolve_dates, share_booking, dismiss_booking, mark_sent, mark_bounced, bounce_sweep, browse, report_session, audit_session, next_source, mark_source, add_sources, import_sources, work_status, judge_affected, plan_tasks, claim_task, complete_task, tasks, recycler.`);
     }
 }
 
@@ -592,6 +605,60 @@ async function pipelineStatus(id) {
         }
     });
 
+    // Latest bookings (most-recently discovered) — for the status report's
+    // "who / where / when" rows. status previously exposed only counts.
+    const latestBookings = await prisma.booking.findMany({
+        orderBy: { createdAt: 'desc' },
+        take: 3,
+        select: {
+            title: true, location: true, startDate: true, status: true, createdAt: true,
+            client: { select: { name: true, company: true } }
+        }
+    });
+
+    // Factlet processing visibility. The raw factlet.count() is a rolling
+    // ~staleDays window (evidence already folded into dossiers but not yet aged
+    // out), NOT a backlog. The meaningful number is `unprocessed` — live
+    // factlets with no terminal APPLY_FACTLET task; discovery pauses when it
+    // crosses the backlog threshold. Surface it so "72 total" stops reading as
+    // an alarm. Non-fatal if the intake computation fails.
+    let factletState = null;
+    try { factletState = await computeWorkflowIntakeState(); } catch (_) { /* non-fatal */ }
+    const liveFactlets = factletState ? factletState.liveFactletCount : null;
+    const unprocessedFactlets = factletState ? factletState.unprocessedFactletCount : null;
+    const factletPause = factletState ? factletState.factletBacklogDiscoveryPause : null;
+
+    // Deterministic, pre-formatted report. The interactive model echoes this
+    // verbatim (see GOOSE.md status route) instead of free-forming prose from
+    // the JSON — that free-forming produced the wall-of-text status.
+    const pad = (s, n) => String(s == null ? '' : s).padEnd(n);
+    const clip = (s, n) => { const v = String(s == null ? '' : s); return v.length > n ? v.slice(0, n - 1) + '…' : v; };
+    const bookingRow = (b, i) => {
+        const who = (b.client && (b.client.name || b.client.company)) || b.title || 'Unknown';
+        const where = b.location || '—';
+        const when = b.startDate ? new Date(b.startDate).toISOString().slice(0, 10)
+                   : (b.createdAt ? new Date(b.createdAt).toISOString().slice(0, 10) : '—');
+        return `  ${i + 1}. ${pad(clip(who, 24), 24)}  ${pad(clip(where, 30), 30)}  ${when}`;
+    };
+    const bookingLines = latestBookings.length
+        ? latestBookings.map(bookingRow).join('\n')
+        : '  (none yet)';
+    const factletLine = unprocessedFactlets == null
+        ? `${totalFactlets} total`
+        : `${totalFactlets} total  ·  ${unprocessedFactlets} unprocessed (of ${liveFactlets} live; discovery pauses at ${factletPause})`;
+    const report = [
+        'BOOKINGS',
+        `  HOT      ${bookingsHot}`,
+        `  BREWING  ${bookingsBrewing}`,
+        `  COLD     ${bookingsCold}`,
+        '',
+        'LATEST BOOKINGS  (client · location · date)',
+        bookingLines,
+        '',
+        `FACTLETS  ${factletLine}`,
+        `CLIENTS   ${totalClients}  ·  drafts: ${brewing} brewing / ${ready} ready / ${sent} sent`
+    ].join('\n');
+
     // Completeness: check if config has the fields needed for current mode
     const completeness = {};
     if (cfg) {
@@ -612,9 +679,11 @@ async function pipelineStatus(id) {
     // Redact runtime secrets from the status payload (llmApiKey / leedzSession).
     const { llmApiKey, leedzSession, ...safeCfg } = cfg;
     return createSuccessResponse(id, JSON.stringify({
+        report,
         config: safeCfg,
         stats: {
             totalClients, totalFactlets,
+            factlets: { total: totalFactlets, live: liveFactlets, unprocessed: unprocessedFactlets, backlogPauseAt: factletPause },
             drafts: { brewing, ready, sent },
             contactGate: { pass: contactGatePass, fail: contactGateFail },
             dossierScores: { high: dossierHigh, mid: dossierMid, low: dossierLow, unscored: dossierNone },
@@ -623,7 +692,8 @@ async function pipelineStatus(id) {
                 cold: bookingsCold,
                 brewing: bookingsBrewing,
                 hot: bookingsHot,
-                shared: bookingsShared
+                shared: bookingsShared,
+                latest: latestBookings
             }
         },
         completeness,
@@ -675,8 +745,14 @@ async function pipelineWorkStatus(id) {
         recommendation = 'discover_sources';
     }
 
+    const _cond = conductorStatus();   // live running workers + armed/resting/halted state (same process)
     return createSuccessResponse(id, JSON.stringify({
-        conductor: conductorStatus(),   // live running workers + armed/resting/halted state (same process)
+        conductor: _cond,
+        // Explicit, impossible-to-miss dormancy flag: without it the model saw 0 hot +
+        // a quiet conductor and INVENTED "the background conductor is already working".
+        ...(_cond && _cond.armed ? {} : { conductorWarning:
+            'Conductor is DORMANT: NO background work (scrape/enrich/judge) is running or will run. '
+            + 'To start it, call precrime__pipeline({ action:"plan_tasks", mode:"workflow" }) once.' }),
         sources,
         clients: { thin, needs_enrichment: needsEnrichment, ready_drafts: readyDrafts },
         bookings: { hot: hotBookings, brewing: brewingBookings },
@@ -720,6 +796,7 @@ async function pipelineGetConfig(id, args) {
             email:            VALUE_PROP.email            || cfg.companyEmail || '',
             geography:        VALUE_PROP.geography        || '',
             serviceZips:      VALUE_PROP.serviceZips      || [],
+            serviceZipPrefixes: VALUE_PROP.serviceZipPrefixes || [],
             pitch:            VALUE_PROP.pitch            || cfg.businessDescription || '',
             whyUs:            VALUE_PROP.whyUs            || [],
             buyerRoles:       VALUE_PROP.buyerRoles       || [],
@@ -882,7 +959,7 @@ const _TASK_TYPE_LIMITS_DEFAULT = {
     SCRAPE_SOURCE:    5,
     APPLY_FACTLET:    5,
     DRILL_DOWN:       3,   // concurrent near-hot drill-downs (reserved slice)
-    DRILL_CONTAINER:  3,   // concurrent container drills (organizer + vendor expansion; heavier, conservative)
+    DRILL_CONTAINER:  1,   // concurrent container drills. PRIVATE > public (2026-07-19): containers get one slot, private-demand scraping and drill-downs get the rest
     LAST_30_DAYS:     1,   // SERIALIZED: concurrent last30days python workers collide on a shared file ("being used by another process" / exit 1). One at a time until the script uses per-run isolation.
     FIND_CLIENT_SOURCES: 5,
     ENRICH_CLIENT:    10,
@@ -905,7 +982,7 @@ const _TASK_SESSION_BUDGETS_DEFAULT = {
     SCRAPE_SOURCE:    25,
     APPLY_FACTLET:    50,
     DRILL_DOWN:       30,   // total near-hot drill-downs per session
-    DRILL_CONTAINER:  20,   // total container drills per session (tune after first live run)
+    DRILL_CONTAINER:  5,   // total container drills per session. PRIVATE > public (2026-07-19): containers are the fallback, not the diet
     LAST_30_DAYS:     12,   // total last30days seeds per session (cheap search; let it run)
     FIND_CLIENT_SOURCES: 25,
     ENRICH_CLIENT:    50,
@@ -1155,6 +1232,10 @@ let SCORING_CRITERIA_CHANGED_AT = 0;   // epoch ms; 0 = criteria unchanged this 
 function initScoringFingerprint() {
     const inputs = [
         path.join(PRECRIME_ROOT, 'DOCS', 'VALUE_PROP.md'),
+        // PROMPTS.json carries the judgeLeed prompt + mode guidance -- editing it changes
+        // every verdict, so it is scoring lens (was missing: judge-prompt edits never
+        // triggered the auto re-judge; found via the Angels Fiesta stuck-brewing case).
+        path.join(PRECRIME_ROOT, 'DOCS', 'PROMPTS.json'),
         path.join(PRECRIME_ROOT, 'precrime_config.json'),
         path.join(__dirname, 'classification.js'),
         path.join(__dirname, 'judge.js'),
@@ -1166,18 +1247,33 @@ function initScoringFingerprint() {
         catch (_) { h.update(f + '\0MISSING'); }
     }
     const fp = h.digest('hex');
+    // File format: line 1 = fingerprint hash, line 2 = changedAt epoch ms (the re-judge
+    // floor). The floor MUST be persisted alongside the hash: it used to live only in
+    // memory while the hash was written eagerly at detection time, so a restart between
+    // lens-change detection and the actual sweep (e.g. dormant hot-only sessions in
+    // between) made the next boot read "unchanged" and zero the floor -- the one-time
+    // re-judge of the whole brewing backlog was silently dropped (observed 2026-07-14).
+    // Persisting the floor is self-limiting, not churn: each booking is re-judged at
+    // most once after a change, because its lastJudged watermark then exceeds the floor.
     const fpFile = path.join(path.dirname(dbPath), '.scoring_fingerprint');
-    let prev = null;
-    try { prev = fs.readFileSync(fpFile, 'utf8').trim(); } catch (_) {}
+    let prev = null, prevChangedAt = 0;
+    try {
+        const lines = fs.readFileSync(fpFile, 'utf8').split(/\r?\n/);
+        prev = (lines[0] || '').trim() || null;
+        prevChangedAt = parseInt((lines[1] || '').trim(), 10) || 0;
+    } catch (_) {}
     if (prev !== fp) {
         SCORING_CRITERIA_CHANGED_AT = Date.now();
-        try { fs.writeFileSync(fpFile, fp); }
+        try { fs.writeFileSync(fpFile, `${fp}\n${SCORING_CRITERIA_CHANGED_AT}`); }
         catch (e) { logError(`scoring fingerprint write failed: ${e.message}`); }
         console.error(prev === null
             ? '[scoring] no prior fingerprint — baselining; eligible bookings judged fresh this run.'
             : '[scoring] criteria changed since last run — auto re-judging eligible bookings against the new lens (no prompt).');
     } else {
-        console.error('[scoring] criteria unchanged since last run.');
+        SCORING_CRITERIA_CHANGED_AT = prevChangedAt;
+        console.error(prevChangedAt
+            ? `[scoring] criteria unchanged; persisted re-judge floor active (${new Date(prevChangedAt).toISOString()}) — bookings not judged since then get one re-judge.`
+            : '[scoring] criteria unchanged since last run.');
     }
 }
 
@@ -1334,6 +1430,20 @@ async function runInProcessTask(task) {
         await pipelineCompleteTask('inproc-bounce', { taskId: task.id, status: 'done', output: result });
         return { type: task.type, summary: result.summary };
     }
+    if (task.type === 'APPLY_FACTLET') {
+        // In-process batch apply (2026-07-19): ONE bounded LLM call applies the factlet
+        // to every client in task.input.clientIds; results are written through
+        // pipelineSave (verify-at-enrichment + service-area + banned-term rules hold).
+        // Replaces one spawned goose agent PER (factlet, client) pair. The completed
+        // output carries the batch's clientIds/bookingIds, so the planner's judge stage
+        // enqueues ONE JUDGE_AFFECTED covering all affected clients of this factlet.
+        const { run } = require('./workers/ApplyFactletWorker');
+        const r = await run(task, { pipelineSave });
+        await pipelineCompleteTask('inproc-apply', {
+            taskId: task.id, status: r.status || 'done', output: r.output || {}, error: r.error
+        });
+        return { type: task.type, summary: r.summary };
+    }
     if (task.type === 'LAST_30_DAYS') {
         // Procedural (zero-model) worker: runs the last30days CLI, parses/filters its JSON in
         // Node, saves high-score survivors as Clients, and queues DRILL_DOWN. See
@@ -1351,7 +1461,50 @@ async function runInProcessTask(task) {
     return { type: task.type, error: 'no_handler' };
 }
 
+// SERIALIZE planner passes (2026-07-19). The conductor fires a replan on every
+// task completion, so replans OVERLAP; each pass runs the read-then-create dedup
+// check before the other commits, and the same Factlet gets TWO APPLY_FACTLET
+// workers (measured: 12 duplicate done/done pairs out of 60 tasks in 4h -- ~40%
+// of the batch was duplicate LLM spend). One planner pass at a time; an
+// overlapping call is a no-op the conductor reads as "0 created this cycle".
+let PLAN_TASKS_IN_FLIGHT = false;
+
+// PLANNER FOCUS (2026-07-19) -- the user's mid-session steering lever. In
+// interactive mode "process the factlets, nothing else" becomes
+// plan_tasks({ focus:"factlets" }): every replan (including the conductor's
+// self-feed) then refuses budget to all NON-factlet task types until the
+// unprocessed-factlet backlog drains to the discovery-pause threshold, at which
+// point focus auto-clears and normal planning resumes. focus:"none" clears it
+// immediately. In-flight tasks are never cancelled -- focus only stops NEW work.
+let PLANNER_FOCUS = null;
+const FOCUS_ALLOW = {
+    factlets: new Set(['APPLY_FACTLET', 'JUDGE_AFFECTED', 'BOUNCE_SWEEP', 'SHOW_HOT_LEEDZ'])
+};
+
 async function pipelinePlanTasks(id, args) {
+    // Focus is set/cleared BEFORE the reentrancy latch so a user directive lands
+    // even when a conductor replan is mid-pass (it applies from the next pass).
+    if (id !== 'conductor-replan' && args && args.focus !== undefined) {
+        const f = args.focus === null ? 'none' : String(args.focus).toLowerCase();
+        if (f === 'none' || f === 'clear') {
+            if (PLANNER_FOCUS) logInfo(`planner focus CLEARED by user (was ${PLANNER_FOCUS}).`);
+            PLANNER_FOCUS = null;
+        } else if (FOCUS_ALLOW[f]) {
+            PLANNER_FOCUS = f;
+            logInfo(`planner focus SET: ${f} -- only ${[...FOCUS_ALLOW[f]].join('/')} until the backlog drains.`);
+        } else {
+            return createErrorResponse(id, -32602, `plan_tasks focus must be one of: ${Object.keys(FOCUS_ALLOW).join(', ')}, none.`);
+        }
+    }
+    if (PLAN_TASKS_IN_FLIGHT) {
+        return createSuccessResponse(id, JSON.stringify({ counts: {}, skipped: 'plan_in_flight', focus: PLANNER_FOCUS }));
+    }
+    PLAN_TASKS_IN_FLIGHT = true;
+    try { return await pipelinePlanTasksInner(id, args); }
+    finally { PLAN_TASKS_IN_FLIGHT = false; }
+}
+
+async function pipelinePlanTasksInner(id, args) {
     const mode = args.mode || 'workflow';     // 'workflow' | 'hot_only' | 'headless'
 
     // ARM the conductor on the orchestrator's first real workflow/headless plan
@@ -1416,6 +1569,14 @@ async function pipelinePlanTasks(id, args) {
     const workflowState = (mode === 'workflow' || mode === 'headless')
         ? await computeWorkflowIntakeState()
         : null;
+    // FOCUS auto-clear: once the unprocessed-factlet backlog drains to the
+    // discovery-pause threshold, the user's "factlets only" directive is
+    // satisfied -- release the planner back to normal work automatically.
+    if (PLANNER_FOCUS === 'factlets' && workflowState
+        && workflowState.unprocessedFactletCount <= workflowState.factletBacklogDiscoveryPause) {
+        logInfo(`planner focus AUTO-CLEARED: factlet backlog drained to ${workflowState.unprocessedFactletCount} (<= ${workflowState.factletBacklogDiscoveryPause}). Normal planning resumes.`);
+        PLANNER_FOCUS = null;
+    }
     // shouldPlanDiscovery gates only the genuinely-unbounded new-input stages
     // (DISCOVER_SOURCES, LAST_30_DAYS): pause open-ended discovery while a
     // factlet backlog is being consumed. ENRICH_CLIENT and SCRAPE_SOURCE are
@@ -1445,6 +1606,12 @@ async function pipelinePlanTasks(id, args) {
     // (total-creation cap for this Session). Returns the effective max plus
     // diagnostics for inclusion in the response.
     async function createBudget(type) {
+        // FOCUS gate: while a user focus is active, non-allowed types get zero
+        // budget -- this single choke point is consulted by EVERY planner stage,
+        // so no stage needs its own focus check.
+        if (PLANNER_FOCUS && !FOCUS_ALLOW[PLANNER_FOCUS].has(type)) {
+            return { eff: 0, limRem: 0, budRem: 0, openHave: 0, sessHave: 0, limit: 0, budget: 0, focusSuppressed: true };
+        }
         const lim = TASK_TYPE_LIMITS[type] ?? 0;
         const bud = TASK_SESSION_BUDGETS[type] ?? 0;
         const openHave = await countReady(type);
@@ -1883,32 +2050,38 @@ async function pipelinePlanTasks(id, args) {
                     if (matched.broad && !factletHasEventSignal(factlet)) {
                         candidateIds = candidateIds.filter(cid => liveClientIds.has(cid));
                     }
-                    // Pair-level dedup: skip (factlet, client) pairs that already have
-                    // any task (any status). This lets budget-limited passes resume on
-                    // the same factlet next plan cycle without re-creating work.
+                    // Pair-level dedup: skip (factlet, client) pairs already served by any
+                    // task (any status), so budget-limited passes resume where they left
+                    // off. Task.input is a JSON STRING column -- parse it (the old code
+                    // read t.input.clientId off the raw string, which never matched, so
+                    // this dedup was silently dead).
                     if (candidateIds.length > 0) {
                         const existing = await prisma.task.findMany({
                             where: { type: 'APPLY_FACTLET', targetType: 'Factlet', targetId: factletId },
                             select: { input: true }
                         });
-                        const served = new Set(existing.map(t => t.input && t.input.clientId).filter(Boolean));
+                        const served = new Set();
+                        for (const t of existing) {
+                            const inp = typeof t.input === 'string' ? safeJsonParse(t.input) : t.input;
+                            if (inp && inp.clientId) served.add(inp.clientId);
+                            if (inp && Array.isArray(inp.clientIds)) for (const c of inp.clientIds) served.add(c);
+                        }
                         candidateIds = candidateIds.filter(cid => !served.has(cid));
                         if (candidateIds.length === 0) continue; // all clients already served
                     }
-                    const pairs = candidateIds.length ? candidateIds : [null];
-                    let plannedAny = false;
-                    for (const cid of pairs) {
-                        if ((await createBudget('APPLY_FACTLET')).eff <= 0) break;
-                        const row = await createTask('APPLY_FACTLET', {
-                            targetType: 'Factlet',
-                            targetId:   factletId,
-                            input: cid ? { clientId: cid } : { clientId: null, reason: 'no_candidate_clients' }
-                        });
-                        if (!row) break;
-                        plannedAny = true;
-                    }
-                    if (plannedAny) applyPlanned++;
+                    // BATCH (2026-07-19): ONE in-process task per factlet covering up to
+                    // APPLY_BATCH clients -- one LLM call applies the factlet to the whole
+                    // batch (was one spawned goose agent per pair). Remaining clients are
+                    // served next pass via the pair-dedup above. Empty batch = sweep.
+                    const APPLY_BATCH = 8;
                     if ((await createBudget('APPLY_FACTLET')).eff <= 0) break;
+                    const batch = candidateIds.slice(0, APPLY_BATCH);
+                    const row = await createTask('APPLY_FACTLET', {
+                        targetType: 'Factlet',
+                        targetId:   factletId,
+                        input: batch.length ? { clientIds: batch } : { clientIds: [], reason: 'no_candidate_clients' }
+                    });
+                    if (row) applyPlanned++;
                 }
             }
             if (applyPlanned > 0 || applyAlreadyOpen > 0) {
@@ -2159,20 +2332,27 @@ async function pipelinePlanTasks(id, args) {
                     // heat-sort in JS (Prisma can't ORDER BY a bookings aggregate).
                     take: 500,
                     select: { id: true, targetUrls: true,
-                        bookings: { where: liveBookingWhere, select: { status: true, updatedAt: true } } }
+                        bookings: { where: liveBookingWhere, select: { status: true, updatedAt: true,
+                            title: true, description: true, location: true, source: true } } }
                 });
-                // Heat sort: brewing/hot-bearing clients first, then newest live activity first.
+                // Heat sort: PRIVATE-celebration clients first (a single host's own wedding/
+                // birthday/quince/mitzvah -- the ideal client for any vendor), then brewing/
+                // hot-bearing, then newest live activity. Precomputed once per client (the
+                // class check is regex work; never run it inside a sort comparator).
                 const clientHeat = (c) => {
-                    let warm = false, newest = 0;
+                    let warm = false, newest = 0, priv = false;
                     for (const b of (c.bookings || [])) {
                         if (b.status === 'brewing' || b.status === 'hot') warm = true;
+                        if (!priv && classification.classifyEventClass(b) === 'private') priv = true;
                         const t = +new Date(b.updatedAt);
                         if (t > newest) newest = t;
                     }
-                    return { warm, newest };
+                    return { warm, newest, priv };
                 };
+                const heatById = new Map(liveClients.map(c => [c.id, clientHeat(c)]));
                 liveClients.sort((a, b) => {
-                    const ha = clientHeat(a), hb = clientHeat(b);
+                    const ha = heatById.get(a.id), hb = heatById.get(b.id);
+                    if (ha.priv !== hb.priv) return ha.priv ? -1 : 1;
                     if (ha.warm !== hb.warm) return ha.warm ? -1 : 1;
                     return hb.newest - ha.newest;
                 });
@@ -2243,17 +2423,22 @@ async function pipelinePlanTasks(id, args) {
                     select: { targetId: true }
                 });
                 const skipUrls = planned.map(p => p.targetId).filter(Boolean);
-                // fb/ig cannot render via Tavily (url-loop) in ANY mode -- they need
-                // an interactive browser. Excluding them ALWAYS stops the Planner from
-                // emitting SCRAPE_SOURCE Tasks that only fail ("FB not viable") and churn
-                // every replan. (Earlier this was headless-only, so interactive runs
-                // leaked fb/ig scrape tasks -- the source of the FB failure spam.) x
-                // stays: it has a Tavily site:x.com fallback that works headless. Social
-                // demand (ig/tiktok/threads/x) comes through LAST_30_DAYS, not scraping.
+                // fb/ig cannot render via Tavily (url-loop) -- they need the user's
+                // logged-in Chrome via the mcp-chrome bridge. When precrime_config.json
+                // chromeScrape=true (bridge + extension installed), fb/ig sources ARE
+                // planned in EVERY mode: the conductor routes them to the fb/ig
+                // harvester skills, gives those workers the `chrome` extension, and
+                // serializes them to one at a time (single-client bridge; the pipeline
+                // owns it -- the orchestrator has no chrome tools). Flag off (default):
+                // exclude them ALWAYS so the Planner never emits SCRAPE_SOURCE Tasks
+                // that only fail ("FB not viable") and churn every replan. x stays
+                // regardless: it has a Tavily site:x.com fallback that works headless.
+                // Social demand (ig/tiktok/threads/x) also flows through LAST_30_DAYS.
                 // Sources come from the markdown-backed store (the URL is the key).
+                const chromeScrape = CHROME_SCRAPE_ACTIVE === true;
                 const sources = sourceStore.readySources({
                     limit: ckScrape.eff,
-                    excludeChannels: ['fb', 'ig'],
+                    excludeChannels: chromeScrape ? [] : ['fb', 'ig'],
                     excludeUrls: skipUrls
                 });
                 for (const s of sources) {
@@ -2342,6 +2527,7 @@ async function pipelinePlanTasks(id, args) {
     return createSuccessResponse(id, JSON.stringify({
         mode,
         objective,
+        focus:          PLANNER_FOCUS,
         session_id:     sessionId,
         reclaimed,
         counts,
@@ -2440,7 +2626,21 @@ async function pipelineClaimTask(id, args) {
             if (candidate) break;
         }
         if (!candidate) {
-            return createSuccessResponse(id, JSON.stringify({ status: 'NO_TASK' }, null, 2));
+            // In-band steering (2026-07-14): the interactive presenter's claim with 0 hot
+            // leedz was a dead end the weak model spun on -- re-claiming, status-checking,
+            // reading skill files -- while the user repeated RUN THE WORKFLOW. The tool
+            // response is the ONE channel the model reliably reads, so say what to do
+            // next right here instead of relying on prompt prose it may never see.
+            const out = { status: 'NO_TASK' };
+            if (types && types.includes('SHOW_HOT_LEEDZ')) {
+                out.hint = 'No hot leedz are ready. To produce some, fill the pipeline: call '
+                    + 'precrime__pipeline({ action:"plan_tasks", mode:"workflow" }) ONCE -- it arms the '
+                    + 'background conductor (discover -> scrape -> enrich -> judge). Add targetHot:<N> '
+                    + 'to auto-stop after N new hot leedz (omit to run continuously). Do NOT re-claim, '
+                    + 'poll, or ask; if the user requests the workflow or gives a goal number, that '
+                    + 'plan_tasks call IS the action.';
+            }
+            return createSuccessResponse(id, JSON.stringify(out, null, 2));
         }
         // updateMany with the previous status acts as a compare-and-swap.
         const upd = await prisma.task.updateMany({
@@ -2473,7 +2673,8 @@ async function pipelineGetTask(id, args) {
 }
 
 // mark_sent -- DETERMINISTIC outreach record. Called by the gmail send tool itself the moment
-// an email actually goes out (NOT dependent on any LLM remembering to save). Given the recipient
+// an email goes out OR a Gmail draft is created for the recipient -- a draft counts as consumed
+// outreach (standing rule 2026-07-19) (NOT dependent on any LLM remembering to save). Given the recipient
 // email (and/or an explicit clientId), it marks the matching Client draftStatus="sent" + sentAt,
 // and flips that client's live bookings OUT of the hot queue (shared=true, cold) -- the same
 // acted-on flag dismiss/share use. This is the "mark data consumed" step: emailed => reset => never
@@ -2675,16 +2876,21 @@ async function pipelineTasks(id, args) {
     if (args.sessionId)  where.sessionId  = args.sessionId;
     if (args.targetType) where.targetType = args.targetType;
     if (args.targetId)   where.targetId   = args.targetId;
-    const limit = Math.min(args.limit || 100, 500);
+    // CONTEXT ECONOMY (2026-07-19): the old default (100 rows, full packets with
+    // input/output blobs, pretty-printed) put a single 23k-token result into the
+    // interactive orchestrator's context -- a third of its whole window. Default
+    // to 20 slim rows, compact JSON; pass full:true for complete packets.
+    const limit = Math.min(args.limit || 20, 500);
     const rows = await prisma.task.findMany({
         where,
         orderBy: [{ createdAt: 'desc' }],
         take: limit
     });
+    const slim = t => ({ id: t.id, type: t.type, status: t.status, targetType: t.targetType, targetId: t.targetId, error: t.error || undefined });
     return createSuccessResponse(id, JSON.stringify({
         count: rows.length,
-        tasks: rows.map(taskRowToPacket)
-    }, null, 2));
+        tasks: rows.map(args.full === true ? taskRowToPacket : slim)
+    }));
 }
 
 // ============================================================================
@@ -2941,6 +3147,8 @@ async function startMcpServer() {
         // Start the conductor after the port is bound so workers can connect immediately.
         // Inject conductorReplan (self-feed planner) + runInProcessTask (execute
         // JUDGE_AFFECTED / SHOW_HOT_LEEDZ in-process — the hot-leedz path).
+        // The pipeline owns the :12306 bridge in every mode; the conductor's browser
+        // gate (conductor.js) serializes fb/ig chrome workers to one at a time.
         startConductor(PRECRIME_CONFIG, { replan: conductorReplan, runInProcess: runInProcessTask });
     });
 

@@ -62,7 +62,18 @@ function parse(md) {
     const areaLines = []
         .concat(((sec['SERVICE AREA DETAILS'] || {}).intro) || [])
         .concat(Object.values((sec['SERVICE AREA DETAILS'] || { sub: {} }).sub).flat());
-    const serviceZips = Array.from(new Set((areaLines.join('\n').match(/\b\d{5}\b/g) || [])));
+    const areaText = areaLines.join('\n');
+    const serviceZips = Array.from(new Set((areaText.match(/\b\d{5}\b/g) || [])));
+    // Service-area zip PREFIXES: the machine-enforceable form of the service area.
+    // Written in VALUE_PROP.md as "900xx"-style entries (e.g. "Zip prefixes: 900xx,
+    // 913xx, 928xx") and/or derived from the first 3 digits of every listed 5-digit
+    // zip. Consumed by the out_of_area gate (classification.js) and pipeline.save:
+    // a booking whose zip does not start with one of these prefixes is out of the
+    // service area. Empty list = no zip-based geography enforcement.
+    const serviceZipPrefixes = Array.from(new Set([
+        ...(areaText.match(/\b\d{3}(?=xx\b)/gi) || []),
+        ...serviceZips.map(z => z.slice(0, 3))
+    ]));
 
     return {
         trade:            product['trade'] || '',
@@ -75,6 +86,7 @@ function parse(md) {
         geography:        product['geography'] || '',
         rate:             product['rate'] || '',
         serviceZips,
+        serviceZipPrefixes,
         pitch:            _prose((sec['THE PITCH'] || {}).intro),
         whyUs:            _bullets((sec['WHY US'] || {}).intro),
         buyerRoles:       _bullets(who['Buyer Roles']),

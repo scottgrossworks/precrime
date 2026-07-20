@@ -19,7 +19,7 @@ add_sources → complete. You never save clients/bookings. Only the tools advert
 - Read the **ASSIGNED TASK** JSON block in these instructions as `task` (do NOT call get_task). If `task.type` is not `DISCOVER_SOURCES` → complete `failed` `wrong_task_type`, stop.
 
 ## Step 1 — Read VALUE_PROP (what to search for)
-`developer__shell(command="type \"DOCS\\VALUE_PROP.md\"")` (relative to the deployment root; or `precrime__pipeline({action:"get_config"})`)
+`precrime__pipeline({action:"get_config"})` — returns the full VALUE_PROP profile (trade, geography, buyerRoles, audienceSegments, pitch). You have no shell tool; get_config is the only read you need.
 Pull out, for query building:
 - **trade** (e.g. caricatures) — also available via `precrime__trades` if you want the canonical name
 - **buyer types** the pitch names (parties, schools, corporate, conventions, festivals, fairs, brand activations, weddings, …)
@@ -36,6 +36,13 @@ social handles, directories.** Combine trade/buyer/geography from Step 1. Templa
 - **ig:** `site:instagram.com <region> <buyer type>`
 - **x:** `site:x.com <region> <buyer type> OR events`
 Pick the 3–5 that best fit the VALUE_PROP. Keep it bounded — this is a sweep, not a crawl.
+
+**GEOGRAPHY IS MANDATORY in every query.** `<region>` comes from VALUE_PROP Geography and
+MUST appear in each query — never run a geography-less sweep. Register ONLY sources that
+serve the VALUE_PROP region: skip other metros' pages outright, and for national/multi-city
+directories register only the region-specific URL (e.g. the site's `<region>` page), never
+the national root or another city's page. An out-of-area source poisons every downstream
+scrape it feeds.
 
 ## Step 3 — Search
 Run `tavily__tavily_search` per query (default depth, small count, e.g. max_results 5).

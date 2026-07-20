@@ -12,7 +12,7 @@ const { spawn } = require('child_process');
 const path = require('path');
 const fs = require('fs');
 const os = require('os');
-const { conductorGetReadyTasks, conductorGetReadyInProcessTasks, conductorClaimTask, conductorFailTask, conductorFailIfClaimed, WORKER_SKILL_MAP } = require('./db');
+const { conductorGetReadyTasks, conductorGetReadyInProcessTasks, conductorClaimTask, conductorFailTask, conductorFailIfClaimed, WORKER_SKILL_MAP, CHANNEL_SKILL_OVERRIDES } = require('./db');
 
 const PRECRIME_ROOT = path.resolve(__dirname, '..', '..');
 
@@ -39,7 +39,7 @@ const EXT_SCOPE = _extScopeRaw !== '' && _extScopeRaw !== '0' && _extScopeRaw !=
 // tracked background jobs instead (counted against maxWorkers via `active`). Cheap
 // in-process types (JUDGE_AFFECTED, SHOW_HOT_LEEDZ) still run inline because JUDGE
 // gates the planner and both finish in well under a second.
-const INPROC_BACKGROUND = new Set(['LAST_30_DAYS', 'BOUNCE_SWEEP']);
+const INPROC_BACKGROUND = new Set(['LAST_30_DAYS', 'BOUNCE_SWEEP', 'APPLY_FACTLET']);
 
 // Injected at the END of EVERY spawned worker's instructions (one place -> system-wide).
 // A worker is an automated tool-caller, not a chat assistant. Every token the model EMITS
@@ -104,7 +104,13 @@ const _TAVILY_ARG = _fwd(path.join(PRECRIME_ROOT, 'tools', 'tavily_lean_mcp.py')
 const _RSS_ARG    = _fwd(path.join(PRECRIME_ROOT, 'rss', 'rss-scorer-mcp', 'index.js'));
 
 // The per-type extension SET, emitted as recipe YAML lines (2-space list indent).
-function recipeExtLines(taskType) {
+// browserChannel (fb/ig, from the task row): the worker drives the user's logged-in
+// Chrome through the mcp-chrome bridge instead of Tavily -- its recipe carries the
+// `chrome` extension ONLY (plus pipeline + shell): fb/ig skills never fall back to
+// Tavily (login-wall chrome, not posts), so shipping the tavily schema would be
+// per-turn token waste. The bridge is single-client; the dispatch loop serializes
+// these workers to one at a time.
+function recipeExtLines(taskType, browserChannel) {
     const precrime = [
         '  - type: streamable_http', '    name: precrime',
         `    uri: "http://127.0.0.1:5179/mcp?scope=${taskType}"`, '    timeout: 60',
@@ -118,9 +124,21 @@ function recipeExtLines(taskType) {
         '  - type: stdio', '    name: precrime-rss', '    cmd: node',
         `    args: ["${_RSS_ARG}"]`, '    timeout: 30',
     ];
-    const base = [...precrime, ...developer];
+    const chrome = [
+        '  - type: streamable_http', '    name: chrome',
+        '    uri: "http://127.0.0.1:12306/mcp"', '    timeout: 60',
+    ];
+    // CONTEXT TRIM (2026-07-19): `developer` (goose's shell+editor builtin) is a
+    // multi-k-token schema+instructions tax on EVERY turn, and only url-loop has a
+    // legitimate use for it (reading DOCS/PEER_SOURCES.json). Every other skill
+    // either never calls it or is told NOT to (url-loop's own shell note); the
+    // discover-sources skill reads VALUE_PROP via pipeline get_config. So:
+    // developer ships ONLY with SCRAPE_SOURCE. Each worker gets the absolute
+    // minimum extension set its skill actually calls.
+    const base = [...precrime];
+    if (browserChannel) return [...base, ...chrome];
     switch (taskType) {
-        case 'SCRAPE_SOURCE':       return [...base, ...tavily, ...rss];
+        case 'SCRAPE_SOURCE':       return [...base, ...developer, ...tavily, ...rss];
         case 'DRILL_DOWN':
         case 'DRILL_CONTAINER':
         case 'ENRICH_CLIENT':
@@ -136,7 +154,7 @@ function recipeExtLines(taskType) {
 // Build a full recipe: named+scoped extensions + the skill (with injected packet) as the
 // instructions block scalar. Block scalar (|) needs every line indented; content needs no
 // YAML escaping. `prompt` auto-starts the run.
-function buildWorkerRecipe(taskType, instructions) {
+function buildWorkerRecipe(taskType, instructions, browserChannel) {
     // goose recipes treat {{name}} as template PARAMETERS. Deployed skills are rendered
     // ({{...}}-free), but neutralize any residual "{{" defensively -- a rendering miss then
     // degrades to slightly-off text instead of failing recipe validation and orphaning the worker.
@@ -148,7 +166,7 @@ function buildWorkerRecipe(taskType, instructions) {
         'description: "Scoped one-shot PRECRIME worker (named + pruned extensions)."',
         'prompt: "Begin the assigned task now. Follow the instructions exactly, then stop."',
         'extensions:',
-        ...recipeExtLines(taskType),
+        ...recipeExtLines(taskType, browserChannel),
         'instructions: |',
         indented,
         '',
@@ -208,13 +226,22 @@ let hotProduced = 0;
 let _reportStatus = () => ({ started: false, note: 'conductor not started' });
 function conductorStatus() { return _reportStatus(); }
 function armConductor(opts) {
-    // A targeted (re)arm sets the goal and resets the counter for a fresh run. Passing no
-    // target (the plain launcher arm) leaves any existing target untouched.
-    const t = opts && opts.targetHot != null ? parseInt(opts.targetHot, 10) : 0;
-    if (Number.isFinite(t) && t > 0) { hotTarget = t; hotProduced = 0; }
-    if (armed) return;
+    // A targeted (re)arm sets the goal and resets the counter for a fresh run.
+    // targetHot N>0 = auto-stop after N NEW hot leedz. An EXPLICIT targetHot 0 =
+    // continuous ("don't bother me") — clears a previous goal. Absent = leave any
+    // existing goal untouched (plain launcher arm).
+    if (opts && opts.targetHot != null) {
+        const t = parseInt(opts.targetHot, 10);
+        if (Number.isFinite(t) && t >= 0) { hotTarget = t; hotProduced = 0; }
+    }
+    if (armed) {
+        if (opts && opts.targetHot != null) {
+            console.error(`[conductor] goal updated — ${hotTarget ? `${hotTarget} new hot leed(s), then stop` : 'continuous'}`);
+        }
+        return;
+    }
     armed = true;
-    console.error(`[conductor] ARMED${hotTarget ? ` — goal: ${hotTarget} new hot leed(s)` : ''} — claiming & dispatching tasks`);
+    console.error(`[conductor] ARMED — goal: ${hotTarget ? `${hotTarget} new hot leed(s), then stop` : 'continuous'} — claiming & dispatching tasks`);
 }
 function isArmed() { return armed; }
 
@@ -224,6 +251,10 @@ async function conductorLoop(cfg, hooks) {
     const spawnStaggerMs   = Number.isFinite(w.spawnStaggerMs)   ? w.spawnStaggerMs   : 100;
     const hungWorkerKillMs = Number.isFinite(w.hungWorkerKillMs) ? w.hungWorkerKillMs : 300000;
     const maxWorkers       = Number.isFinite(w.maxWorkers)       ? w.maxWorkers       : 10;
+    // Backoff when the LLM provider's per-minute rate limit trips (free-tier rpm
+    // caps). 65s > one full rpm window, so the counter is guaranteed to reset.
+    // Override via precrime_config.json workers.rateLimitBackoffMs.
+    const rateLimitBackoffMs = Number.isFinite(w.rateLimitBackoffMs) ? w.rateLimitBackoffMs : 65000;
     // The conductor is orchestrator-AGNOSTIC: it spawns whatever worker binary the
     // launcher declares via the PRECRIME_WORKER_* env vars. It hardcodes nothing about
     // claude or goose. Resolution order is always: env var > cfg.workers > default.
@@ -263,7 +294,8 @@ async function conductorLoop(cfg, hooks) {
     // means dispatch later fails with skill_file_missing — a wasted worker spawn and
     // a failed Task. Catch a broken/partial deploy loudly at startup instead.
     {
-        const gaps = Object.entries(WORKER_SKILL_MAP)
+        const gaps = [...Object.entries(WORKER_SKILL_MAP),
+                      ...Object.entries(CHANNEL_SKILL_OVERRIDES).map(([ch, f]) => [`SCRAPE_SOURCE[${ch}]`, f])]
             .filter(([, f]) => !fs.existsSync(path.resolve(skillsRoot, f)))
             .map(([t, f]) => `${t} -> ${f}`);
         if (gaps.length) {
@@ -337,13 +369,18 @@ async function conductorLoop(cfg, hooks) {
     // broad -- a Tavily/RSS "API quota exceeded" line tripped this and PERMANENTLY halted the whole
     // pipeline on an unrelated third-party error. Now "quota" only matches with a provider name.
     const CREDIT_EXHAUSTED_RE = /key limit exceeded|insufficient.*credits?|billing.*(hard|limit)|(openrouter|anthropic|openai|x-ai|deepseek|gemini|google)\b.*(quota|credit|rate limit|billing)/i;
+    // Per-MINUTE rate limit (e.g. OpenRouter free-tier 50 rpm) -- transient, NOT a
+    // credit halt. But spawning MORE workers into a closed window only produces more
+    // ORPHANs (each new worker's first LLM call dies on the same cap), so on detection
+    // the conductor takes a soft REST until the window clears, then resumes normally.
+    const RATE_LIMIT_RE = /rate limit exceeded|limit_rpm|requests per minute|too many requests/i;
 
     console.error(`[conductor] ready — pollMs=${pollMs} maxWorkers=${maxWorkers} hungKillMs=${hungWorkerKillMs}`);
     // GUARD: log the resolved worker config so the active orchestrator is never ambiguous.
     // 'NONE (positional prompt)' = claude-style; any '--flag' = file-passed (e.g. goose).
     const _flagDesc = workerInstFlag === '' ? 'NONE (positional prompt)' : workerInstFlag;
     console.error(`[conductor] worker config — bin=${workerBin} baseArgs=[${workerBaseArgs.join(' ')}] instFlag=${_flagDesc}`);
-    console.error(`[conductor] self-feed ${replan ? `ENABLED (idle replan cooldown ${idleReplanCooldownMs}ms)` : 'DISABLED (no replan hook)'}; in-process exec ${runInProcess ? 'ENABLED (JUDGE_AFFECTED, SHOW_HOT_LEEDZ, LAST_30_DAYS)' : 'DISABLED'}`);
+    console.error(`[conductor] self-feed ${replan ? `ENABLED (idle replan cooldown ${idleReplanCooldownMs}ms)` : 'DISABLED (no replan hook)'}; in-process exec ${runInProcess ? 'ENABLED (JUDGE_AFFECTED, SHOW_HOT_LEEDZ, LAST_30_DAYS, BOUNCE_SWEEP, APPLY_FACTLET)' : 'DISABLED'}`);
     console.error('[conductor] DORMANT — waiting for RUN_WORKFLOW (plan_tasks) before claiming/dispatching');
 
     while (true) {
@@ -515,6 +552,20 @@ async function conductorLoop(cfg, hooks) {
                 if (active.size >= maxWorkers) break;
                 if (active.has(task.id)) continue;
 
+                // Browser-gated worker (fb/ig via the mcp-chrome bridge). Two gates,
+                // BEFORE claiming so a skipped task stays ready for a later cycle:
+                //   1. chromeScrape flag off -> never spawn (the planner shouldn't have
+                //      emitted it, but a flag flip mid-queue must not burn workers on
+                //      guaranteed browser_unavailable failures).
+                //   2. Serialize to ONE: the bridge (127.0.0.1:12306) accepts a single
+                //      client; a second connection 500s ("Already connected").
+                if (task.browserChannel) {
+                    if (!(cfg && cfg.chromeScrape === true)) continue;
+                    let browserBusy = false;
+                    for (const a of active.values()) { if (a.browserChannel) { browserBusy = true; break; } }
+                    if (browserBusy) continue;
+                }
+
                 // Atomic claim -- skip if another conductor or worker beat us.
                 const workerId = `conductor-${process.pid}-${task.id.slice(-6)}`;
                 const claimed = await conductorClaimTask(task.id, workerId);
@@ -580,7 +631,7 @@ async function conductorLoop(cfg, hooks) {
                 // for schema pruning. Claude / flag-off uses the plain --instructions path below.
                 const useRecipe = EXT_SCOPE;
                 const tmpRecipe = useRecipe ? path.join(os.tmpdir(), `precrime-${task.id}.yaml`) : null;
-                if (useRecipe) fs.writeFileSync(tmpRecipe, buildWorkerRecipe(task.type, skillContent), 'utf8');
+                if (useRecipe) fs.writeFileSync(tmpRecipe, buildWorkerRecipe(task.type, skillContent, task.browserChannel), 'utf8');
                 if (process.platform === 'win32') {
                     const tmpMd  = path.join(os.tmpdir(), `precrime-${task.id}.md`);
                     const tmpBat = path.join(os.tmpdir(), `precrime-${task.id}.bat`);
@@ -661,6 +712,15 @@ async function conductorLoop(cfg, hooks) {
                     if (!haltReason && CREDIT_EXHAUSTED_RE.test(outTail)) {
                         haltReason = 'openrouter credits/quota exhausted (LLM 403 key limit)';
                     }
+                    // Per-minute rate limit: soft-rest instead of spawning more workers into
+                    // the same closed rpm window (2026-07-19: tencent/hy3:free 50rpm produced
+                    // an ORPHAN stampede -- every replacement worker died on its first call).
+                    if (!haltReason && !restReason && RATE_LIMIT_RE.test(outTail)) {
+                        restReason = 'llm_rate_limited (provider rpm cap)';
+                        restUntil = Date.now() + rateLimitBackoffMs;
+                        restLogged = false;
+                        console.error(`[conductor] RATE-LIMITED — freezing new dispatch ${Math.round(rateLimitBackoffMs / 1000)}s so the rpm window clears; ${active.size} in-flight will finish, then work resumes.`);
+                    }
                     // code 0 / null (SIGTERM) = worker finished via MCP complete_task.
                     // Nonzero = failed; surface the captured output so the cause is visible.
                     if (code !== 0 && code !== null) {
@@ -693,7 +753,7 @@ async function conductorLoop(cfg, hooks) {
                     active.delete(task.id);
                 });
 
-                active.set(task.id, { proc, killTimer, type: task.type, desc: taskDesc(task), startedAt: Date.now() });
+                active.set(task.id, { proc, killTimer, type: task.type, desc: taskDesc(task), startedAt: Date.now(), browserChannel: task.browserChannel || null });
                 console.error(`[conductor] spawned — ${task.type}: ${taskDesc(task)}`);
 
                 // Per-WINDOW backstop: cap workers and wall-clock per work window, then REST
