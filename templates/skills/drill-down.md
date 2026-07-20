@@ -34,8 +34,28 @@ extract you make serves finding that address:
 ## Step 0 — Load task (already provided — do NOT call get_task)
 - Your task packet is the **ASSIGNED TASK** JSON block in these instructions. Set `task` = that packet, `taskId = task.id`. Do NOT call `precrime__pipeline({ action:"get_task" })` — it is already here.
 - If `task.type` ≠ `"DRILL_DOWN"` → complete `failed` `wrong_task_type`, stop.
-- `targetType = task.targetType` — either **`Booking`** (close a near-hot booking by filling its missing fields) or **`Client`** (a bare discovered company with NO contact and NO booking — find a decision-maker contact AND an upcoming event that needs the trade, minting a NEW booking).
+- `targetType = task.targetType` — **`Booking`** (close a near-hot booking by filling its missing fields), **`Client`** (a bare discovered company with NO contact and NO booking — find a decision-maker contact AND an upcoming event that needs the trade, minting a NEW booking), or **`Signal`** (a demand post sensed during scraping — no client exists yet; see the SIGNAL playbook below and skip Steps 1–2).
 - `clientId = task.input?.clientId`; `missing = task.input?.missing` (array of gap codes). For a `Booking` target, `bookingId = task.targetId`; for a `Client` target there is no booking yet (`bookingId = null`).
+
+## SIGNAL target — bird-dog a demand post (no client exists yet)
+`task.input = { url, note, channel }`: someone was seen ASKING for what the trade sells ("in
+search of a wedding planner…") but no contact was captured. Your mission: identify WHO is
+asking and turn them into ONE verified Client + Booking. Track it down like a bird-dog.
+1. **Fetch the post**: `precrime__pipeline({ action:"browse", url: task.input.url })` — the
+   server renders it through the user's own logged-in Chrome (this is how you reach fb/ig).
+   "bridge busy"/error → retry once; still failing → complete `cancelled` `browser_unavailable`.
+2. **Identify the poster**: from the page text, capture the real name of the person or org
+   asking. If the post page shows only a handle, `browse` their profile URL (ONE extra fetch).
+3. **Hunt the contact**: with a name in hand, run the PRIME DIRECTIVE email hunt above
+   (tavily searches, org site, socials). The `note` text supplies event details — use its
+   verbatim date/venue words, never invent.
+4. **Save + complete in ONE call** (same shape as Step 3 below, but with NO `id` — this
+   CREATES the client): patch `{ name, email?, phone?, bookings:[{ dateText:"<verbatim from
+   note/post>", location, zip?, title, sourceUrl: task.input.url }] }`, fold `completeTask`
+   (`clientIds:[]`, `needsJudge:true`, summary `"signal drilled: <who> / <event>"`).
+5. **No real name found** after the hunt → complete `done` with summary
+   `"signal not attributable: <one line why>"`, `needsJudge:false`. NEVER invent a person,
+   NEVER save a nameless client. Losing the trail honestly beats fabricating the rabbit.
 
 ## Step 1 — Load context
 `precrime__find({ action:"clients", filters:{ id: clientId }, limit:1, summary:false })` → name, company, website, email, dossier.

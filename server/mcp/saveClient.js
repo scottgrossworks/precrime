@@ -51,6 +51,44 @@ function bannedTermHit(text) {
     return null;
 }
 
+// SELF-EXCLUSION GATE (2026-07-20, That Drawing Show incident): the ig scrape saved
+// the SELLER'S OWN company as a lead. VALUE_PROP '## THE PRODUCT' is the single
+// source of identity truth for every deploy, so the self-tokens are derived from it
+// (product name, seller, email, phone, website host, @social handles) -- never
+// hardcoded. Any NEW client whose identity fields contain one of these tokens is
+// refused: PRECRIME must never save its own operator as a lead. Enforced
+// procedurally like Banned Terms -- prompt rules do not hold.
+function selfIdentityTokens() {
+    const vp = VALUE_PROP || {};
+    const toks = new Set();
+    // "That Drawing Show with Scott Gross" / "Scott Gross, Drawing Show with Scott
+    // Gross" -> split on comma/semicolon/" with " so each name fragment matches alone.
+    for (const raw of [vp.product, vp.seller]) {
+        for (const part of String(raw || '').split(/,|;|\bwith\b/i)) {
+            const p = part.trim().toLowerCase();
+            if (p.length >= 6) toks.add(p);
+        }
+    }
+    if (vp.email) toks.add(String(vp.email).trim().toLowerCase());
+    const host = String(vp.website || '').replace(/^https?:\/\//i, '').split('/')[0].trim().toLowerCase();
+    if (host) toks.add(host);
+    for (const h of String(vp.socials || '').match(/@[a-z0-9._]+/gi) || []) toks.add(h.toLowerCase());
+    return [...toks];
+}
+
+function selfIdentityHit(text) {
+    if (!text) return null;
+    const hay = String(text).toLowerCase();
+    for (const t of selfIdentityTokens()) {
+        if (hay.includes(t)) return t;
+    }
+    const phoneDigits = String((VALUE_PROP || {}).phone || '').replace(/\D+/g, '');
+    if (phoneDigits.length >= 7 && hay.replace(/\D+/g, '').includes(phoneDigits)) {
+        return (VALUE_PROP || {}).phone;
+    }
+    return null;
+}
+
 // SERVICE-AREA GATE (2026-07-16): VALUE_PROP geography was prose-only, so scrape
 // workers minted Illinois/NY/Atlanta clients+bookings the deployment can never
 // serve, and every downstream stage (enrich, drill, judge) burned tokens on them.
@@ -314,6 +352,21 @@ async function pipelineSave(id, clientId, patch, sessionId, judge, factletId) {
                     return createSuccessResponse(id, JSON.stringify({
                         saved: false, blocked: true, bannedTerm: hit,
                         note: `Refused: "${patch.name || patch.company}" matches VALUE_PROP banned term "${hit}". This category is permanently excluded. Do not retry, rename, or work around.`
+                    }));
+                }
+                // SELF-EXCLUSION GATE (create only): refuse saving the seller's own
+                // company/identity (VALUE_PROP ## THE PRODUCT) as a lead.
+                const selfHit = selfIdentityHit([
+                    patch.name, patch.company, patch.email, patch.website
+                ].filter(Boolean).join(' '));
+                if (selfHit) {
+                    console.error(`[save] SELF-EXCLUSION "${selfHit}" — refused new client "${patch.name || patch.company || '(unnamed)'}" (matches the seller's own identity in VALUE_PROP ## THE PRODUCT)`);
+                    await logSessionEvent(sessionId, 'save_blocked_self', {
+                        name: patch.name, company: patch.company, token: selfHit
+                    });
+                    return createSuccessResponse(id, JSON.stringify({
+                        saved: false, blocked: true, selfMatch: selfHit,
+                        note: `Refused: "${patch.name || patch.company}" matches the seller's OWN identity ("${selfHit}" from VALUE_PROP ## THE PRODUCT). PRECRIME never saves its own operator as a lead. Do not retry or rename.`
                     }));
                 }
                 // SERVICE-AREA GATE (create only): when EVERY supplied booking has a

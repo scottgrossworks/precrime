@@ -11,9 +11,13 @@ const TOOL_DEFS = [
                 {
                     name: 'pipeline',
                     description: [
-                        'Pre-Crime workflow operations. IMPORTANT: the names below are ACTIONS of THIS one `pipeline` tool, NOT standalone tools — to run any of them, call the `pipeline` tool with action:"<name>". There is no separate save / audit_session / complete_task / report_session / etc. tool; calling one of those names directly will fail with "Unknown tool". Actions: status, configure, next, save, delete, rescore, resolve_dates, browse, plan_tasks, report_session, audit_session, next_source, mark_source, add_sources, import_sources, work_status.',
+                        'Pre-Crime workflow operations. IMPORTANT: the names below are ACTIONS of THIS one `pipeline` tool, NOT standalone tools — to run any of them, call the `pipeline` tool with action:"<name>". There is no separate save / audit_session / complete_task / report_session / etc. tool; calling one of those names directly will fail with "Unknown tool". Actions: status, configure, next, save, delete, rescore, resolve_dates, browse, signal, pause, resume, plan_tasks, report_session, audit_session, next_source, mark_source, add_sources, import_sources, work_status.',
                         '',
                         'action="browse": Fetch a page THROUGH THE USER\'S OWN LOGGED-IN CHROME (mcp-chrome bridge, transient session). Pass url (http/https). Returns { url, text } — the rendered page text, lean-capped. This is THE way to reach Facebook, Instagram, or any signed-in site when the user asks you to look at one; use tavily for public web. Serialized with background chrome scrape workers; on "bridge busy" simply retry in a moment.',
+                        '',
+                        'action="pause": USER BRAKE. Pass minutes (default 10). Trips the conductor\'s soft-rest: in-flight workers finish, NO new dispatch until expiry or action="resume". When the user says "pause", "stop for a while", "hold off" — call this, never claim you cannot pause the system. action="resume" (or the pause expiring) resumes with a fresh work window.',
+                        '',
+                        'action="signal": BIRD-DOG a demand post you cannot attribute yet. When you see someone ASKING for an event vendor/planner/entertainment (an "ask" post) but cannot capture their name or contact, call signal with url (the post/page) and note (the VERBATIM demand text + any date/venue mentioned; channel optional, auto-detected for fb/ig). The server queues a DRILL_DOWN task; a worker chases the poster to a real person + booking. NEVER save a sparse/unnamed client instead, and NEVER drop the demand on the floor — signal it.',
                         '',
                         'action="plan_tasks" focus: optional user steering directive. focus:"factlets" = drain the unprocessed-factlet backlog and create NO other task types (only APPLY_FACTLET / JUDGE_AFFECTED / BOUNCE_SWEEP / SHOW_HOT_LEEDZ) until the backlog reaches the discovery-pause threshold, then focus auto-clears. focus:"none" clears immediately. In-flight tasks are never cancelled — focus only stops NEW work. When the user says "process the factlets, nothing else" call plan_tasks({ mode:"workflow", focus:"factlets" }). targetHot: the run goal — N>0 = auto-stop after N NEW hot leedz (launcher default 1); an explicit 0 = continuous ("don\'t bother me"). Update mid-session with one plan_tasks call.',
                         '',
@@ -149,7 +153,11 @@ const TOOL_DEFS = [
                             },
                             url: {
                                 type: 'string',
-                                description: 'For action=mark_source: the URL returned by next_source.'
+                                description: 'For action=mark_source: the URL returned by next_source. For action=browse / action=signal: the page or post URL.'
+                            },
+                            note: {
+                                type: 'string',
+                                description: 'For action=signal: the VERBATIM demand text seen on the page (who is asking, for what, any date/venue mentioned).'
                             },
                             scrapedAt: {
                                 type: 'string',
@@ -454,13 +462,20 @@ const TOOL_DEFS = [
 // get_task is absent everywhere: Half A injects the task as the ASSIGNED TASK packet.
 const SAVE_COMPLETE = ['save', 'complete_task'];
 const SCOPE_ACTIONS = {
-    DRILL_DOWN:          SAVE_COMPLETE,
+    // DRILL_DOWN gets `browse`: Signal-target drills fetch the demand post through
+    // the user's logged-in Chrome (server-side bridge; no chrome extension shipped).
+    DRILL_DOWN:          [...SAVE_COMPLETE, 'browse'],
     DRILL_CONTAINER:     SAVE_COMPLETE,
     ENRICH_CLIENT:       SAVE_COMPLETE,
     FIND_CLIENT_SOURCES: SAVE_COMPLETE,
     APPLY_FACTLET:       ['get_config', 'save', 'complete_task'],
     DRAFT_OUTREACH:      ['get_config', 'save', 'complete_task'],
-    SCRAPE_SOURCE:       ['save', 'complete_task', 'mark_source', 'add_sources'],
+    // SCRAPE_SOURCE gets `signal`: a scraper that senses demand it cannot attribute
+    // (an "ask" post with no capturable contact) queues a DRILL_DOWN instead of
+    // dropping it or saving a sparse client. And `browse`: reddit blocks Tavily AND
+    // plain Chrome fetches, but old.reddit.com/*.json through the bridge works
+    // (proven live 2026-07-20) — the reddit playbook in url-loop.md uses it.
+    SCRAPE_SOURCE:       ['save', 'complete_task', 'mark_source', 'add_sources', 'signal', 'browse'],
     DISCOVER_SOURCES:    ['get_config', 'complete_task', 'add_sources'],
 };
 // Union of every per-type scope — used only where a generic "is this a worker action" check is

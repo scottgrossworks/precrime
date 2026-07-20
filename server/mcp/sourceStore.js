@@ -239,15 +239,17 @@ function createSourceStore({ root }) {
     // this run. excludeChannels skips whole channels (e.g. fb/ig headless);
     // excludeUrls skips already-planned URLs. The conductor is the single
     // dispatcher, so claim coordination is this in-memory marking -- no DB row.
-    function readySources({ limit = 1, excludeChannels = [], excludeUrls = [] } = {}) {
+    function readySources({ limit = 1, excludeChannels = [], excludeUrls = [], onlyChannels = null } = {}) {
         const exclude = new Set((excludeUrls || []).map(dedupKey));
         const skipChan = new Set(excludeChannels || []);
+        const only = (onlyChannels && onlyChannels.length) ? new Set(onlyChannels) : null;
         // Collect ALL eligible entries, then order by persisted recency: never-scraped
         // first (0), then longest-ago-scraped. This is what gives every source -- fb/ig
         // included -- a fair turn across restarts, instead of file-order-forever.
         const candidates = [];
         for (const entry of index.values()) {
             if (entry.scrapedThisRun || entry.claimed) continue;
+            if (only && !only.has(entry.channel)) continue;
             if (skipChan.has(entry.channel)) continue;
             if (exclude.has(dedupKey(entry.url))) continue;
             candidates.push(entry);

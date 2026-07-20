@@ -313,11 +313,61 @@ async function handlePipeline(id, params) {
             if (!r.ok) return createErrorResponse(id, -32603, `browse failed: ${r.error}`);
             return createSuccessResponse(id, JSON.stringify({ url: r.url, text: r.text }));
         }
+        case 'signal': {
+            // DEMAND SIGNAL -> DRILL_DOWN (2026-07-20, bird-dog rule). A scraper or the
+            // orchestrator sensed demand it cannot attribute yet (an "ask" post with no
+            // capturable contact). Persist the scent as a DRILL_DOWN task -- the Task
+            // row IS the persistence, so no sparse/fake Client rows enter the DB. A
+            // drill worker then chases the poster vertically (fb/ig posts ride the
+            // user's logged-in Chrome via browserChannel serialization) and only a
+            // verified person + booking is saved, through the normal verify-gated save.
+            const url = args && args.url ? String(args.url).trim() : '';
+            if (!/^https?:\/\//i.test(url)) {
+                return createErrorResponse(id, -32602, 'signal requires url (http/https): the post/page where the demand was seen.');
+            }
+            const note = args && args.note ? String(args.note).trim().slice(0, 2000) : '';
+            if (!note) {
+                return createErrorResponse(id, -32602, 'signal requires note: the VERBATIM demand text (what was asked, by whom, where, any date/venue mentioned).');
+            }
+            const channel = /(?:^|\.)facebook\.com|fb\.com/i.test(url) ? 'fb'
+                          : /instagram\.com/i.test(url) ? 'ig'
+                          : (args.channel ? String(args.channel) : null);
+            // One open signal per URL -- a re-sensed post refreshes nothing.
+            const dup = await prisma.task.findFirst({
+                where: { type: 'DRILL_DOWN', targetType: 'Signal', targetId: url,
+                         status: { in: ['ready', 'claimed'] } },
+                select: { id: true }
+            });
+            if (dup) {
+                return createSuccessResponse(id, JSON.stringify({
+                    created: false, taskId: dup.id, note: 'A drill task for this signal url is already queued.' }));
+            }
+            const row = await require('./db').createTaskRow('DRILL_DOWN', {
+                sessionId: args.session_id || null,
+                targetType: 'Signal', targetId: url,
+                input: { url, note, channel }
+            });
+            const waiting = channel && !CHROME_SCRAPE_ACTIVE
+                ? ' (fb/ig signal: waits until chromeScrape is active)' : '';
+            return createSuccessResponse(id, JSON.stringify({
+                created: true, taskId: row.id, channel,
+                note: `DRILL_DOWN queued: a worker will chase this signal to a real person + booking${waiting}.`
+            }));
+        }
+        case 'pause': {
+            // USER PAUSE (2026-07-20): the real brake interactive mode lacked. Trips
+            // the conductor's soft-rest (same mechanism as the rate-limit backoff):
+            // in-flight workers finish, no new dispatch until expiry or resume.
+            const minutes = Number(args && args.minutes) > 0 ? Number(args.minutes) : 10;
+            return createSuccessResponse(id, JSON.stringify(require('./conductor').conductorPause(minutes)));
+        }
+        case 'resume':
+            return createSuccessResponse(id, JSON.stringify(require('./conductor').conductorPause(0)));
         case 'mark_sent':      return await pipelineMarkSent(id, args);
         case 'mark_bounced':   return await pipelineMarkBounced(id, args);
         case 'bounce_sweep':   return await pipelineBounceSweep(id, args);
         default:
-            return createErrorResponse(id, -32602, `Unknown pipeline action: "${action}". Must be: status, configure, get_config, get_task, next, save, delete, rescore, resolve_dates, share_booking, dismiss_booking, mark_sent, mark_bounced, bounce_sweep, browse, report_session, audit_session, next_source, mark_source, add_sources, import_sources, work_status, judge_affected, plan_tasks, claim_task, complete_task, tasks, recycler.`);
+            return createErrorResponse(id, -32602, `Unknown pipeline action: "${action}". Must be: status, configure, get_config, get_task, next, save, delete, rescore, resolve_dates, share_booking, dismiss_booking, mark_sent, mark_bounced, bounce_sweep, browse, signal, pause, resume, report_session, audit_session, next_source, mark_source, add_sources, import_sources, work_status, judge_affected, plan_tasks, claim_task, complete_task, tasks, recycler.`);
     }
 }
 
@@ -1680,6 +1730,24 @@ async function pipelinePlanTasksInner(id, args) {
     if (mode === 'workflow' || mode === 'headless') {
         const suppressed = new Set();   // task types skipped this pass
 
+        // VERTICAL-FIRST (2026-07-20): an open DRILL_DOWN — a near-hot booking, a
+        // bare client, or a demand Signal — is the closest thing to money in the
+        // whole system, and drills are the cheapest tokens it spends (1-4 bounded
+        // searches vs a scrape worker's open-ended page-chewing). While ANY is
+        // open, plan NO new horizontal work: finding a hot leed outranks growing
+        // the bushy tree, always. The horizontal stages (scrape / discover /
+        // enrich / last30) resume automatically the moment the drill queue
+        // drains — no user action, no focus flag to clear. Bird-dog first.
+        const openDrills = await prisma.task.count({
+            where: { type: 'DRILL_DOWN', status: { in: ['ready', 'claimed'] } }
+        });
+        if (openDrills > 0) {
+            for (const t of ['SCRAPE_SOURCE', 'DISCOVER_SOURCES', 'ENRICH_CLIENT', 'LAST_30_DAYS']) {
+                suppressed.add(t);
+            }
+            console.error(`[plan] DRILL-FOCUS — ${openDrills} open DRILL_DOWN task(s); horizontal stages (scrape/discover/enrich/last30) suppressed this pass.`);
+        }
+
         // Current-demand hygiene: drop stale factlets before planning so the
         // backlog reflects only LIVE demand and never re-animates old news.
         try {
@@ -2403,7 +2471,8 @@ async function pipelinePlanTasksInner(id, args) {
         // Scrape existing Sources only when no hot / judge / apply / enrich
         // backlog is gating us. PER-TARGET DEDUP same as other workers.
         // Foundational: SCRAPE runs every cycle (budget-capped) over the bounded
-        // ready-source queue (fb/ig excluded), NOT gated on shouldPlanDiscovery.
+        // ready-source queue (fb/ig only when chromeScrape, one in flight), NOT
+        // gated on shouldPlanDiscovery.
         // Scraping the existing queue is fuel, not open-ended discovery -- the
         // unbounded stage (DISCOVER_SOURCES below) stays funnel-gated.
         if (!suppressed.has('SCRAPE_SOURCE')) {
@@ -2420,9 +2489,13 @@ async function pipelinePlanTasksInner(id, args) {
                             { status: { in: ['ready', 'claimed'] } }
                         ]
                     },
-                    select: { targetId: true }
+                    select: { targetId: true, status: true, input: true }
                 });
                 const skipUrls = planned.map(p => p.targetId).filter(Boolean);
+                // Is a browser-channel (fb/ig) scrape already queued or running?
+                const browserOpen = planned.some(p =>
+                    (p.status === 'ready' || p.status === 'claimed') &&
+                    /"channel"\s*:\s*"(fb|ig)"/.test(p.input || ''));
                 // fb/ig cannot render via Tavily (url-loop) -- they need the user's
                 // logged-in Chrome via the mcp-chrome bridge. When precrime_config.json
                 // chromeScrape=true (bridge + extension installed), fb/ig sources ARE
@@ -2436,11 +2509,22 @@ async function pipelinePlanTasksInner(id, args) {
                 // Social demand (ig/tiktok/threads/x) also flows through LAST_30_DAYS.
                 // Sources come from the markdown-backed store (the URL is the key).
                 const chromeScrape = CHROME_SCRAPE_ACTIVE === true;
-                const sources = sourceStore.readySources({
-                    limit: ckScrape.eff,
-                    excludeChannels: chromeScrape ? [] : ['fb', 'ig'],
+                // chromeScrape: keep exactly ONE fb/ig source in flight, planned AHEAD
+                // of the web picks (planned first -> earliest createdAt -> dispatched
+                // first). The bridge is single-client and the conductor serializes
+                // browser workers to one, so one queued task keeps the logged-in
+                // Chrome continuously busy from boot -- recency sort alone buries
+                // 40 fb/ig sources behind ~280 never-scraped web sources -- while
+                // never piling up browser tasks or eating the web scrape slots.
+                const sources = (chromeScrape && !browserOpen)
+                    ? sourceStore.readySources({
+                          limit: 1, onlyChannels: ['fb', 'ig'], excludeUrls: skipUrls })
+                    : [];
+                sources.push(...sourceStore.readySources({
+                    limit: Math.max(0, ckScrape.eff - sources.length),
+                    excludeChannels: ['fb', 'ig'],
                     excludeUrls: skipUrls
-                });
+                }));
                 for (const s of sources) {
                     if (scrapePlanned >= ckScrape.eff) break;
                     const row = await createTask('SCRAPE_SOURCE', {
@@ -2478,7 +2562,7 @@ async function pipelinePlanTasksInner(id, args) {
         // to run wide -- capped by CPU/RAM (TASK_TYPE_LIMITS.LAST_30_DAYS), not cost.
         // Fires when the funnel needs fresh input; spawns a batch up to the limit so
         // several run in parallel instead of one-at-a-time.
-        if (shouldPlanDiscovery) {
+        if (!suppressed.has('LAST_30_DAYS') && shouldPlanDiscovery) {
             const want = TASK_TYPE_LIMITS.LAST_30_DAYS || 1;
             for (let i = 0; i < want; i++) {
                 if ((await createBudget('LAST_30_DAYS')).eff <= 0) break;

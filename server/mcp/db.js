@@ -39,9 +39,12 @@ const CHANNEL_SKILL_OVERRIDES = {
     ig: 'ig-factlet-harvester/SKILL.md'
 };
 
-// SCRAPE_SOURCE task input carries { url, channel }; other types have no channel.
+// SCRAPE_SOURCE task input carries { url, channel }; DRILL_DOWN Signal tasks
+// (demand-signal bird-dog, 2026-07-20) carry { url, note, channel }. Other types
+// have no channel.
 function taskChannel(row) {
-    if (!row || row.type !== 'SCRAPE_SOURCE' || row.input == null) return null;
+    if (!row || row.input == null) return null;
+    if (row.type !== 'SCRAPE_SOURCE' && row.type !== 'DRILL_DOWN') return null;
     try {
         const inp = typeof row.input === 'string' ? JSON.parse(row.input) : row.input;
         return (inp && inp.channel) || null;
@@ -85,21 +88,36 @@ async function attachTaskLabels(rows) {
 }
 
 // Poll for ready Tasks that have a worker skill. Returns rows with an extra
-// `skillFile` field + a human `label`. Ordered by createdAt ASC (oldest first).
+// `skillFile` field + a human `label`. VERTICAL-FIRST (2026-07-20): ready
+// DRILL_DOWN tasks are fetched FIRST (oldest first), then everything else fills
+// the remainder oldest-first — a queued drill (near-hot booking or demand
+// Signal) always jumps every queued scrape/enrich, matching the planner's
+// drill-focus. Bird-dogging a hot leed outranks growing the tree.
 async function conductorGetReadyTasks(limit) {
-    const rows = await prisma.task.findMany({
-        where:   { status: 'ready', type: { in: WORKER_TYPES } },
+    const cap = limit || 10;
+    const drills = await prisma.task.findMany({
+        where:   { status: 'ready', type: 'DRILL_DOWN' },
         orderBy: { createdAt: 'asc' },
-        take:    limit || 10
+        take:    cap
     });
+    const rest = cap - drills.length;
+    const others = rest > 0 ? await prisma.task.findMany({
+        where:   { status: 'ready', type: { in: WORKER_TYPES.filter(t => t !== 'DRILL_DOWN') } },
+        orderBy: { createdAt: 'asc' },
+        take:    rest
+    }) : [];
+    const rows = [...drills, ...others];
     await attachTaskLabels(rows);
     return rows.map(r => {
         const ch = taskChannel(r);
         return {
             ...r,
-            skillFile: (ch && CHANNEL_SKILL_OVERRIDES[ch]) || WORKER_SKILL_MAP[r.type],
-            // Set only for channels that need the single-client chrome bridge; the
-            // conductor uses it to gate on chromeScrape and serialize to one worker.
+            // fb/ig SCRAPE_SOURCE swaps in the harvester skill; a DRILL_DOWN Signal
+            // keeps drill-down.md (it drills through the pipeline `browse` action).
+            skillFile: (r.type === 'SCRAPE_SOURCE' && ch && CHANNEL_SKILL_OVERRIDES[ch])
+                || WORKER_SKILL_MAP[r.type],
+            // Set for any fb/ig-channel task: the conductor uses it to gate on
+            // chromeScrape and serialize bridge users to one worker at a time.
             browserChannel: (ch && CHANNEL_SKILL_OVERRIDES[ch]) ? ch : null
         };
     });

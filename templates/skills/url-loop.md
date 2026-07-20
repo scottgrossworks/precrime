@@ -26,7 +26,22 @@ to you exist.
 - Else treat each article's `title + snippet + content?` as evidence, its `url` as `sourceUrl`.
   Extract relevant Clients/Factlets/Bookings. Save article URLs as Sources (don't extract them here).
 
-### default web (directory, blog, website, reddit, fb, ig, x, unknown)
+### channel === "reddit" — old.reddit `.json` through the bridge (NOT tavily)
+Reddit blocks Tavily AND plain Chrome fetches; the reliable path (proven live 2026-07-20)
+is old-Reddit's raw JSON endpoints through `precrime__pipeline({ action:"browse", url })`:
+1. Rewrite the source url to its old-Reddit JSON listing:
+   `https://old.reddit.com/r/<sub>/new.json` — and for a targeted pass,
+   `https://old.reddit.com/r/<sub>/search.json?q=<VALUE_PROP trade term>&restrict_sr=1&sort=new`.
+2. `browse` it. The returned text is Reddit's listing JSON: each post has `title`,
+   `selftext` (the body), `author`, `permalink`, `ups`, `created_utc`.
+3. Extract per the default-web rules below (BUYERS ONLY, service area, engagement floor
+   on `ups`). An "ask" post you cannot attribute → `signal` with
+   `url: "https://old.reddit.com" + permalink` and the verbatim `title + selftext`.
+4. `browse` errors ("bridge busy"/unavailable — Chrome may be closed) → retry once, then
+   fall back to `tavily__tavily_extract({ url })`; if that also fails → complete `failed`
+   `reddit_blocked`.
+
+### default web (directory, blog, website, fb, ig, x, unknown)
 `tavily__tavily_extract({ url })`. Fails → complete `failed`.
 From content, extract only VALUE_PROP-relevant:
 - Clients: **BUYERS ONLY** — people/businesses that could plausibly HIRE the VALUE_PROP
@@ -89,6 +104,12 @@ precrime__pipeline({ action:"add_sources", entries:[
   { url:"<discovered feed url>", channel:"rss", subtype:"feed", discoveredFrom:"<scraped url>" } ]})
 ```
 add_sources returns counts only, no IDs → pass `sourceIds:[]`. Always `judge:false`; never write `Booking.status`.
+
+**DEMAND YOU CANNOT ATTRIBUTE — signal it (bird-dog rule):** a post/thread where someone is
+ASKING for an event vendor/planner/entertainment but you cannot capture their real name or
+contact: do NOT drop it, do NOT save a nameless client — call
+`precrime__pipeline({ action:"signal", url:"<the post/thread url>", note:"<verbatim demand text incl. any date/venue>" })`.
+A DRILL_DOWN worker will chase the poster to a real person + booking.
 
 ## Step 3 — Mark source
 `precrime__pipeline({ action:"mark_source", url, clientsFound: <save count> })`

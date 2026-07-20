@@ -64,6 +64,13 @@ precrime__pipeline({ action:"add_sources", entries:[
 
 Server dedups on URL. Do NOT write source files by hand -- use `add_sources` (the server is the sole writer; it appends to data/sources/).
 
+**DEMAND YOU CANNOT ATTRIBUTE -- signal it (bird-dog rule):** a post where someone is ASKING
+for an event vendor/planner/entertainment ("looking for...", "in search of...", "need a...")
+but you cannot capture their real name or contact is the MOST valuable find on the page. Do
+NOT drop it and do NOT save a nameless client -- call
+`precrime__pipeline({ action:"signal", url:"<permalink to the POST if visible, else the group url>", note:"<verbatim post text incl. any date/venue>" })`.
+A DRILL_DOWN worker will chase the poster to a real person + booking.
+
 ## Step 4 -- Mark Source
 
 ```

@@ -136,7 +136,11 @@ function recipeExtLines(taskType, browserChannel) {
     // developer ships ONLY with SCRAPE_SOURCE. Each worker gets the absolute
     // minimum extension set its skill actually calls.
     const base = [...precrime];
-    if (browserChannel) return [...base, ...chrome];
+    // Direct chrome tools go ONLY to the fb/ig harvester skills (SCRAPE_SOURCE).
+    // A DRILL_DOWN Signal task also sets browserChannel (for the chromeScrape gate
+    // + one-at-a-time serialization) but drills through the pipeline `browse`
+    // action -- shipping the 25+-tool chrome schema to it would be pure token tax.
+    if (browserChannel && taskType === 'SCRAPE_SOURCE') return [...base, ...chrome];
     switch (taskType) {
         case 'SCRAPE_SOURCE':       return [...base, ...developer, ...tavily, ...rss];
         case 'DRILL_DOWN':
@@ -225,6 +229,12 @@ let hotProduced = 0;
 // -- no stdin/IPC. Default (before start) says so.
 let _reportStatus = () => ({ started: false, note: 'conductor not started' });
 function conductorStatus() { return _reportStatus(); }
+// USER PAUSE LEVER (2026-07-20): pipeline pause/resume rides the SAME soft-rest
+// mechanism as the pacing/rate-limit breathers. minutes > 0 pauses (in-flight
+// workers finish, no new dispatch until expiry or explicit resume); minutes <= 0
+// resumes immediately with a fresh work window.
+let _pauseControl = () => ({ ok: false, note: 'conductor not started' });
+function conductorPause(minutes) { return _pauseControl(minutes); }
 function armConductor(opts) {
     // A targeted (re)arm sets the goal and resets the counter for a fresh run.
     // targetHot N>0 = auto-stop after N NEW hot leedz. An EXPLICIT targetHot 0 =
@@ -364,6 +374,22 @@ async function conductorLoop(cfg, hooks) {
     const maxWorkersPerRun = Number.isFinite(w.maxWorkersPerRun) ? w.maxWorkersPerRun : 150;
     const maxRunMs = Number.isFinite(w.maxRunMs) ? w.maxRunMs : 15 * 60 * 1000;
     const restMs = Number.isFinite(w.restMs) ? w.restMs : 20 * 60 * 1000;  // breather between work windows
+    // Wire the user pause/resume lever into THIS loop's rest state (see conductorPause).
+    _pauseControl = (minutes) => {
+        const m = Number(minutes);
+        if (Number.isFinite(m) && m > 0) {
+            restReason = `user pause (${m}min)`;
+            restUntil = Date.now() + m * 60 * 1000;
+            restLogged = false;
+            console.error(`[conductor] USER PAUSE — ${m}min. ${active.size} in-flight will finish; no new dispatch until resume/expiry.`);
+            return { ok: true, paused: true, minutes: m, inFlight: active.size };
+        }
+        const wasResting = !!restReason;
+        restReason = null; restUntil = 0; restLogged = false;
+        workersSpawned = 0; firstSpawnAt = 0; lastReplanAt = 0;
+        console.error('[conductor] USER RESUME — rest cleared; fresh work window.');
+        return { ok: true, paused: false, resumed: wasResting };
+    };
     // LLM provider says credits/quota are gone -> every worker will 403; this one is a TRUE halt.
     // Match ONLY genuine LLM-provider credit/quota exhaustion. The bare "quota exceeded" was too
     // broad -- a Tavily/RSS "API quota exceeded" line tripped this and PERMANENTLY halted the whole
@@ -818,4 +844,4 @@ function startConductor(cfg, hooks) {
     conductorLoop(cfg, hooks).catch(e => console.error('[conductor] fatal loop crash:', e));
 }
 
-module.exports = { startConductor, armConductor, isArmed, buildWorkerRecipe, recipeExtLines, conductorStatus };
+module.exports = { startConductor, armConductor, isArmed, buildWorkerRecipe, recipeExtLines, conductorStatus, conductorPause };

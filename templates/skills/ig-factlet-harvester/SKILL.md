@@ -54,6 +54,12 @@ precrime__pipeline({ action:"add_sources", entries:[
 
 Every save MUST pass `judge:false`. Do not write `Booking.status`. Do NOT write source files by hand -- use `add_sources` (server is sole writer).
 
+**DEMAND YOU CANNOT ATTRIBUTE -- signal it (bird-dog rule):** a caption/comment where someone
+is ASKING for an event vendor/planner/entertainment but you cannot capture their real name or
+contact: do NOT drop it, do NOT save a nameless client -- call
+`precrime__pipeline({ action:"signal", url:"<post permalink if visible, else the account url>", note:"<verbatim text incl. any date/venue>" })`.
+A DRILL_DOWN worker will chase the poster to a real person + booking.
+
 ## Step 4 -- Mark Source
 
 ```
