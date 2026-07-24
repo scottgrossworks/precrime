@@ -307,6 +307,11 @@ if (fs.existsSync(pkgSrc)) {
 }
 
 // 2d. Copy server/prisma/schema.prisma
+// NOTE (SCHEMA unification 2026-07-20): server/prisma/schema.prisma is a marked
+// COPY of the canonical schema at C:\Users\Scott\Desktop\WKG\SCHEMA\schema.prisma.
+// Runtime DB access goes through the shared leedz-db package (server/mcp/db.js
+// requires it; LEEDZ_DB_PATH env var overrides the location on a target machine
+// where the WKG\SCHEMA path differs). See SCHEMA\PLAN.md.
 const schemaSrc = path.join(PRECRIME, 'server', 'prisma', 'schema.prisma');
 const schemaDst = path.join(outputDir, 'server', 'prisma', 'schema.prisma');
 if (fs.existsSync(schemaSrc)) {

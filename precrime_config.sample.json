@@ -6,6 +6,8 @@
   "defaultMode": "interactive",
   "_chromeScrape_note": "true = background fb/ig SCRAPE workers drive your logged-in Chrome via the mcp-chrome bridge (:12306), in EVERY mode. Requires mcp-chrome-bridge + the extension. The bridge is single-client and the pipeline owns it: the conductor serializes browser workers to one at a time. The orchestrator has no chrome tools.",
   "chromeScrape": false,
+  "_browsePacingMs_note": "SPEED IS NOT THE GOAL -- staying invisible is. Minimum milliseconds between chrome-bridge fetches to the SAME domain (old.reddit.com and www.reddit.com count as one). Every browse caller (workers, orchestrator, signal drills) shares ONE paced queue, and +/-30% random jitter is applied so the rhythm never looks mechanical. If a fetched page looks like a bot-block wall, that domain is automatically frozen for 45 minutes. 30000 (30s) is deliberately conservative: raise only if scraping stalls, LOWER it never below 10000, and if a platform still blocks us the answer is a higher value, not retries.",
+  "browsePacingMs": 30000,
   "apiKeys": {
     "openai": "",
     "anthropic": "",
@@ -58,5 +60,9 @@
     "redditConfig": "reddit/reddit_config.json",
     "igConfig": "ig/ig_config.json",
     "gmailConfig": "server/mcp/gmail_mcp_config.json"
+  },
+  "workers": {
+    "_maxWorkers_note": "CONCURRENCY vs PROVIDER RPM: total simultaneous workers (goose spawns + background in-process jobs). Each worker makes ~8-12 LLM requests/min (one per tool turn) and ALL workers + the server's own judge/apply calls share ONE provider rate limit. On a 50 rpm budget (openrouter free tiers) 10 workers is ~2x over budget and guarantees rate-limit ORPHANs the moment the queue fills; 4 stays under it. Raise only on a paid tier with real rpm headroom. Focus > breadth: fewer workers also means the vertical (drill) work gets the rpm budget instead of the horizontal sweep.",
+    "maxWorkers": 4
   }
 }
