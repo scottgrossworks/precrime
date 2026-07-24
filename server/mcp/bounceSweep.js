@@ -1,15 +1,15 @@
 // ============================================================================
 // bounceSweep.js -- read Gmail for hard-bounce (mailer-daemon) notices and
 // return the undeliverable recipient addresses. Procedural, zero-LLM. Borrows
-// the OAuth token the Gmail MCP already shares on http://127.0.0.1:3001/token,
+// the OAuth token the Gmail MCP already shares on http://127.0.0.1:7000/token,
 // so PRECRIME reads Gmail with the SAME credentials that send it -- no second
 // auth, no public endpoint, no Pub/Sub. Requires the extension's OAuth scopes
 // to include gmail.readonly (added to INVOICER manifest 2026-07-13); until the
 // user re-consents, the Gmail API returns 403 and this cleanly returns [].
 // ============================================================================
 
-// The Gmail MCP's token-sharing endpoint (mcp_gmail.js: GET /token, default :3001).
-const TOKEN_URL = process.env.PRECRIME_GMAIL_TOKEN_URL || 'http://127.0.0.1:3001/token';
+// The Gmail MCP's token-sharing endpoint (mcp_gmail.js: GET /token, default :7000).
+const TOKEN_URL = process.env.PRECRIME_GMAIL_TOKEN_URL || 'http://127.0.0.1:7000/token';
 // Search only recent daemon mail; a permanent bounce lands within minutes.
 const BOUNCE_QUERY = 'from:mailer-daemon@googlemail.com OR from:postmaster newer_than:2d';
 const GMAIL_API = 'https://gmail.googleapis.com/gmail/v1/users/me';
