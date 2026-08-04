@@ -63,3 +63,15 @@ PEER_SOURCES.json
 
 # last30days/ is a separate nested git repo and holds a live API key — never tracked here
 last30days/
+
+# --- Square import (bespoke integration, NOT part of the precrime build) ---
+# One-off CRM import of Square payment history for a single deployment. Kept out
+# of the generic product until it earns a place in it.
+square_export/
+data/square-*-raw.json
+scripts/square_import.js
+server/mcp/squareApi.js
+server/mcp/workers/SquareSyncWorker.js
+TMP/square_q.js
+DOCS/SQUARE_APP.md
+DOCS/plans/*-square-*-plan.md
