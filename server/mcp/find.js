@@ -71,6 +71,14 @@ function createFindHandlers(deps) {
 
         if (filters.draftStatus) where.draftStatus = filters.draftStatus;
 
+        // Client.source is the PROVENANCE key -- and the only DURABLE one: it is set
+        // once at create and is NOT in pipelineSave's updatable clientFields, so no
+        // later worker can overwrite it (segment CAN be overwritten). Filtering on it
+        // is how a whole import cohort is recovered later, e.g.
+        // find({action:"clients", filters:{source:"square:"}}) -> every Square customer.
+        // Applied outside the id/search/else chain so it composes with any of them.
+        if (filters.source) where.source = { contains: filters.source };
+
         if (filters.warmthScore !== undefined) {
             where.warmthScore = parseInt(filters.warmthScore, 10);
         } else if (filters.minWarmthScore !== undefined || filters.maxWarmthScore !== undefined) {
@@ -86,7 +94,16 @@ function createFindHandlers(deps) {
                 id: true, name: true, company: true, segment: true,
                 email: true, phone: true, website: true,
                 dossierScore: true, contactGate: true, intelScore: true,
-                warmthScore: true, draftStatus: true, lastEnriched: true, source: true
+                warmthScore: true, draftStatus: true, lastEnriched: true, source: true,
+                // WHAT THE CLIENT IS WORTH. Without this the summary answered "who is
+                // this?" but never "what have they paid us / what are we chasing?" --
+                // a client looked up by name showed no money at all. Newest 5 bookings,
+                // four fields each: the money question answered in the same call.
+                bookings: {
+                    select: { id: true, title: true, status: true, startDate: true, totalAmount: true },
+                    orderBy: { startDate: 'desc' },
+                    take: 5
+                }
             };
         }
 
@@ -102,6 +119,9 @@ function createFindHandlers(deps) {
         if (filters.id)     where.id     = filters.id;
         if (filters.status) where.status = filters.status;
         if (filters.trade)  where.trade  = filters.trade;
+        // Provenance, same purpose as the Client filter above: "square:payment:" recovers
+        // every imported payment record.
+        if (filters.source) where.source = { contains: filters.source };
         if (filters.shared !== undefined) where.shared = !!filters.shared;
         if (filters.future === true) where.startDate = { gte: new Date() };
         if (filters.startDateGte) {

@@ -400,13 +400,16 @@ const TOOL_DEFS = [
                             },
                             filters: {
                                 type: 'object',
-                                description: 'Action-specific filters. clients: search, name, email, company, segment, draftStatus, warmthScore, minWarmthScore, maxWarmthScore. bookings: status, trade, search. factlets: sinceTimestamp, clientId. drafts: minScore.',
+                                description: 'Action-specific filters. clients: search, name, email, company, segment, source, draftStatus, warmthScore, minWarmthScore, maxWarmthScore. bookings: status, trade, source, search. factlets: sinceTimestamp, clientId. drafts: minScore.',
                                 properties: {
                                     search:         { type: 'string' },
                                     name:           { type: 'string' },
                                     email:          { type: 'string' },
                                     company:        { type: 'string' },
                                     segment:        { type: 'string' },
+                                    // Provenance prefix match -- how an entire import cohort is
+                                    // recovered later, e.g. source:"square:" for every Square customer.
+                                    source:         { type: 'string' },
                                     draftStatus:    { type: 'string' },
                                     warmthScore:    { type: 'number' },
                                     minWarmthScore: { type: 'number' },
