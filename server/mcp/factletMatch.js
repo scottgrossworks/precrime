@@ -158,7 +158,20 @@ async function computeNearHotBookings() {
         where: {
             status: { in: ['cold', 'brewing'] },
             startDate: { gt: new Date() },
-            shared: false
+            shared: false,
+            // EVIDENCE GATE (2026-08-03). A drill is only worth spending when there is a
+            // REAL event to chase, and sourceUrl -- the page we actually saw it on -- is
+            // the proof. Without this the query asked only "are fields missing?", so
+            // SYNTHETIC bookings ranked as ideal targets: the "(seed) awaiting real event"
+            // stubs minted for every new client, and the square: re-engagement bookings
+            // dated a year after a past payment. Both are missing everything by
+            // construction, so workers hunted a venue that does not exist and INVENTED
+            // one (a caricature tipper's booking came back located in Bali).
+            // Measured when added: 2096 candidates -> 320 real ones; 1377 seed stubs and
+            // 362 square forward bookings dropped out. They stay in the DB and still reach
+            // DRAFT_OUTREACH (which needs no location or time) -- they just stop pulling
+            // drill workers away from actual leedz.
+            sourceUrl: { not: null }
         },
         include: { client: true }
     });
