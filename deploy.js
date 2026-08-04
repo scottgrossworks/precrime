@@ -253,7 +253,11 @@ if (fs.existsSync(mcpSrc)) {
 // value_prop, db, sourceStore, conductor). Without ALL of these the MCP server
 // crashes on startup ("Cannot find module") and the :5179 extension never connects.
 // Keep this list in sync with the require('./...') lines at the top of mcp_server.js.
-for (const mod of ['classification.js', 'value_prop.js', 'conductor.js', 'db.js', 'verify.js', 'sourceStore.js', 'dates.js', 'responses.js', 'runtime.js', 'find.js', 'share.js', 'toolDefs.js', 'factlets.js', 'logging.js', 'sessionLog.js', 'recycler.js', 'judge.js', 'saveClient.js', 'factletMatch.js', 'sourceQueue.js']) {
+// textSanitize.js, bounceSweep.js, chromeBridge.js added 2026-08-03: all three are
+// require()d at runtime (saveClient -> textSanitize; mcp_server -> bounceSweep;
+// conductor/browse -> chromeBridge) but were absent from this list, so every deploy
+// shipped a tree that threw MODULE_NOT_FOUND on the first save / bounce poll / browse.
+for (const mod of ['classification.js', 'value_prop.js', 'conductor.js', 'db.js', 'verify.js', 'sourceStore.js', 'dates.js', 'responses.js', 'runtime.js', 'find.js', 'share.js', 'toolDefs.js', 'factlets.js', 'logging.js', 'sessionLog.js', 'recycler.js', 'judge.js', 'saveClient.js', 'factletMatch.js', 'sourceQueue.js', 'textSanitize.js', 'bounceSweep.js', 'chromeBridge.js']) {
   const src = path.join(PRECRIME, 'server', 'mcp', mod);
   if (fs.existsSync(src)) {
     copyFile(src, path.join(outputDir, 'server', 'mcp', mod));
