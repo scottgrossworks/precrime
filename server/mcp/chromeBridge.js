@@ -64,7 +64,17 @@ async function bridgePost(sessionId, payload) {
         method: 'POST', headers, body: JSON.stringify(payload),
         signal: AbortSignal.timeout(BRIDGE_TIMEOUT_MS)
     });
-    if (!res.ok) throw new Error(`bridge http ${res.status}`);
+    if (!res.ok) {
+        // Surface the bridge's own error body -- a bare "bridge http 500" hid the real
+        // diagnosis for hours (2026-08-05): "Already connected to a transport" = a dead
+        // worker leaked the bridge's SINGLE session and every later connect 500s until
+        // the user clicks Disconnect/Connect in the mcp-chrome extension popup.
+        let detail = '';
+        try { detail = (await res.text()).slice(0, 200); } catch (_) {}
+        const wedged = detail.includes('Already connected to a transport');
+        throw new Error(`bridge http ${res.status}${detail ? `: ${detail}` : ''}${wedged
+            ? ' [BRIDGE WEDGED by a stale session -- click Disconnect then Connect in the mcp-chrome extension popup]' : ''}`);
+    }
     return { json: await parseBridgeResponse(res), sessionId: res.headers.get('mcp-session-id') || sessionId };
 }
 
