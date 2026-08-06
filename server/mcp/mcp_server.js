@@ -1538,6 +1538,33 @@ async function runInProcessTask(task) {
         });
         return { type: task.type, summary: r.summary };
     }
+    // FIND / ENRICH / DRAFT (2026-08-06): converted from spawned goose sessions.
+    // Same task rows, same planner, same budgets -- execution is now a bounded
+    // direct call (FIND: zero-LLM Tavily; ENRICH/DRAFT: one completion each).
+    if (task.type === 'FIND_CLIENT_SOURCES') {
+        const { run } = require('./workers/FindClientSourcesWorker');
+        const r = await run(task, { pipelineSave });
+        await pipelineCompleteTask('inproc-findsrc', {
+            taskId: task.id, status: r.status || 'done', output: r.output || {}, error: r.error
+        });
+        return { type: task.type, summary: r.summary };
+    }
+    if (task.type === 'ENRICH_CLIENT') {
+        const { run } = require('./workers/EnrichClientWorker');
+        const r = await run(task, { pipelineSave });
+        await pipelineCompleteTask('inproc-enrich', {
+            taskId: task.id, status: r.status || 'done', output: r.output || {}, error: r.error
+        });
+        return { type: task.type, summary: r.summary };
+    }
+    if (task.type === 'DRAFT_OUTREACH') {
+        const { run } = require('./workers/DraftOutreachWorker');
+        const r = await run(task, { pipelineSave });
+        await pipelineCompleteTask('inproc-draft', {
+            taskId: task.id, status: r.status || 'done', output: r.output || {}, error: r.error
+        });
+        return { type: task.type, summary: r.summary };
+    }
     // Unknown in-process type — fail it so it cannot loop forever.
     await pipelineCompleteTask('inproc-unknown', { taskId: task.id, status: 'failed', error: `no in-process handler for ${task.type}` });
     return { type: task.type, error: 'no_handler' };

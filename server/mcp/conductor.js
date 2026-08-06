@@ -40,7 +40,11 @@ const EXT_SCOPE = _extScopeRaw !== '' && _extScopeRaw !== '0' && _extScopeRaw !=
 // tracked background jobs instead (counted against maxWorkers via `active`). Cheap
 // in-process types (JUDGE_AFFECTED, SHOW_HOT_LEEDZ) still run inline because JUDGE
 // gates the planner and both finish in well under a second.
-const INPROC_BACKGROUND = new Set(['LAST_30_DAYS', 'BOUNCE_SWEEP', 'APPLY_FACTLET']);
+const INPROC_BACKGROUND = new Set(['LAST_30_DAYS', 'BOUNCE_SWEEP', 'APPLY_FACTLET',
+    // Converted from spawned sessions 2026-08-06: each does network I/O (Tavily
+    // and/or one LLM call), so they run as tracked background jobs -- never
+    // awaited inline in the dispatch loop.
+    'FIND_CLIENT_SOURCES', 'ENRICH_CLIENT', 'DRAFT_OUTREACH']);
 
 // SHOW_HOT_LEEDZ is the INTERACTIVE presenter's task: goose seeds it (plan_tasks
 // hot_only) and claims it seconds later to show the user their hot leedz. While the
@@ -405,7 +409,7 @@ async function conductorLoop(cfg, hooks) {
     // 'NONE (positional prompt)' = claude-style; any '--flag' = file-passed (e.g. goose).
     const _flagDesc = workerInstFlag === '' ? 'NONE (positional prompt)' : workerInstFlag;
     console.error(`[conductor] worker config — bin=${workerBin} baseArgs=[${workerBaseArgs.join(' ')}] instFlag=${_flagDesc}`);
-    console.error(`[conductor] self-feed ${replan ? `ENABLED (idle replan cooldown ${idleReplanCooldownMs}ms)` : 'DISABLED (no replan hook)'}; in-process exec ${runInProcess ? 'ENABLED (JUDGE_AFFECTED, SHOW_HOT_LEEDZ, LAST_30_DAYS, BOUNCE_SWEEP, APPLY_FACTLET)' : 'DISABLED'}`);
+    console.error(`[conductor] self-feed ${replan ? `ENABLED (idle replan cooldown ${idleReplanCooldownMs}ms)` : 'DISABLED (no replan hook)'}; in-process exec ${runInProcess ? 'ENABLED (judge, show-hot, last30days, bounce, apply-factlet, find-sources, enrich, draft-outreach)' : 'DISABLED'}`);
     console.error('[conductor] DORMANT — waiting for RUN_WORKFLOW (plan_tasks) before claiming/dispatching');
 
     while (true) {

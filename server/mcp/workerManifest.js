@@ -36,15 +36,17 @@ const WORKER_MANIFEST = {
     },
     DRILL_DOWN:          { skill: 'drill-down.md',          extensions: ['tavily'], actions: [...SAVE_COMPLETE, 'browse'], tools: ['pipeline', 'find'] },
     DRILL_CONTAINER:     { skill: 'drill-container.md',     extensions: ['tavily'], actions: SAVE_COMPLETE,                tools: ['pipeline', 'find'] },
-    // ENRICH ships NO tavily (drift fix): enrichment-agent.md forbids searching /
-    // scraping -- the tavily schemas were pure per-turn token tax.
-    ENRICH_CLIENT:       { skill: 'enrichment-agent.md',    extensions: [],         actions: SAVE_COMPLETE,                tools: ['pipeline', 'find'] },
-    FIND_CLIENT_SOURCES: { skill: 'find-client-sources.md', extensions: ['tavily'], actions: SAVE_COMPLETE,                tools: ['pipeline', 'find'] },
     DISCOVER_SOURCES:    { skill: 'discover-sources.md',    extensions: ['tavily'], actions: ['get_config', 'complete_task', 'add_sources'], tools: ['pipeline', 'trades'] },
-    DRAFT_OUTREACH:      { skill: 'outreach-drafter.md',    extensions: [],         actions: ['get_config', 'save', 'complete_task'],        tools: ['pipeline', 'find'] },
-    // In-process since 2026-07-19 (never spawns, never connects with ?scope=) --
-    // entry kept so the scope table stays total over historical task types.
-    APPLY_FACTLET:       { skill: null,                     extensions: [],         actions: SAVE_COMPLETE,                tools: ['pipeline', 'find'] }
+    // skill:null = IN-PROCESS (never spawns, never connects with ?scope=); the
+    // entry is kept so the scope table stays total over historical task types.
+    // FIND/ENRICH/DRAFT converted 2026-08-06 (workers/FindClientSourcesWorker.js,
+    // EnrichClientWorker.js, DraftOutreachWorker.js): their skills were straight-
+    // line procedures with at most one LLM decision -- a full goose session per
+    // run was pure overhead. APPLY converted 2026-07-19.
+    ENRICH_CLIENT:       { skill: null, extensions: [], actions: SAVE_COMPLETE,                         tools: ['pipeline', 'find'] },
+    FIND_CLIENT_SOURCES: { skill: null, extensions: [], actions: SAVE_COMPLETE,                         tools: ['pipeline', 'find'] },
+    DRAFT_OUTREACH:      { skill: null, extensions: [], actions: ['get_config', 'save', 'complete_task'], tools: ['pipeline', 'find'] },
+    APPLY_FACTLET:       { skill: null, extensions: [], actions: SAVE_COMPLETE,                         tools: ['pipeline', 'find'] }
 };
 
 module.exports = { WORKER_MANIFEST };

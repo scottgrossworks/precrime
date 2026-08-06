@@ -69,7 +69,13 @@ function taskChannel(row) {
 // treats it as a background job (network I/O) so it never blocks worker dispatch.
 // APPLY_FACTLET (2026-07-19): one bounded LLM call per factlet applied to a batch
 // of clients (workers/ApplyFactletWorker.js); background so it never blocks dispatch.
-const IN_PROCESS_TYPES = ['JUDGE_AFFECTED', 'SHOW_HOT_LEEDZ', 'LAST_30_DAYS', 'BOUNCE_SWEEP', 'APPLY_FACTLET'];
+// FIND_CLIENT_SOURCES / ENRICH_CLIENT / DRAFT_OUTREACH (2026-08-06): converted
+// from spawned goose sessions to in-process workers -- straight-line procedures
+// with at most ONE LLM call each (FIND is zero-LLM: two bounded Tavily searches).
+// ~100 spawned sessions per planning cycle became bounded direct calls, and the
+// worker_exited_without_complete_task orphan mode is gone for these types.
+const IN_PROCESS_TYPES = ['JUDGE_AFFECTED', 'SHOW_HOT_LEEDZ', 'LAST_30_DAYS', 'BOUNCE_SWEEP', 'APPLY_FACTLET',
+    'FIND_CLIENT_SOURCES', 'ENRICH_CLIENT', 'DRAFT_OUTREACH'];
 
 // Poll for ready Tasks that have a worker skill. Returns rows with an extra
 // `skillFile` field + a human `label`. VERTICAL-FIRST (2026-07-20): ready
