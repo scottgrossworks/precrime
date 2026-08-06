@@ -3298,6 +3298,11 @@ async function processJsonRpcRequest(request, scope) {
         case 'notifications/initialized':
             return null;
         default:
+            // ALL notifications/* are fire-and-forget per the MCP spec: no response,
+            // no warning. notifications/cancelled arrives every time a worker abandons
+            // an in-flight request (its own LLM timed out, or the conductor killed it)
+            // and was spamming the log as "Unknown method" -- pure noise to the user.
+            if (typeof method === 'string' && method.startsWith('notifications/')) return null;
             logWarn(`Unknown method: ${method}`);
             return createErrorResponse(id, -32601, 'Method not found');
     }

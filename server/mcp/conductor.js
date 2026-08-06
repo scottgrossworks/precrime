@@ -731,7 +731,7 @@ async function conductorLoop(cfg, hooks) {
                 }
 
                 const killTimer = setTimeout(async () => {
-                    console.error(`[conductor] hung worker killed — task=${task.id} type=${task.type}`);
+                    console.error(`[conductor] hung worker killed — ${task.type}: ${taskDesc(task)} (no progress for ${Math.round(hungWorkerKillMs / 60000)} min; task failed, will be re-planned)`);
                     try { proc.kill('SIGTERM'); } catch (_) {}
                     await conductorFailTask(task.id, 'hung_worker_timeout');
                     active.delete(task.id);
