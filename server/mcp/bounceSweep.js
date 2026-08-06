@@ -8,7 +8,12 @@
 // user re-consents, the Gmail API returns 403 and this cleanly returns [].
 // ============================================================================
 
-// The Gmail MCP's token-sharing endpoint (mcp_gmail.js: GET /token, default :7000).
+// The Gmail MCP's token-sharing endpoint (mcp_gmail.js: GET /token).
+// ONE Gmail authority on :7000 (2026-08-03): the INVOICER extension authorizes
+// against :7000, and every Gmail client on this machine -- the extension, this
+// bounce sweep, precrime's stdio gmail instances -- shares that ONE token via
+// GET /token. Port 3001 was a second, separate token store nobody ever filled:
+// the extension's token landed on :7000 while this sweep polled :3001 forever.
 const TOKEN_URL = process.env.PRECRIME_GMAIL_TOKEN_URL || 'http://127.0.0.1:7000/token';
 // Search only recent daemon mail; a permanent bounce lands within minutes.
 const BOUNCE_QUERY = 'from:mailer-daemon@googlemail.com OR from:postmaster newer_than:2d';

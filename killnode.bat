@@ -5,10 +5,12 @@
 :: an interactive Goose session) themselves run as node/claude processes, so a
 :: blanket image-name kill crashes the very session you are working in. We match
 :: the COMMAND LINE instead, killing only:
-::   *mcp_server.js*  -> the PRECRIME MCP server + conductor (holds the Prisma lock)
-::   *--print*        -> one-shot Claude workers
-::   *--no-session*   -> one-shot Goose workers (Phase 2)
-::   *mcp_gmail.js*   -> the Gmail send/token MCP (holds port 3001; goose respawns it)
-:: Interactive Claude Code / Goose sessions carry none of those, so they survive.
-powershell -NoProfile -ExecutionPolicy Bypass -Command "Get-CimInstance Win32_Process | Where-Object { ($_.Name -in 'node.exe','claude.exe','goose.exe') -and $_.CommandLine -and ($_.CommandLine -like '*mcp_server.js*' -or $_.CommandLine -like '*mcp_gmail.js*' -or $_.CommandLine -like '*--print*' -or $_.CommandLine -like '*--no-session*') } | ForEach-Object { Write-Host ('  killed ' + $_.Name + ' PID ' + $_.ProcessId); Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }"
+::   THIS deployment's mcp_server.js  -> PRECRIME MCP server + conductor (Prisma lock)
+::   THIS deployment's mcp_gmail.js   -> PRECRIME's own Gmail sibling
+::   *--print* / *--no-session* + 'precrime' -> one-shot workers
+:: PATH-SCOPED (2026-08-03): the old loose '*mcp_gmail.js*'/'*mcp_server.js*'
+:: patterns ALSO matched the INVOICER's Gmail MCP (:7000) and Claude Desktop MCP --
+:: every killnode run silently knocked the Leedz extension's Gmail server offline.
+:: Interactive Claude Code / Goose sessions carry none of these, so they survive.
+powershell -NoProfile -ExecutionPolicy Bypass -Command "Get-CimInstance Win32_Process | Where-Object { ($_.Name -in 'node.exe','claude.exe','goose.exe') -and $_.CommandLine -and ($_.CommandLine -like '*%~dp0server\mcp\mcp_server.js*' -or $_.CommandLine -like '*%~dp0server\mcp\mcp_gmail.js*' -or (($_.CommandLine -like '*--print*' -or $_.CommandLine -like '*--no-session*' -or $_.CommandLine -like '*--recipe*') -and $_.CommandLine -like '*precrime*')) } | ForEach-Object { Write-Host ('  killed ' + $_.Name + ' PID ' + $_.ProcessId); Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }"
 echo  PRECRIME processes stopped. Interactive Claude/Goose sessions were NOT touched.

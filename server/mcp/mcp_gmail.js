@@ -294,7 +294,7 @@ function handleToolsList(id) {
             tools: [
                 {
                     name: 'gmail_send',
-                    description: 'Send email via Gmail OR save to drafts folder. IMPORTANT: Set draft=true to save email to drafts instead of sending (allows user to manually review, attach files, and send). Set draft=false or omit to send immediately. Ask user preference if unclear. Supports plain text and file attachments.',
+                    description: 'Create a Gmail DRAFT of an outreach email. This tool NEVER sends mail: every call lands in the user\'s Drafts folder, where THE USER reviews and sends it manually. That is by design and cannot be changed by any argument. Creating the draft consumes the leed (the client is procedurally marked sent/cold). Supports plain text and file attachments.',
                     inputSchema: {
                         type: 'object',
                         properties: {
@@ -320,7 +320,7 @@ function handleToolsList(id) {
                             },
                             draft: {
                                 type: 'boolean',
-                                description: 'If true, save to drafts folder instead of sending immediately. User can then review, attach files, and send manually from Gmail.'
+                                description: 'IGNORED. Every call creates a draft regardless of this flag; the server is hard-gated draft-only. Passing draft=false does NOT send.'
                             },
                             attachments: {
                                 type: 'array',
@@ -382,7 +382,19 @@ async function handleToolCall(id, params) {
     }
 
     try {
-        const isDraft = draft === true;
+        // HARD GATE — DRAFT-ONLY (standing rule 2026-08-05). An orchestrator model
+        // ANNOUNCED "I will create drafts for review" and then live-SENT five outreach
+        // emails to real prospects in one turn. Prompt prose cannot prevent that; this
+        // line does. Every gmail_send from PRECRIME creates a DRAFT, no matter what the
+        // model passes for `draft` -- the user reviews and sends from the Gmail Drafts
+        // folder. Real direct sends require the OPERATOR to set PRECRIME_GMAIL_ALLOW_SEND=1
+        // in the environment before launch (no launcher sets it): a human decision at the
+        // shell, unreachable from any tool argument or prompt.
+        const SEND_ALLOWED = process.env.PRECRIME_GMAIL_ALLOW_SEND === '1';
+        const isDraft = SEND_ALLOWED ? (draft === true) : true;
+        if (!SEND_ALLOWED && draft === false) {
+            console.error('[Gmail MCP] HARD GATE: direct-send request forced to DRAFT (PRECRIME is draft-only).');
+        }
         const action = isDraft ? 'Creating draft' : 'Sending email';
         console.error(`[Gmail MCP] ${action} to ${to}${attachments ? ` with ${attachments.length} attachment(s)` : ''}`);
 
@@ -405,7 +417,7 @@ async function handleToolCall(id, params) {
         const result = await sendGmailMessage(mimeMessage, isDraft);
 
         const successMsg = isDraft
-            ? `Draft created successfully for ${to}. Draft ID: ${result}`
+            ? `DRAFT created for ${to} (NOT sent -- this server is draft-only; the user reviews and sends it from the Gmail Drafts folder). Draft ID: ${result}. Report this to the user as a DRAFT, never as a sent email.`
             : `Email sent successfully to ${to}. Message ID: ${result}`;
 
         console.error(`[Gmail MCP] ${successMsg}`);

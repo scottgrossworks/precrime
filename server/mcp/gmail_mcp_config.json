@@ -5,7 +5,8 @@
     "protocolVersion": "2025-06-18"
   },
   "http": {
-    "port": 3001,
+    "_port_note": "SAME port as the INVOICER Gmail MCP (7000) ON PURPOSE. mcp_gmail.js instances are siblings: the first to bind owns the HTTP server + OAuth token; later instances lose the bind race, stay in stdio mode, and fetch the shared token via GET /token. One port = one token = the extension's single Authorize click serves INVOICER sending AND precrime's bounce sweep/drafts.",
+    "port": 7000,
     "host": "127.0.0.1"
   },
   "gmail": {

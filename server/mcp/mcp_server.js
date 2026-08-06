@@ -60,7 +60,7 @@ if (!fs.existsSync(resolvedDbPath)) {
 
 // Runtime/API config (Subproject 10). Optional file; loader returns defaults
 // if absent so the server still boots during the transition.
-const { PRECRIME_CONFIG, RUNTIME_CONFIG, VALUE_PROP, SCORING, PROMPTS, CHROME_SCRAPE_ACTIVE } = require('./runtime');
+const { PRECRIME_CONFIG, RUNTIME_CONFIG, VALUE_PROP, SCORING, PROMPTS, CHROME_SCRAPE_ACTIVE, BLACKLIST_PATH } = require('./runtime');
 
 // DATABASE_URL is now guaranteed to be a `file:` URL pointing at an existing DB
 // (the safety block above falls back or exits). dbPath is reused in startup logs.
@@ -273,6 +273,7 @@ async function handlePipeline(id, params) {
         }
         case 'judge_affected': return await pipelineJudgeAffected(id, args);
         case 'plan_tasks':     return await pipelinePlanTasks(id, args);
+        case 'enqueue':        return await pipelineEnqueue(id, args);
         case 'claim_task':     return await pipelineClaimTask(id, args);
         case 'complete_task':  return await pipelineCompleteTask(id, args);
         case 'tasks':          return await pipelineTasks(id, args);
@@ -363,11 +364,12 @@ async function handlePipeline(id, params) {
         }
         case 'resume':
             return createSuccessResponse(id, JSON.stringify(require('./conductor').conductorPause(0)));
+        case 'ignore':         return await pipelineIgnore(id, args);
         case 'mark_sent':      return await pipelineMarkSent(id, args);
         case 'mark_bounced':   return await pipelineMarkBounced(id, args);
         case 'bounce_sweep':   return await pipelineBounceSweep(id, args);
         default:
-            return createErrorResponse(id, -32602, `Unknown pipeline action: "${action}". Must be: status, configure, get_config, get_task, next, save, delete, rescore, resolve_dates, share_booking, dismiss_booking, mark_sent, mark_bounced, bounce_sweep, browse, signal, pause, resume, report_session, audit_session, next_source, mark_source, add_sources, import_sources, work_status, judge_affected, plan_tasks, claim_task, complete_task, tasks, recycler.`);
+            return createErrorResponse(id, -32602, `Unknown pipeline action: "${action}". Must be: status, configure, get_config, get_task, next, save, delete, rescore, resolve_dates, share_booking, dismiss_booking, ignore, mark_sent, mark_bounced, bounce_sweep, browse, signal, pause, resume, report_session, audit_session, next_source, mark_source, add_sources, import_sources, work_status, judge_affected, plan_tasks, claim_task, complete_task, tasks, recycler.`);
     }
 }
 
@@ -543,6 +545,13 @@ async function pipelineRescore(id, scope, procedural = false) {
         // Treat as clientId
         where = { clientId: scope };
     }
+    // TERMINAL exclusion (unification 2026-07-20): 'contacted'/'booked' are client
+    // outcomes ('booked' = gig WON, saved + calendared by the extension). Rescore
+    // must never touch them — without this, scope:"all" would demote the user's
+    // own booked gigs back into the funnel.
+    where.status = where.status
+        ? where.status
+        : { notIn: ['contacted', 'booked'] };
 
     // Snapshot counters: before/after status distribution + single changed total.
     const before = {};
@@ -624,7 +633,8 @@ async function pipelineStatus(id) {
     const [totalClients, totalFactlets, brewing, ready, sent,
            contactGatePass, contactGateFail,
            dossierHigh, dossierMid, dossierLow, dossierNone,
-           totalBookings, bookingsCold, bookingsBrewing, bookingsHot, bookingsShared] = await Promise.all([
+           totalBookings, bookingsCold, bookingsBrewing, bookingsHot, bookingsShared,
+           bookingsContacted, bookingsBooked] = await Promise.all([
         prisma.client.count(),
         prisma.factlet.count(),
         prisma.client.count({ where: { draftStatus: 'brewing' } }),
@@ -640,7 +650,11 @@ async function pipelineStatus(id) {
         prisma.booking.count({ where: { status: 'cold' } }),
         prisma.booking.count({ where: { status: 'brewing' } }),
         prisma.booking.count({ where: { status: 'hot' } }),
-        prisma.booking.count({ where: { shared: true } })
+        prisma.booking.count({ where: { shared: true } }),
+        // Unification 2026-07-20: client-outcome states. BOOKED is the headline
+        // conversion metric — the number this whole pipeline exists to increase.
+        prisma.booking.count({ where: { status: 'contacted' } }),
+        prisma.booking.count({ where: { status: 'booked' } })
     ]);
 
     // Ready drafts (top 5, summary)
@@ -698,9 +712,11 @@ async function pipelineStatus(id) {
         : `${totalFactlets} total  ·  ${unprocessedFactlets} unprocessed (of ${liveFactlets} live; discovery pauses at ${factletPause})`;
     const report = [
         'BOOKINGS',
-        `  HOT      ${bookingsHot}`,
-        `  BREWING  ${bookingsBrewing}`,
-        `  COLD     ${bookingsCold}`,
+        `  BOOKED     ${bookingsBooked}   <- gigs WON (the goal)`,
+        `  CONTACTED  ${bookingsContacted}`,
+        `  HOT        ${bookingsHot}`,
+        `  BREWING    ${bookingsBrewing}`,
+        `  COLD       ${bookingsCold}`,
         '',
         'LATEST BOOKINGS  (client · location · date)',
         bookingLines,
@@ -742,6 +758,8 @@ async function pipelineStatus(id) {
                 cold: bookingsCold,
                 brewing: bookingsBrewing,
                 hot: bookingsHot,
+                contacted: bookingsContacted,
+                booked: bookingsBooked,      // gigs WON — the headline conversion metric
                 shared: bookingsShared,
                 latest: latestBookings
             }
@@ -826,6 +844,7 @@ async function pipelineConfigure(id, _patch) {
 // than paraphrasing from the markdown.
 const GET_CONFIG_ALLOWED_KEYS = Object.freeze([
     'signature',
+    'sampleEmail',
     'companyName',
     'companyEmail',
     'businessDescription',
@@ -868,7 +887,11 @@ async function pipelineGetConfig(id, args) {
             `Allowed keys: ${GET_CONFIG_ALLOWED_KEYS.join(', ')}.`);
     }
     const cfg = RUNTIME_CONFIG;
-    const value = cfg[key];
+    // Keys parsed from VALUE_PROP.md (sampleEmail, and signature when unset in runtime
+    // config) fall back to the parsed VALUE_PROP object -- the outreach drafter's
+    // mandatory template lives there, not in precrime_config.json.
+    const value = (cfg[key] !== undefined && cfg[key] !== null && cfg[key] !== '')
+        ? cfg[key] : VALUE_PROP[key];
     return createSuccessResponse(id, JSON.stringify({
         key,
         value: (value === undefined ? null : value),
@@ -1518,6 +1541,113 @@ async function runInProcessTask(task) {
 // of the batch was duplicate LLM spend). One planner pass at a time; an
 // overlapping call is a no-op the conductor reads as "0 created this cycle".
 let PLAN_TASKS_IN_FLIGHT = false;
+
+// USER-ORDERED TASK (2026-08-04) -- "DRILL_DOWN Rock Dimension" must be ONE
+// call, not an argument. plan_tasks is system-wide and budget-gated; when the
+// user names ONE client, enqueue creates that task DIRECTLY -- no planner pass,
+// no budget gate -- and puts it ON TOP OF THE STACK: createdAt is backdated 1s
+// before the oldest ready task of the same type, and dispatch is oldest-first
+// within a type (with drills fetched before everything else, see db.js), so the
+// user's order is the next task claimed. If the conductor is dormant (interactive
+// session where RUN_WORKFLOW was never picked) it is armed with a bounded goal
+// (targetHot 1) so the order actually runs instead of sitting in a dead queue.
+async function pipelineEnqueue(id, args) {
+    const type = String(args.type || 'DRILL_DOWN').toUpperCase();
+    const ENQUEUE_TYPES = new Set(['DRILL_DOWN', 'ENRICH_CLIENT', 'FIND_CLIENT_SOURCES']);
+    if (!ENQUEUE_TYPES.has(type)) {
+        return createErrorResponse(id, -32602, `enqueue type must be one of: ${[...ENQUEUE_TYPES].join(', ')}.`);
+    }
+    // Resolve the target client: exact id wins; else substring match on
+    // name/company/email (SQLite LIKE -- case-insensitive for ASCII).
+    let client = null;
+    if (args.clientId) {
+        client = await prisma.client.findUnique({ where: { id: String(args.clientId) } });
+        if (!client) return createErrorResponse(id, -32602, `enqueue: no client with id "${args.clientId}".`);
+    } else {
+        const q = String(args.client || '').trim();
+        if (!q) return createErrorResponse(id, -32602, 'enqueue: pass client:"<name>" or clientId.');
+        const matches = await prisma.client.findMany({
+            where: { OR: [
+                { name:    { contains: q } },
+                { company: { contains: q } },
+                { email:   { contains: q } }
+            ] },
+            take: 6
+        });
+        if (matches.length === 0) {
+            return createErrorResponse(id, -32602, `enqueue: no client matches "${q}".`);
+        }
+        if (matches.length > 1) {
+            return createSuccessResponse(id, JSON.stringify({
+                status: 'AMBIGUOUS',
+                hint: `${matches.length} clients match "${q}". Re-call enqueue with the intended clientId.`,
+                candidates: matches.map(c => ({ id: c.id, name: c.name, company: c.company, email: c.email }))
+            }, null, 2));
+        }
+        client = matches[0];
+    }
+    const label = client.company || client.name || client.email || client.id;
+
+    // One open user-order per (type, client): a ready duplicate is BUMPED to the
+    // front instead of duplicated; a claimed one is already being worked.
+    const existing = await prisma.task.findFirst({
+        where: { type, targetType: 'Client', targetId: client.id, status: { in: ['ready', 'claimed'] } }
+    });
+    if (existing && existing.status === 'claimed') {
+        return createSuccessResponse(id, JSON.stringify({
+            status: 'ALREADY_RUNNING', taskId: existing.id, type, client: label,
+            hint: 'A worker holds this task right now -- work_status shows it.'
+        }, null, 2));
+    }
+
+    // Front-of-stack timestamp: 1s older than the oldest ready task of this type.
+    const oldest = await prisma.task.findFirst({
+        where: { status: 'ready', type },
+        orderBy: { createdAt: 'asc' },
+        select: { id: true, createdAt: true }
+    });
+    const frontAt = (oldest && !(existing && oldest.id === existing.id))
+        ? new Date(oldest.createdAt.getTime() - 1000)
+        : new Date();
+
+    let row;
+    if (existing) {
+        row = await prisma.task.update({ where: { id: existing.id }, data: { createdAt: frontAt } });
+    } else {
+        // Gap codes for the drill worker: no address at all -> hunt email + event;
+        // a role address (info@/events@/...) -> hunt a DIRECT address + event;
+        // a personal address -> just find the upcoming event that makes it hot.
+        const ROLE_EMAIL = /^(info|contact|hello|hi|events?|office|sales|admin|bookings?|team|support|enquiries|inquiries|mail|area)@/i;
+        const missing = (Array.isArray(args.missing) && args.missing.length) ? args.missing
+            : !client.email                  ? ['client_email', 'booking']
+            : ROLE_EMAIL.test(client.email)  ? ['client_email_generic', 'booking']
+            :                                  ['booking'];
+        row = await prisma.task.create({
+            data: {
+                type, status: 'ready', targetType: 'Client', targetId: client.id,
+                input: JSON.stringify(type === 'DRILL_DOWN'
+                    ? { clientId: client.id, missing, userOrdered: true }
+                    : { clientId: client.id, userOrdered: true }),
+                createdAt: frontAt
+            }
+        });
+    }
+
+    // Make sure something will actually dispatch it.
+    const cond = conductorStatus();
+    let conductorNote = 'conductor already running';
+    if (!(cond && cond.armed)) {
+        armConductor({ targetHot: 1 });
+        conductorNote = 'conductor was dormant -- armed (auto-stops after 1 new hot leed)';
+    }
+    logInfo(`enqueue: user-ordered ${type} for "${label}" (${client.id}) -> ${existing ? 'bumped to front' : 'created at front'} [${row.id}]; ${conductorNote}.`);
+    return createSuccessResponse(id, JSON.stringify({
+        status: existing ? 'BUMPED_TO_FRONT' : 'ENQUEUED',
+        taskId: row.id, type, client: label, clientId: client.id,
+        position: 'front of queue (drills dispatch before all other work)',
+        conductor: conductorNote
+    }, null, 2));
+}
 
 // PLANNER FOCUS (2026-07-19) -- the user's mid-session steering lever. In
 // interactive mode "process the factlets, nothing else" becomes
@@ -2802,6 +2932,76 @@ async function pipelineMarkSent(id, args) {
     });
     logInfo(`mark_sent: ${email || clientId} -> ${ids.length} client(s) sent, ${bk.count} booking(s) reset out of hot.`);
     return createSuccessResponse(id, JSON.stringify({ marked: ids.length, bookingsReset: bk.count }, null, 2));
+}
+
+// ignore -- the user's PERMANENT BLACKLIST for a specific company or person
+// (2026-08-05, "no more Rivian"). Distinct from VALUE_PROP Banned Terms (product
+// identity: categories the business never serves) -- this is the operational
+// graveyard: contacts dismissed over and over, ghosted outreach, competitors.
+// Stored in DOCS/BLACKLIST.md (one term per line), merged into the live banned
+// list at boot (runtime.js) AND immediately here, so it needs no restart. Effects:
+// existing matching bookings dismissed (acted-on -> cold forever, excluded from
+// drills/presenter), their clients' scores zeroed, open tasks cancelled, and every
+// FUTURE save containing the term refused by the banned-term gate -- rediscovery-proof.
+async function pipelineIgnore(id, args) {
+    const term = String((args && (args.term || args.client || args.name)) || '').trim();
+    if (term.length < 3) {
+        return createErrorResponse(id, -32602,
+            'ignore requires term (>= 3 chars): the company/person to permanently blacklist, e.g. { action:"ignore", term:"Rivian" }.');
+    }
+    // 1. Persist to DOCS/BLACKLIST.md (dedup, case-insensitive) + live-merge.
+    try {
+        let cur = '';
+        try { cur = fs.readFileSync(BLACKLIST_PATH, 'utf8'); } catch (_) {}
+        const have = cur.split(/\r?\n/).map(l => l.replace(/^[-*]\s*/, '').trim().toLowerCase());
+        if (!have.includes(term.toLowerCase())) {
+            fs.appendFileSync(BLACKLIST_PATH, (cur && !cur.endsWith('\n') ? '\n' : '') + term + '\n', 'utf8');
+        }
+    } catch (e) {
+        return createErrorResponse(id, -32603, `ignore: could not write BLACKLIST.md: ${e.message}`);
+    }
+    if (!Array.isArray(VALUE_PROP.bannedTerms)) VALUE_PROP.bannedTerms = [];
+    if (!VALUE_PROP.bannedTerms.some(t => String(t).toLowerCase() === term.toLowerCase())) {
+        VALUE_PROP.bannedTerms.push(term);
+    }
+    // 2. Dismiss every EXISTING booking whose identity matches (SQLite contains is
+    //    case-insensitive). Same acted-on write as dismiss_booking: cold forever.
+    const matches = await prisma.booking.findMany({
+        where: { OR: [
+            { title:       { contains: term } },
+            { description: { contains: term } },
+            { location:    { contains: term } },
+            { client: { OR: [ { name: { contains: term } }, { company: { contains: term } } ] } }
+        ]},
+        select: { id: true, clientId: true }
+    });
+    const bIds = matches.map(m => m.id);
+    const cIds = Array.from(new Set(matches.map(m => m.clientId).filter(Boolean)));
+    if (bIds.length) {
+        await prisma.booking.updateMany({ where: { id: { in: bIds } }, data: actedOnData('dismissed') });
+    }
+    if (cIds.length) {
+        await prisma.client.updateMany({ where: { id: { in: cIds } }, data: { dossierScore: 0, intelScore: 0 } });
+    }
+    // 3. Cancel open tasks aimed at any of them -- no more conductor spend.
+    let cancelled = { count: 0 };
+    if (bIds.length || cIds.length) {
+        cancelled = await prisma.task.updateMany({
+            where: { status: { in: ['ready', 'claimed'] }, OR: [
+                { targetType: 'Booking', targetId: { in: bIds } },
+                { targetType: 'Client',  targetId: { in: cIds } }
+            ]},
+            data: { status: 'cancelled', error: `ignored: ${term}` }
+        });
+    }
+    logInfo(`ignore: "${term}" blacklisted -- ${bIds.length} booking(s) dismissed, ${cIds.length} client(s) reset, ${cancelled.count} open task(s) cancelled.`);
+    return createSuccessResponse(id, JSON.stringify({
+        ignored: term,
+        dismissedBookings: bIds.length,
+        clientsReset: cIds.length,
+        cancelledOpenTasks: cancelled.count,
+        note: `"${term}" is permanently blacklisted (DOCS/BLACKLIST.md). Existing records are dismissed and cold forever, open tasks cancelled, and any future save mentioning it will be refused. Effective immediately, no restart needed.`
+    }, null, 2));
 }
 
 // mark_bounced -- DEAD-FLAG an undeliverable address (standing rule 2026-07-13). Called

@@ -41,6 +41,17 @@ const EXT_SCOPE = _extScopeRaw !== '' && _extScopeRaw !== '0' && _extScopeRaw !=
 // gates the planner and both finish in well under a second.
 const INPROC_BACKGROUND = new Set(['LAST_30_DAYS', 'BOUNCE_SWEEP', 'APPLY_FACTLET']);
 
+// SHOW_HOT_LEEDZ is the INTERACTIVE presenter's task: goose seeds it (plan_tasks
+// hot_only) and claims it seconds later to show the user their hot leedz. While the
+// workflow was armed, this loop claimed+completed it FIRST every poll ("N hot ready
+// to present" into a log nobody reads), stealing the presentation out from under the
+// user every single time -- status said 12 hot, the presenter said 0. Leave any
+// presenter task younger than this window for the interactive orchestrator; the
+// conductor only reaps ones nobody claimed (user walked away), so the open-task
+// budget still drains during unattended runs. Planner gating is unaffected: hot-stage
+// suppression keys off hotExists, not this task's status (mcp_server.js Stage 3).
+const SHOW_HOT_GRACE_MS = 15 * 60 * 1000;
+
 // Injected at the END of EVERY spawned worker's instructions (one place -> system-wide).
 // A worker is an automated tool-caller, not a chat assistant. Every token the model EMITS
 // is appended to the transcript and RE-BILLED as input on every later turn (the 5A+4B+...
@@ -457,6 +468,10 @@ async function conductorLoop(cfg, hooks) {
                 console.error('[conductor] in-process poll error:', e.message);
             }
             for (const t of inproc) {
+                // Presenter grace window: never race the interactive orchestrator for a
+                // fresh SHOW_HOT_LEEDZ (see SHOW_HOT_GRACE_MS above).
+                if (t.type === 'SHOW_HOT_LEEDZ'
+                    && (Date.now() - new Date(t.createdAt).getTime()) < SHOW_HOT_GRACE_MS) continue;
                 // Serialize heavy background in-process types: LAST_30_DAYS workers collide on a
                 // shared file if run concurrently ("being used by another process" -> exit 1).
                 // The old inline-await path serialized them for free; the background path does

@@ -1,12 +1,32 @@
-// db.js -- Prisma singleton + conductor task helpers
+// db.js -- PRECRIME's DB entry point: thin composition over the SHARED core.
 //
-// mcp_server.js sets DATABASE_URL before requiring this module, so
-// new PrismaClient() here picks up the correct resolved DB path.
-// This is the only file that instantiates PrismaClient.
-// Both mcp_server.js and conductor.js import from here; they share one instance.
+// Since the SCHEMA unification (2026-07-20, see C:\Users\Scott\Desktop\WKG\SCHEMA\PLAN.md):
+//   - The PrismaClient singleton + generic CRUD live in the shared `leedz-db`
+//     package (C:\Users\Scott\Desktop\WKG\SCHEMA\leedz-db), generated from the
+//     canonical schema at C:\Users\Scott\Desktop\WKG\SCHEMA\schema.prisma.
+//   - This file keeps PRECRIME POLICY only: the worker-skill map, in-process
+//     type list, channel overrides, and the drills-first dispatch ordering.
+//   - Exports are unchanged -- every other PRECRIME module still does
+//     `require('./db')` and gets the same names with the same signatures.
+//
+// mcp_server.js sets DATABASE_URL before requiring this module, so the shared
+// core picks up the correct resolved DB path at first use. LEEDZ_DB_PATH env
+// var can override the shared-module location (deployment escape hatch).
 
-const { PrismaClient } = require('@prisma/client');
-const prisma = new PrismaClient();
+const path = require('path');
+const LEEDZ_DB_HOME = process.env.LEEDZ_DB_PATH
+    || 'C:/Users/Scott/Desktop/WKG/SCHEMA/leedz-db';
+
+const core = require(LEEDZ_DB_HOME);
+const coreTasks = require(path.join(LEEDZ_DB_HOME, 'tasks'));
+
+// One shared PrismaClient for the whole process (created on first access,
+// after mcp_server.js has resolved DATABASE_URL). connect() also applies the
+// WAL + busy_timeout pragmas -- REQUIRED because the INVOICER local server may
+// have the same DB file open concurrently. Fire-and-forget: Prisma queues
+// queries issued before the connection completes.
+const prisma = core.prisma;
+core.connect().catch(e => console.error('[db] connect/WAL init failed:', e.message));
 
 // Task types the conductor can spawn a worker process for.
 // JUDGE_AFFECTED, SHOW_HOT_LEEDZ, SHARE_BOOKING are handled in-process by
@@ -64,29 +84,6 @@ function taskChannel(row) {
 // of clients (workers/ApplyFactletWorker.js); background so it never blocks dispatch.
 const IN_PROCESS_TYPES = ['JUDGE_AFFECTED', 'SHOW_HOT_LEEDZ', 'LAST_30_DAYS', 'BOUNCE_SWEEP', 'APPLY_FACTLET'];
 
-// Attach a HUMAN label to each task row: the client's company/name/email, or the
-// booking's "title — company". Conductor log lines print this instead of opaque
-// record ids ("client xz58qd" told a human nothing; "client Ape Fitness" does).
-// Two batched selects per poll — negligible against the worker spawn they precede.
-async function attachTaskLabels(rows) {
-    const cIds = [...new Set(rows.filter(r => r.targetType === 'Client' && r.targetId).map(r => r.targetId))];
-    const bIds = [...new Set(rows.filter(r => r.targetType === 'Booking' && r.targetId).map(r => r.targetId))];
-    const [cs, bs] = await Promise.all([
-        cIds.length ? prisma.client.findMany({ where: { id: { in: cIds } }, select: { id: true, name: true, company: true, email: true } }) : [],
-        bIds.length ? prisma.booking.findMany({ where: { id: { in: bIds } }, select: { id: true, title: true, client: { select: { company: true, name: true } } } }) : []
-    ]);
-    const cm = new Map(cs.map(c => [c.id, c.company || c.name || c.email || c.id.slice(-6)]));
-    const bm = new Map(bs.map(b => {
-        const org = b.client && (b.client.company || b.client.name);
-        return [b.id, `${b.title || '(untitled)'}${org ? ' — ' + org : ''}`];
-    }));
-    for (const r of rows) {
-        if (r.targetType === 'Client') r.label = cm.get(r.targetId);
-        else if (r.targetType === 'Booking') r.label = bm.get(r.targetId);
-    }
-    return rows;
-}
-
 // Poll for ready Tasks that have a worker skill. Returns rows with an extra
 // `skillFile` field + a human `label`. VERTICAL-FIRST (2026-07-20): ready
 // DRILL_DOWN tasks are fetched FIRST (oldest first), then everything else fills
@@ -95,19 +92,13 @@ async function attachTaskLabels(rows) {
 // drill-focus. Bird-dogging a hot leed outranks growing the tree.
 async function conductorGetReadyTasks(limit) {
     const cap = limit || 10;
-    const drills = await prisma.task.findMany({
-        where:   { status: 'ready', type: 'DRILL_DOWN' },
-        orderBy: { createdAt: 'asc' },
-        take:    cap
-    });
+    const drills = await coreTasks.getReadyTasksByTypes(['DRILL_DOWN'], cap);
     const rest = cap - drills.length;
-    const others = rest > 0 ? await prisma.task.findMany({
-        where:   { status: 'ready', type: { in: WORKER_TYPES.filter(t => t !== 'DRILL_DOWN') } },
-        orderBy: { createdAt: 'asc' },
-        take:    rest
-    }) : [];
+    const others = rest > 0
+        ? await coreTasks.getReadyTasksByTypes(WORKER_TYPES.filter(t => t !== 'DRILL_DOWN'), rest)
+        : [];
     const rows = [...drills, ...others];
-    await attachTaskLabels(rows);
+    await coreTasks.attachTaskLabels(rows);
     return rows.map(r => {
         const ch = taskChannel(r);
         return {
@@ -125,80 +116,19 @@ async function conductorGetReadyTasks(limit) {
 
 // Poll for ready in-process Tasks (JUDGE_AFFECTED, SHOW_HOT_LEEDZ). Oldest first.
 async function conductorGetReadyInProcessTasks(limit) {
-    return prisma.task.findMany({
-        where:   { status: 'ready', type: { in: IN_PROCESS_TYPES } },
-        orderBy: { createdAt: 'asc' },
-        take:    limit || 10
-    });
-}
-
-// Atomic compare-and-swap claim. Returns true if this caller won the race.
-async function conductorClaimTask(taskId, workerId) {
-    try {
-        const result = await prisma.task.updateMany({
-            where: { id: taskId, status: 'ready' },
-            data:  { status: 'claimed', claimedAt: new Date(), claimedBy: workerId }
-        });
-        return result.count > 0;
-    } catch (_) {
-        return false;
-    }
-}
-
-// Mark a task failed. Used when a worker exits non-zero or is killed for being hung.
-async function conductorFailTask(taskId, reason) {
-    try {
-        await prisma.task.updateMany({
-            where: { id: taskId },
-            data:  { status: 'failed', error: String(reason), finishedAt: new Date() }
-        });
-    } catch (_) {}
-}
-
-// Finalize a task ONLY if it is still 'claimed' -- i.e. the worker process exited but
-// never called complete_task, leaving the task orphaned. The where-clause guards status,
-// so a task the worker DID complete (now 'done'/'failed') is left untouched. Returns true
-// if it actually finalized a stuck task. This stops workers that exit-without-completing
-// from parking a task in 'claimed' until the 10-min stale-reclaim sweep -- the zombie loop.
-async function conductorFailIfClaimed(taskId, reason) {
-    try {
-        const r = await prisma.task.updateMany({
-            where: { id: taskId, status: 'claimed' },
-            data:  { status: 'failed', error: String(reason), finishedAt: new Date() }
-        });
-        return r.count > 0;
-    } catch (_) { return false; }
-}
-
-// Raw Task-row insert -- the persistence PRIMITIVE, callable from any module (the planner's
-// createTask wrapper, procedural workers). Stateless: no budget gate, no session accounting
-// (the planner's createTask owns those). `fields`: { sessionId?, targetType?, targetId?, input? };
-// `input` is JSON-stringified when it is an object. Returns the created row.
-async function createTaskRow(type, fields) {
-    const f = fields || {};
-    return prisma.task.create({
-        data: {
-            type,
-            status:     'ready',
-            sessionId:  f.sessionId || null,
-            targetType: f.targetType || 'none',
-            targetId:   f.targetId   || null,
-            input:      f.input != null
-                ? (typeof f.input === 'string' ? f.input : JSON.stringify(f.input))
-                : null
-        }
-    });
+    return coreTasks.getReadyTasksByTypes(IN_PROCESS_TYPES, limit);
 }
 
 module.exports = {
     prisma,
+    core,               // the shared leedz-db module (generic CRUD, connect, stats)
     WORKER_SKILL_MAP,
     CHANNEL_SKILL_OVERRIDES,
     IN_PROCESS_TYPES,
-    createTaskRow,
+    createTaskRow:                  coreTasks.createTaskRow,
     conductorGetReadyTasks,
     conductorGetReadyInProcessTasks,
-    conductorClaimTask,
-    conductorFailTask,
-    conductorFailIfClaimed
+    conductorClaimTask:             coreTasks.claimTask,
+    conductorFailTask:              coreTasks.failTask,
+    conductorFailIfClaimed:         coreTasks.failIfClaimed
 };

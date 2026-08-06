@@ -35,13 +35,25 @@ const DEFAULTS = Object.freeze({
     // and the PIPELINE owns it: the conductor serializes browser workers to one
     // at a time, in every mode. The orchestrator has no chrome tools.
     chromeScrape: false,
+    // Minimum ms between chrome-bridge fetches to the SAME domain (browse action;
+    // ±30% jitter applied -- fixed intervals are themselves a bot signature).
+    // Reddit's perimeter security blocked back-to-back machine-speed fetches
+    // (2026-07-20); this paces every browse caller at the bridge choke point.
+    // 30s is DELIBERATELY conservative: precrime is fast enough -- staying
+    // invisible to platform bot-detection matters more than scrape throughput.
+    browsePacingMs: 30000,
     apiKeys: {
         openai:         '',
         anthropic:      '',
         openrouter:     '',
         tavily:         '',
         scrapecreators: '',   // last30days social scrapers (IG/TikTok/Threads/Pinterest) -> SCRAPECREATORS_API_KEY
-        xai:            ''     // X/Twitter via xAI -> XAI_API_KEY
+        xai:            '',    // X/Twitter via xAI -> XAI_API_KEY
+        // Square personal access token (scopes: CUSTOMERS_READ, PAYMENTS_READ) for the
+        // SQUARE_SYNC past-customer importer. Left blank, squareApi.js falls back to the
+        // SquareConnection row INVOICER's OAuth flow writes. Not hydrated into process.env
+        // -- no third-party lib reads it.
+        square:         ''
     },
     llm: {
         provider: 'openai',
@@ -119,6 +131,7 @@ function mergeDefaults(raw, fallbacks) {
     pick('databaseFile',   DEFAULTS.databaseFile);
     pick('defaultMode',    DEFAULTS.defaultMode);
     pick('chromeScrape',   DEFAULTS.chromeScrape);
+    pick('browsePacingMs', DEFAULTS.browsePacingMs);
 
     out.apiKeys = Object.assign({}, DEFAULTS.apiKeys, raw.apiKeys || {});
     out.llm     = Object.assign({}, DEFAULTS.llm,     raw.llm     || {});

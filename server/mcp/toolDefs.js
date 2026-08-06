@@ -11,7 +11,7 @@ const TOOL_DEFS = [
                 {
                     name: 'pipeline',
                     description: [
-                        'Pre-Crime workflow operations. IMPORTANT: the names below are ACTIONS of THIS one `pipeline` tool, NOT standalone tools — to run any of them, call the `pipeline` tool with action:"<name>". There is no separate save / audit_session / complete_task / report_session / etc. tool; calling one of those names directly will fail with "Unknown tool". Actions: status, configure, next, save, delete, rescore, resolve_dates, browse, signal, pause, resume, plan_tasks, report_session, audit_session, next_source, mark_source, add_sources, import_sources, work_status.',
+                        'Pre-Crime workflow operations. IMPORTANT: the names below are ACTIONS of THIS one `pipeline` tool, NOT standalone tools — to run any of them, call the `pipeline` tool with action:"<name>". There is no separate save / audit_session / complete_task / report_session / etc. tool; calling one of those names directly will fail with "Unknown tool". Actions: status, configure, next, save, delete, rescore, resolve_dates, browse, signal, pause, resume, plan_tasks, enqueue, report_session, audit_session, next_source, mark_source, add_sources, import_sources, work_status.',
                         '',
                         'action="browse": Fetch a page THROUGH THE USER\'S OWN LOGGED-IN CHROME (mcp-chrome bridge, transient session). Pass url (http/https). Returns { url, text } — the rendered page text, lean-capped. This is THE way to reach Facebook, Instagram, or any signed-in site when the user asks you to look at one; use tavily for public web. Serialized with background chrome scrape workers; on "bridge busy" simply retry in a moment.',
                         '',
@@ -21,9 +21,15 @@ const TOOL_DEFS = [
                         '',
                         'action="plan_tasks" focus: optional user steering directive. focus:"factlets" = drain the unprocessed-factlet backlog and create NO other task types (only APPLY_FACTLET / JUDGE_AFFECTED / BOUNCE_SWEEP / SHOW_HOT_LEEDZ) until the backlog reaches the discovery-pause threshold, then focus auto-clears. focus:"none" clears immediately. In-flight tasks are never cancelled — focus only stops NEW work. When the user says "process the factlets, nothing else" call plan_tasks({ mode:"workflow", focus:"factlets" }). targetHot: the run goal — N>0 = auto-stop after N NEW hot leedz (launcher default 1); an explicit 0 = continuous ("don\'t bother me"). Update mid-session with one plan_tasks call.',
                         '',
+                        'action="enqueue": USER-ORDERED TASK for ONE named client — the front-of-queue lever. When the user names a specific client/company and asks to drill, dig into, research, or enrich it ("DRILL_DOWN Rock Dimension", "dig into Acme Corp", "find their upcoming events"), THIS is the ONE correct call — NEVER plan_tasks (system-wide, cannot target a client) and NEVER an explanation of why you cannot. Pass client:"<name substring>" (or clientId), optional type ("DRILL_DOWN" default | "ENRICH_CLIENT" | "FIND_CLIENT_SOURCES"), optional missing[] gap codes (server derives sensible defaults from the client record). The task bypasses planner budgets, is timestamped to the FRONT of the queue (drills dispatch before all other work), and the conductor is auto-armed if dormant. Returns ENQUEUED/BUMPED_TO_FRONT with taskId, ALREADY_RUNNING if a worker holds it, or AMBIGUOUS with candidates[] (re-call with clientId). Quote the literal status to the user, then continue what you were doing.',
+                        '',
                         'action="status": Read full system state in one call. Returns { config, stats, completeness, readyDrafts, brewingCount }. completeness is a derived check of whether config has the fields needed for the current defaultBookingAction. Use this at startup and between enrichment rounds.',
                         '',
-                        'action="configure": Update Config fields. Pass patch with any Config fields (companyName, companyEmail, businessDescription, activeEntities, defaultTrade, marketplaceEnabled, leadCaptureEnabled, leedzEmail, leedzSession, llmApiKey, llmProvider, llmModel, llmBaseUrl, llmAnthropicVersion, llmMaxTokens, factletStaleDays, defaultBookingAction). Returns updated config.',
+                        'action="ignore": PERMANENT BLACKLIST for a named company or person. When the user says "ignore X", "blacklist X", "never show me X again", "no more X" -- this is the ONE correct call: pass term:"<the name>". Server-side it dismisses every existing matching booking (cold forever), cancels open tasks on them, and refuses ALL future saves mentioning the term (stored in DOCS/BLACKLIST.md, survives restarts). Effective immediately. Returns { ignored, dismissedBookings, clientsReset, cancelledOpenTasks }. Distinct from dismiss_booking (one booking only) -- ignore kills the name everywhere, forever.',
+                        '',
+                        'action="get_config": Read ONE identity/config field by key. Pass key, one of: signature, sampleEmail, companyName, companyEmail, businessDescription, defaultTrade, leedzEmail, defaultBookingAction. Returns { key, value, present }. key="sampleEmail" is the seller\'s approved outreach email — the MANDATORY template every outreach draft REWRITES (never compose an email from scratch); key="signature" is the verbatim sign-off block. Both are always present. Omit key to get the full VALUE_PROP profile (trade, pitch, buyerRoles, serviceZips, forbiddenPhrases, ...). Never returns secrets.',
+                        '',
+                        'action="configure": RETIRED — config is read-only at runtime; this action always errors. To read identity fields use action="get_config". To change them, edit DOCS/VALUE_PROP.md (identity, trade, signature, sample email) or precrime_config.json (LLM, runtime) and restart the server.',
                         '',
                         'action="next": Atomically claim the next work item and return it fully hydrated. Pass entity="client" (default) or entity="booking". For clients: returns the client record with all linked factlets and bookings in one payload. The lastQueueCheck is stamped before return so no other agent claims it. Pass optional criteria to filter (company, name, draftStatus). Returns null if queue is empty. Response is automatically trimmed for context efficiency: dossier tail-clipped to last 2000 chars (or override via dossierLimit), factlets capped to 8 most recent (or override via factletLimit). Pass 0 to disable a cap. _clipped metadata is included if anything was trimmed.',
                         '',
@@ -58,8 +64,16 @@ const TOOL_DEFS = [
                         properties: {
                             action: {
                                 type: 'string',
-                                enum: ['status', 'configure', 'get_config', 'get_task', 'next', 'save', 'delete', 'rescore', 'resolve_dates', 'share_booking', 'dismiss_booking', 'report_session', 'audit_session', 'next_source', 'mark_source', 'add_sources', 'import_sources', 'work_status', 'judge_affected', 'plan_tasks', 'claim_task', 'complete_task', 'tasks', 'recycler', 'bounce_sweep'],
+                                enum: ['status', 'configure', 'get_config', 'get_task', 'next', 'save', 'delete', 'rescore', 'resolve_dates', 'share_booking', 'dismiss_booking', 'ignore', 'report_session', 'audit_session', 'next_source', 'mark_source', 'add_sources', 'import_sources', 'work_status', 'judge_affected', 'plan_tasks', 'enqueue', 'claim_task', 'complete_task', 'tasks', 'recycler', 'bounce_sweep'],
                                 description: 'Which pipeline operation to run.'
+                            },
+                            term: {
+                                type: 'string',
+                                description: 'For action=ignore: the company/person name to permanently blacklist (>= 3 chars, substring-matched against all client and booking identity text -- keep it specific: "Rivian" yes, "LA Auto Show" NO, that would kill every exhibitor at the show).'
+                            },
+                            key: {
+                                type: 'string',
+                                description: 'For action=get_config: which field to read. One of: signature, sampleEmail (the MANDATORY outreach email template), companyName, companyEmail, businessDescription, defaultTrade, leedzEmail, defaultBookingAction.'
                             },
                             text: {
                                 type: 'string',
@@ -322,6 +336,23 @@ const TOOL_DEFS = [
                             error: {
                                 type: 'string',
                                 description: 'For action=complete_task with status "failed"/"cancelled". Short error code.'
+                            },
+                            client: {
+                                type: 'string',
+                                description: 'For action=enqueue: name/company/email substring identifying ONE client (e.g. "Rock Dimension"). Multiple matches return AMBIGUOUS with candidates -- re-call with clientId.'
+                            },
+                            clientId: {
+                                type: 'string',
+                                description: 'For action=enqueue: exact Client.id to target. Wins over client when both are passed.'
+                            },
+                            type: {
+                                type: 'string',
+                                description: 'For action=enqueue: task type to create for the named client -- DRILL_DOWN (default; find missing contact/upcoming events), ENRICH_CLIENT, or FIND_CLIENT_SOURCES. For action=tasks: optional filter, any task type.'
+                            },
+                            missing: {
+                                type: 'array',
+                                items: { type: 'string' },
+                                description: 'For action=enqueue with type DRILL_DOWN (optional): gap codes to hunt (client_email, client_email_generic, booking, start_date, location_with_zip, title). Omit to let the server derive them from the client record.'
                             },
                             role: {
                                 type: 'string',

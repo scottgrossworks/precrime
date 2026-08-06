@@ -19,8 +19,12 @@ Register in goose config.yaml as extension `tavily` (stdio type).
 
 import json
 import os
+import re
 import sys
+import time
 import traceback
+import urllib.error
+import urllib.request
 from datetime import datetime
 from pathlib import Path
 
@@ -28,10 +32,90 @@ from pathlib import Path
 THIS_DIR = Path(__file__).resolve().parent
 sys.path.insert(0, str(THIS_DIR))
 
-from tavily_lean import search_lean, extract_lean  # noqa: E402
+from tavily_lean import search_lean, extract_lean, lean_from_page_text  # noqa: E402
 
 # Append-only call log so you can tail and confirm the wrapper is active.
 CALL_LOG = THIS_DIR.parent / "logs" / "tavily_lean.log"
+
+# ---- BROWSE-FIRST (credit guard #5, 2026-08-03) ----
+# Page EXTRACTION is the dominant Tavily credit sink, and the pipeline server
+# already exposes a paced, serialized, bot-block-cooled Chrome fetch (`browse`
+# action -> chromeBridge.js -> the user's own logged-in Chrome on :12306).
+# When precrime_config.json has browseFirst true (the default), every
+# tavily_extract call is first routed through that browse action: same lean
+# result shape, ZERO credits. Tavily extract runs only as the fallback (server
+# down, bridge/Chrome closed, domain cooling after a bot-block, thin render).
+# SEARCH is never rerouted -- scraping Google result pages from the user's real
+# IP is the fastest way to get it flagged; Tavily search stays the SERP layer.
+_PRECRIME_CONFIG_PATH = THIS_DIR.parent / "precrime_config.json"
+
+
+def _load_precrime_config() -> dict:
+    try:
+        with _PRECRIME_CONFIG_PATH.open("r", encoding="utf-8") as f:
+            return json.load(f) or {}
+    except Exception as e:
+        # log() is not defined yet at module-import time -- stderr directly.
+        sys.stderr.write(f"[tavily-lean-mcp] precrime_config.json unreadable ({e}); browse-first defaults apply\n")
+        return {}
+
+
+_PC_CFG = _load_precrime_config()
+BROWSE_FIRST = _PC_CFG.get("browseFirst", True) is not False
+_PIPELINE_PORT = int(((_PC_CFG.get("workers") or {}).get("port")) or 5179)
+_PIPELINE_URL = f"http://127.0.0.1:{_PIPELINE_PORT}/mcp"
+# browse rides the shared per-domain pacing queue (30s +/- jitter per hop), so a
+# queued fetch can legitimately take a couple of minutes. Stay under the
+# conductor's 300s hung-worker kill.
+_BROWSE_TIMEOUT_S = 120
+# When the pipeline server itself is unreachable, don't re-knock on every call.
+_srv_down_until = 0.0
+
+
+def _browse_via_chrome(url: str):
+    """Fetch a URL through the pipeline `browse` action (user's logged-in Chrome).
+    Returns page text on success, or None for ANY failure -- caller falls back to
+    a real (billed) tavily_extract. Never raises."""
+    global _srv_down_until
+    if time.time() < _srv_down_until:
+        return None
+    payload = {
+        "jsonrpc": "2.0", "id": 1, "method": "tools/call",
+        "params": {"name": "pipeline", "arguments": {"action": "browse", "url": url}},
+    }
+    req = urllib.request.Request(
+        _PIPELINE_URL,
+        data=json.dumps(payload).encode("utf-8"),
+        headers={"Content-Type": "application/json"},
+        method="POST",
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=_BROWSE_TIMEOUT_S) as res:
+            rpc = json.loads(res.read().decode("utf-8"))
+    except (urllib.error.URLError, OSError) as e:
+        _srv_down_until = time.time() + 60
+        log(f"browse-first: pipeline server unreachable ({e}); tavily fallback (60s backoff)")
+        return None
+    except Exception as e:
+        log(f"browse-first: {e}; tavily fallback")
+        return None
+    if not isinstance(rpc, dict) or rpc.get("error"):
+        msg = (rpc.get("error") or {}).get("message", "bad response") if isinstance(rpc, dict) else "bad response"
+        # Expected fallbacks: bridge not running (Chrome closed), bridge busy,
+        # domain cooling after a bot-block. All mean "let Tavily take this one".
+        log(f"browse-first: {str(msg)[:160]} -> tavily fallback")
+        return None
+    try:
+        inner = json.loads(rpc["result"]["content"][0]["text"])
+        text = inner.get("text") or ""
+    except Exception as e:
+        log(f"browse-first: unparseable browse result ({e}); tavily fallback")
+        return None
+    if len(text.strip()) < 200:
+        # Near-empty render (JS wall, interstitial). Tavily's fetcher may do better.
+        log(f"browse-first: thin render ({len(text.strip())} chars); tavily fallback | {url[:120]}")
+        return None
+    return text
 
 
 # ---- JSON-RPC helpers ----
@@ -158,7 +242,10 @@ def handle_tools_list(req_id):
                         "exhibitor rosters, contact directories -- anywhere structured names "
                         "matter. mode='snippet' returns only 5 relevance-scored sentences "
                         "(~800 chars), useful for teasing a long article but destructive for "
-                        "list pages -- do not use for vendor extraction."
+                        "list pages -- do not use for vendor extraction. NOTE: when the "
+                        "pipeline's Chrome bridge is available the fetch is transparently "
+                        "served through the user's own logged-in Chrome at zero Tavily cost "
+                        "(result carries via='chrome_browse'); treat the result identically."
                     ),
                     "inputSchema": {
                         "type": "object",
@@ -191,6 +278,16 @@ def handle_tools_call(req_id, params):
             query = args.get("query")
             if not query:
                 return err(req_id, -32602, "tavily_search requires 'query'")
+            # CREDIT GUARD (#6): a cuid-shaped token (Prisma DB id like
+            # cmr1nswvb004gmzof0qmxmbbo) in a web search is ALWAYS worker confusion --
+            # the public web has never heard of our row ids. Refuse at 0 credits.
+            if re.search(r"\bc[a-z0-9]{20,}\b", query):
+                log(f"search blocked: cuid-shaped token in query (db id, not a web term); saved 1 credit | {query[:120]}")
+                return ok(req_id, {"content": [{"type": "text", "text": json.dumps({
+                    "skipped": True,
+                    "reason": "query_contains_database_id",
+                    "hint": "That token is a PRECRIME database id, not a searchable term. Look the record up via the pipeline (find/get_task), or search the client/event NAME instead.",
+                }, ensure_ascii=False, separators=(",", ":"))}]})
             result = search_lean(
                 query=query,
                 # Clamp: a worker asking for 10-20 hits multiplies the payload (re-billed on
@@ -227,6 +324,22 @@ def handle_tools_call(req_id, params):
                     "hint": "FIND_CLIENT_SOURCES is snippet-first: use the search-result snippet as the summary; do not extract.",
                     "url": url,
                 }, ensure_ascii=False, separators=(",", ":"))}]})
+            # CREDIT GUARD (#5): browse-first. Route the fetch through the user's own
+            # logged-in Chrome (pipeline `browse` -> paced/serialized/cooldown-guarded
+            # bridge). Success = same lean shape, 0 credits. Any failure falls through
+            # to the billed Tavily extract so work never stalls.
+            if BROWSE_FIRST:
+                page_text = _browse_via_chrome(url)
+                if page_text is not None:
+                    result = lean_from_page_text(
+                        url=url,
+                        content=page_text,
+                        query_hint=str(args.get("query_hint", "")),
+                        mode=str(args.get("mode", "full")),
+                    )
+                    log(f"browse-first: served via Chrome, saved 1 credit | {url[:120]}")
+                    call_log("browse_extract", url, result.get("stats", {}))
+                    return ok(req_id, {"content": [{"type": "text", "text": json.dumps(result, ensure_ascii=False, separators=(",", ":"))}]})
             result = extract_lean(
                 url=url,
                 query_hint=str(args.get("query_hint", "")),
@@ -264,7 +377,8 @@ def handle_request(req: dict):
 
 
 def main():
-    log("starting (stdio JSON-RPC, tavily lean wrapper)")
+    log("starting (stdio JSON-RPC, tavily lean wrapper); "
+        f"browse-first={'ON (extracts try Chrome via :' + str(_PIPELINE_PORT) + ' first)' if BROWSE_FIRST else 'OFF'}")
     for line in sys.stdin:
         line = line.strip()
         if not line:

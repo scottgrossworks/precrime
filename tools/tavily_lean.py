@@ -385,6 +385,43 @@ def extract_lean(url: str, query_hint: str = "", timeout: int = 30, mode: str = 
     return lean
 
 
+def lean_from_page_text(url: str, content: str, query_hint: str = "", mode: str = "full") -> dict:
+    """
+    BROWSE-FIRST (credit guard #5): build the exact extract_lean result shape from page
+    text fetched elsewhere -- the user's own logged-in Chrome via the pipeline `browse`
+    action. Same cleaning, same email/phone/candidate digests, ZERO Tavily credits.
+    Callers can tell the routes apart by "via": "chrome_browse" and stats.credits: 0.
+    """
+    if mode == "snippet":
+        body = pick_relevant_snippets(content, query_hint or url, max_snippets=5, max_chars=800)
+    else:
+        body = clean_for_extract(content)[:MAX_EXTRACT_CHARS]
+
+    emails = list(dict.fromkeys(EMAIL_RE.findall(content)))[:20]
+    phones = list(dict.fromkeys(PHONE_RE.findall(content)))[:10]
+    candidates = extract_candidates(content)
+
+    lean = {
+        "url": url,
+        "ok": True,
+        "mode": mode,
+        "via": "chrome_browse",
+        "content": body,
+        "emails": emails,
+        "phones": phones,
+        "candidates": candidates,
+    }
+    raw_chars = len(content)
+    lean_chars = len(json.dumps(lean))
+    lean["stats"] = {
+        "raw_chars": raw_chars,
+        "lean_chars": lean_chars,
+        "ratio": round(lean_chars / raw_chars, 4) if raw_chars else None,
+        "credits": 0,
+    }
+    return lean
+
+
 # ---- CLI ----
 
 

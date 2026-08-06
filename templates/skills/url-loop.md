@@ -43,6 +43,9 @@ is old-Reddit's raw JSON endpoints through `precrime__pipeline({ action:"browse"
 
 ### default web (directory, blog, website, fb, ig, x, unknown)
 `tavily__tavily_extract({ url })`. Fails → complete `failed`.
+(The wrapper may serve this through the user's own Chrome at zero Tavily cost —
+the result then carries `via:"chrome_browse"`. Treat it exactly like a Tavily
+extract; do NOT retry or re-fetch because of that field.)
 From content, extract only VALUE_PROP-relevant:
 - Clients: **BUYERS ONLY** — people/businesses that could plausibly HIRE the VALUE_PROP
   trade (match against VALUE_PROP Buyer Roles: event planners, agencies, venues, hosts,

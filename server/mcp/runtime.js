@@ -59,6 +59,29 @@ try {
     console.error(`[MCP] VALUE_PROP.md missing or unreadable: ${e.message}`);
 }
 
+// DOCS/BLACKLIST.md -- the user's PERMANENT IGNORE list (2026-08-05): specific
+// companies/people they never want re-discovered, re-drilled, or re-presented
+// (dismissed-over-and-over contacts, ghosted outreach, competitors). Kept SEPARATE
+// from VALUE_PROP.md so business identity stays clean, but merged into bannedTerms
+// here so it rides the exact same enforcement rails with zero extra code paths:
+// save-time refusal (saveClient.js), cold-forever classification + drill exclusion
+// (classification.js banned-term gate). One term per line; '#' lines are comments;
+// leading '-'/'*' bullets tolerated. The pipeline `ignore` action appends here.
+const BLACKLIST_PATH = path.resolve(PRECRIME_ROOT, 'DOCS', 'BLACKLIST.md');
+try {
+    if (fs.existsSync(BLACKLIST_PATH)) {
+        const terms = fs.readFileSync(BLACKLIST_PATH, 'utf8').split(/\r?\n/)
+            .map(l => l.replace(/^[-*]\s*/, '').trim())
+            .filter(l => l && !l.startsWith('#'));
+        if (terms.length) {
+            VALUE_PROP.bannedTerms = Array.from(new Set([...(VALUE_PROP.bannedTerms || []), ...terms]));
+            console.error(`[MCP] BLACKLIST.md: ${terms.length} ignored term(s) active (merged into banned terms).`);
+        }
+    }
+} catch (e) {
+    console.error(`[MCP] BLACKLIST.md unreadable (continuing without it): ${e.message}`);
+}
+
 // ============================================================================
 // RUNTIME_CONFIG -- in-memory replacement for the retired SQLite Config table.
 // ============================================================================
@@ -144,4 +167,4 @@ try {
     console.error(`[MCP] DOCS/PROMPTS.json missing or malformed: ${e.message}`);
 }
 
-module.exports = { PRECRIME_CONFIG, RUNTIME_CONFIG, VALUE_PROP, SCORING, PROMPTS, PRECRIME_MODE, CHROME_SCRAPE_ACTIVE };
+module.exports = { PRECRIME_CONFIG, RUNTIME_CONFIG, VALUE_PROP, SCORING, PROMPTS, PRECRIME_MODE, CHROME_SCRAPE_ACTIVE, BLACKLIST_PATH };

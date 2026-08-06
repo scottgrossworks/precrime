@@ -14,6 +14,34 @@ const BRIDGE_URL = 'http://127.0.0.1:12306/mcp';
 const BRIDGE_TIMEOUT_MS = 25000;
 const MAX_TEXT_CHARS = 9000;   // lean: cap page text like tavily_lean does
 
+// PER-DOMAIN PACING + BLOCK COOLDOWN (2026-07-20): reddit's perimeter security
+// blocked us after back-to-back machine-speed fetches. Because EVERY browse call
+// already serializes through this module's queue, pacing here is global across
+// all callers (workers, orchestrator, signal drills) with zero coordination:
+//  - min gap per registrable domain (config browsePacingMs, default 10s) with
+//    ±30% jitter -- a FIXED interval is itself a bot signature;
+//  - a bot-block page (detected in the returned text) puts that domain on a
+//    45-min do-not-touch cooldown, machine-enforced: knocking again after being
+//    caught is how a temporary gate becomes an IP/account-level ban.
+// In-memory state -- resets with the process, like the bridge queue itself.
+const PACING_MS = (() => {
+    try {
+        const v = Number(require('./runtime').PRECRIME_CONFIG.browsePacingMs);
+        return Number.isFinite(v) && v >= 0 ? v : 30000;
+    } catch (_) { return 30000; }
+})();
+const BLOCK_COOLDOWN_MS = 45 * 60 * 1000;
+const BLOCK_RE = /blocked by network security|verify (that )?you are (a )?human|are you a robot|unusual traffic from your|attention required.{0,40}cloudflare|access to this page has been denied/i;
+const _domainState = new Map();   // registrable domain -> { lastHitAt, coolUntil }
+
+function _domainOf(url) {
+    try {
+        const host = new URL(url).hostname.toLowerCase();
+        const parts = host.split('.');
+        return parts.length > 2 ? parts.slice(-2).join('.') : host;  // old.reddit.com -> reddit.com
+    } catch (_) { return String(url); }
+}
+
 // Parse a bridge response: SSE ("event: message\ndata: {...}") or plain JSON.
 async function parseBridgeResponse(res) {
     const body = await res.text();
@@ -82,10 +110,32 @@ async function _browse(url) {
     }
 }
 
+// Pacing wrapper: cooldown check -> jittered same-domain gap -> fetch -> block scan.
+async function _pacedBrowse(url) {
+    const domain = _domainOf(url);
+    const st = _domainState.get(domain) || { lastHitAt: 0, coolUntil: 0 };
+    _domainState.set(domain, st);
+    if (Date.now() < st.coolUntil) {
+        const min = Math.ceil((st.coolUntil - Date.now()) / 60000);
+        return { ok: false, url, error: `"${domain}" triggered a bot-block earlier -- cooling down ${min} more min. Do NOT retry it now; move on to other work.` };
+    }
+    const gap = PACING_MS * (0.7 + Math.random() * 0.6);   // ±30% jitter
+    const wait = st.lastHitAt + gap - Date.now();
+    if (wait > 0) await new Promise(r => setTimeout(r, wait));
+    st.lastHitAt = Date.now();
+    const r = await _browse(url);
+    if (r.ok && BLOCK_RE.test(r.text)) {
+        st.coolUntil = Date.now() + BLOCK_COOLDOWN_MS;
+        console.error(`[browse] BOT-BLOCK detected on ${domain} -- cooling ${Math.round(BLOCK_COOLDOWN_MS / 60000)}min`);
+        return { ok: false, url, error: `"${domain}" served a bot-block page -- domain cooling for ${Math.round(BLOCK_COOLDOWN_MS / 60000)}min. Do NOT retry it now; move on to other work.` };
+    }
+    return r;
+}
+
 // Public API. Never rejects: returns { ok:false, error } so the pipeline action
 // can hand the model a plain, retryable message ("bridge busy / not running").
 function browseUrl(url) {
-    const run = _queue.then(() => _browse(url)).catch(e => ({
+    const run = _queue.then(() => _pacedBrowse(url)).catch(e => ({
         ok: false, url,
         error: /ECONNREFUSED|fetch failed/i.test(e.message)
             ? 'mcp-chrome bridge not running (start Chrome with the mcp-chrome extension + mcp-chrome-bridge)'

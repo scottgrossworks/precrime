@@ -71,7 +71,16 @@ Work only the codes in `missing`. Per code:
 - **`title`**: capture the event/opportunity name from the page.
 - **`booking`** (CLIENT target only — there is no event yet): research the org (its site, events/calendar page, or an event listing/registration page) for ONE UPCOMING public event it is hosting or attending that fits the trade. Capture the event's **verbatim** date/time text, venue + 5-digit zip, and title. Pair it with the contact from `client_email` above. No qualifying FUTURE event found → leave it (do NOT invent one); saving just the contact is still progress.
 
+**SITE-FIRST (free before billed):** if the org/event's official site is already known
+(from the booking, a prior result, or an obvious domain), `precrime__pipeline({ action:"browse", url })`
+its likely subpages FIRST — `/schedule`, `/hours`, `/tickets`, `/contact`, `/about` — those pages
+publish the exact dates/times/venues/emails you are hunting and cost ZERO credits. Spend a
+`tavily_search` only on facts the site itself does not answer. Never re-search a fact
+(hours, start time, venue) three different ways — one search, then go read the site.
+
 Use 1–4 bounded searches total. Tavily unavailable → complete `cancelled` `tavily_unavailable`, stop.
+(Extract results may carry `via:"chrome_browse"` — the wrapper served the page through the
+user's own Chrome at zero Tavily cost. Identical content contract; treat it the same.)
 
 ## Step 3 — Save what you found AND complete, in ONE call (judge:false)
 ONE save. Client-level fields (email/phone/name/website) on the patch; booking-level fields

@@ -124,6 +124,11 @@ async function judgeAffected({ clientIds, bookingIds, reason, writeStatus, intel
     const labels  = [];   // human names of the bookings actually judged (not skipped)
     for (const b of bookings) {
         try {
+            // TERMINAL hard skip (unification 2026-07-20): 'contacted' = outreach went
+            // out; 'booked' = the gig is WON (extension saved + calendared it — the
+            // endpoint of the whole funnel). The Judge must never re-score, promote,
+            // or demote either. Same class of rule as the draftStatus='sent' gate.
+            if (b.status === 'booked' || b.status === 'contacted') continue;
             // Past-due hard skip: zero classification, zero LLM. Expiry demotes it.
             if (b.startDate && new Date(b.startDate) < new Date()) continue;
             labels.push(labelOf(b));
