@@ -273,7 +273,10 @@ async function computeClientScore(clientId, intelOverride, opts = {}) {
 // dispatch loop had stalled on exactly this kind of unbounded call. Bounded here so
 // a hung provider fails in 20s (existing catch -> null -> judgeLeed returns
 // 'judge_unavailable'/brewing) instead of hanging the whole system forever.
-const LLM_TIMEOUT_MS = 20000;
+// 30s (was 20s, 2026-08-06): reasoning models (gpt-oss-120b et al.) spend seconds
+// thinking before the first output token even on fast providers; 20s produced
+// steady spurious timeouts. Still bounded -- the inline-gating rationale above holds.
+const LLM_TIMEOUT_MS = 30000;
 async function _llmComplete(prompt, cfg, maxTokens = 64) {
     if (!cfg || !cfg.llmApiKey) return null;
     const provider = (cfg.llmProvider || 'anthropic').toLowerCase();
@@ -306,14 +309,23 @@ async function _llmComplete(prompt, cfg, maxTokens = 64) {
             headers['HTTP-Referer'] = 'https://www.theleedz.com';
             headers['X-Title'] = 'PRECRIME';
         }
+        // REASONING-MODEL COMPAT (2026-08-06, gpt-oss-120b incident): on OpenRouter,
+        // max_tokens caps TOTAL output INCLUDING hidden reasoning tokens. Callers here
+        // pass tiny budgets sized for the visible answer (judge passes 24-64), so a
+        // reasoning model burned the whole budget thinking and returned EMPTY/truncated
+        // content -- every judge call "malformed", every apply truncated mid-JSON.
+        // Two-part fix: floor the budget at 512 (non-reasoning models stop early; cost
+        // unchanged), and ask for low reasoning effort (ignored by models without it).
+        const body = {
+            model: cfg.llmModel || 'gpt-4o-mini',
+            max_tokens: Math.max(maxTokens || 0, 512),
+            messages: [{ role: 'user', content: prompt }]
+        };
+        if (provider === 'openrouter') body.reasoning = { effort: 'low' };
         const res = await fetch(url, {
             method: 'POST',
             headers,
-            body: JSON.stringify({
-                model: cfg.llmModel || 'gpt-4o-mini',
-                max_tokens: maxTokens,
-                messages: [{ role: 'user', content: prompt }]
-            }),
+            body: JSON.stringify(body),
             signal: AbortSignal.timeout(LLM_TIMEOUT_MS)
         });
         if (!res.ok) { console.error(`[judge-llm] http ${res.status}`); return null; }
