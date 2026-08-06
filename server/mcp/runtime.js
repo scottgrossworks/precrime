@@ -67,20 +67,38 @@ try {
 // save-time refusal (saveClient.js), cold-forever classification + drill exclusion
 // (classification.js banned-term gate). One term per line; '#' lines are comments;
 // leading '-'/'*' bullets tolerated. The pipeline `ignore` action appends here.
+//
+// LIVE-RELOADED (2026-08-05, same day): the file is watched and re-merged within
+// seconds of ANY edit -- adds AND removals -- so a hand-edit never silently waits
+// for a restart. VP_BANNED_BASE preserves VALUE_PROP.md's own Banned Terms so a
+// blacklist removal can actually take effect (a naive re-merge could only grow).
+// Consumers read VALUE_PROP.bannedTerms at call time, so reassigning the property
+// here propagates everywhere immediately.
 const BLACKLIST_PATH = path.resolve(PRECRIME_ROOT, 'DOCS', 'BLACKLIST.md');
-try {
-    if (fs.existsSync(BLACKLIST_PATH)) {
-        const terms = fs.readFileSync(BLACKLIST_PATH, 'utf8').split(/\r?\n/)
-            .map(l => l.replace(/^[-*]\s*/, '').trim())
-            .filter(l => l && !l.startsWith('#'));
-        if (terms.length) {
-            VALUE_PROP.bannedTerms = Array.from(new Set([...(VALUE_PROP.bannedTerms || []), ...terms]));
-            console.error(`[MCP] BLACKLIST.md: ${terms.length} ignored term(s) active (merged into banned terms).`);
+const VP_BANNED_BASE = Object.freeze([...(VALUE_PROP.bannedTerms || [])]);
+function refreshBlacklist(logChange) {
+    let terms = [];
+    try {
+        if (fs.existsSync(BLACKLIST_PATH)) {
+            terms = fs.readFileSync(BLACKLIST_PATH, 'utf8').split(/\r?\n/)
+                .map(l => l.replace(/^[-*]\s*/, '').trim())
+                .filter(l => l && !l.startsWith('#'));
         }
+    } catch (e) {
+        console.error(`[MCP] BLACKLIST.md unreadable (keeping previous list): ${e.message}`);
+        return;
     }
-} catch (e) {
-    console.error(`[MCP] BLACKLIST.md unreadable (continuing without it): ${e.message}`);
+    VALUE_PROP.bannedTerms = Array.from(new Set([...VP_BANNED_BASE, ...terms]));
+    if (logChange) {
+        console.error(`[MCP] BLACKLIST.md reloaded: ${terms.length} ignored term(s) active (live, no restart).`);
+    }
 }
+refreshBlacklist(false);
+console.error(`[MCP] BLACKLIST.md: ${Math.max(0, VALUE_PROP.bannedTerms.length - VP_BANNED_BASE.length)} ignored term(s) active (file is live-watched).`);
+// Stat-polling watcher (fs.watchFile): reliable on Windows where fs.watch is not.
+// 5s poll on one small file is negligible; unref so it never holds the process open.
+const _blWatcher = fs.watchFile(BLACKLIST_PATH, { interval: 5000 }, () => refreshBlacklist(true));
+if (_blWatcher && typeof _blWatcher.unref === 'function') _blWatcher.unref();
 
 // ============================================================================
 // RUNTIME_CONFIG -- in-memory replacement for the retired SQLite Config table.
