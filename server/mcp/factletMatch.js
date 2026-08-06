@@ -152,7 +152,14 @@ async function computeNearHotBookings() {
         defaultTrade: (VALUE_PROP && VALUE_PROP.trade) || (RUNTIME_CONFIG && RUNTIME_CONFIG.defaultTrade) || '',
         genericEmailPrefixes: (SCORING.booking && SCORING.booking.genericEmailPrefixes) || [],
         bannedTerms: (VALUE_PROP && VALUE_PROP.bannedTerms) || [],   // banned categories are cold forever (retro-enforced in classify)
-        orgNameTokens: (SCORING.classification && SCORING.classification.orgNameTokens) || []
+        orgNameTokens: (SCORING.classification && SCORING.classification.orgNameTokens) || [],
+        // Service area (2026-08-06): judge and save always passed this; the DRILL
+        // RANKER never did -- so classify's out-of-area gates (zip AND text) were
+        // silent no-ops exactly where drills are chosen, and "Fan Expo Dallas 2026"
+        // kept earning workers to look up a Texas zip code. Same judge-payload
+        // lesson as 2026-07-16: the rule is useless unless every caller hands over
+        // the data.
+        serviceZipPrefixes: (VALUE_PROP && VALUE_PROP.serviceZipPrefixes) || []
     };
     const bookings = await prisma.booking.findMany({
         where: {
