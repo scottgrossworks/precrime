@@ -115,8 +115,12 @@ async function conductorGetReadyTasks(limit) {
 }
 
 // Poll for ready in-process Tasks (JUDGE_AFFECTED, SHOW_HOT_LEEDZ). Oldest first.
+// Labels attached (2026-08-05): APPLY_FACTLET rides this path, and without labels
+// its log lines printed raw id tails ('factlet "ou71di"') instead of the factlet gist.
 async function conductorGetReadyInProcessTasks(limit) {
-    return coreTasks.getReadyTasksByTypes(IN_PROCESS_TYPES, limit);
+    const rows = await coreTasks.getReadyTasksByTypes(IN_PROCESS_TYPES, limit);
+    await coreTasks.attachTaskLabels(rows);
+    return rows;
 }
 
 module.exports = {

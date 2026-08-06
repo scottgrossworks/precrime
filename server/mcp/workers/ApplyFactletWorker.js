@@ -136,9 +136,16 @@ async function run(task, deps) {
                      output: { clientIds: [], bookingIds: [], factletIds: [factletId], summary: 'sweep -- no usable model output', needsJudge: false },
                      summary: `apply ${factletId}: sweep, no output` };
         }
+        // Human-readable failure (2026-08-05): "apply cmrj...: LLM malformed" read as an
+        // inscrutable system failure. Name the factlet by its content, say what actually
+        // went wrong, and say what happens next (retried by a later planning pass).
+        const gist = String((factlet && factlet.content) || factletId).replace(/\s+/g, ' ').slice(0, 60);
+        const why = raw === null
+            ? 'the LLM did not answer (provider down or timed out)'
+            : 'the LLM returned an unparseable answer';
         return { status: 'failed', error: raw === null ? 'llm_unavailable' : 'llm_bad_json',
                  output: { clientIds: [], bookingIds: [], factletIds: [factletId], summary: 'LLM unavailable or malformed', needsJudge: false },
-                 summary: `apply ${factletId}: LLM ${raw === null ? 'unavailable' : 'malformed'}` };
+                 summary: `could not apply factlet "${gist}...": ${why} -- nothing written, will retry on a later pass` };
     }
 
     const validIds = new Set(cards.map(c => c.clientId));

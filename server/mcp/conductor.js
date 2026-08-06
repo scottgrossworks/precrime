@@ -213,7 +213,7 @@ function taskDesc(task) {
         case 'SCRAPE_SOURCE': return `source ${inp.url || inp.channel || tail || ''}`.trim();
         case 'ENRICH_CLIENT':
         case 'FIND_CLIENT_SOURCES': return `${task.targetType.toLowerCase()} "${tail || ''}"`.trim();
-        case 'APPLY_FACTLET': return `factlet -> ${task.targetType.toLowerCase()} "${tail || ''}"`.trim();
+        case 'APPLY_FACTLET': return `apply factlet "${tail || ''}" to matching clients`.trim();
         case 'DRAFT_OUTREACH': return `draft outreach for "${tail || ''}"`.trim();
         case 'DISCOVER_SOURCES': return 'find new scrape sources';
         default: return task.targetId ? `${task.targetType} ${tail}` : task.targetType;
@@ -827,7 +827,17 @@ async function conductorLoop(cfg, hooks) {
                 lastReplanAt = now;
                 try {
                     const r = (await replan()) || {};
-                    console.error(`[conductor] replan — created=${r.createdTotal || 0} backlog=${r.backlogRemaining} strategy=${r.strategy}${r.sessionClosed ? ` sessionClosed(${r.closeReason})` : ''}`);
+                    // Human-readable replan line (2026-08-05): "created=0 backlog=null
+                    // strategy=null" told the user nothing and looked like a failure.
+                    // Say what happened in words and omit fields that have no value.
+                    const planBits = [];
+                    planBits.push((r.createdTotal || 0) > 0
+                        ? `queued ${r.createdTotal} new task(s)`
+                        : 'nothing new to queue (task limits reached or no eligible work right now -- normal between batches)');
+                    if (r.backlogRemaining != null) planBits.push(`${r.backlogRemaining} factlet(s) awaiting apply`);
+                    if (r.strategy) planBits.push(`strategy: ${r.strategy}`);
+                    if (r.sessionClosed) planBits.push(`planning session closed (${r.closeReason})`);
+                    console.error(`[conductor] replan — ${planBits.join('; ')}`);
                     // Budget exhausted = this session hit its creation cap (it WAS productive —
                     // it created work right up to the limit). Don't die: take a pacing rest, then
                     // the next replan opens a FRESH session with a fresh budget and we keep going.
