@@ -13,6 +13,7 @@ const path = require('path');
 const fs = require('fs');
 const os = require('os');
 const { conductorGetReadyTasks, conductorGetReadyInProcessTasks, conductorClaimTask, conductorFailTask, conductorFailIfClaimed, WORKER_SKILL_MAP, CHANNEL_SKILL_OVERRIDES } = require('./db');
+const { WORKER_MANIFEST } = require('./workerManifest');
 
 const PRECRIME_ROOT = path.resolve(__dirname, '..', '..');
 
@@ -139,31 +140,18 @@ function recipeExtLines(taskType, browserChannel) {
         '  - type: streamable_http', '    name: chrome',
         '    uri: "http://127.0.0.1:12306/mcp"', '    timeout: 60',
     ];
-    // CONTEXT TRIM (2026-07-19): `developer` (goose's shell+editor builtin) is a
-    // multi-k-token schema+instructions tax on EVERY turn, and only url-loop has a
-    // legitimate use for it (reading DOCS/PEER_SOURCES.json). Every other skill
-    // either never calls it or is told NOT to (url-loop's own shell note); the
-    // discover-sources skill reads VALUE_PROP via pipeline get_config. So:
-    // developer ships ONLY with SCRAPE_SOURCE. Each worker gets the absolute
-    // minimum extension set its skill actually calls.
-    const base = [...precrime];
-    // Direct chrome tools go ONLY to the fb/ig harvester skills (SCRAPE_SOURCE).
-    // A DRILL_DOWN Signal task also sets browserChannel (for the chromeScrape gate
-    // + one-at-a-time serialization) but drills through the pipeline `browse`
-    // action -- shipping the 25+-tool chrome schema to it would be pure token tax.
-    if (browserChannel && taskType === 'SCRAPE_SOURCE') return [...base, ...chrome];
-    switch (taskType) {
-        case 'SCRAPE_SOURCE':       return [...base, ...developer, ...tavily, ...rss];
-        case 'DRILL_DOWN':
-        case 'DRILL_CONTAINER':
-        case 'ENRICH_CLIENT':
-        case 'FIND_CLIENT_SOURCES':
-        case 'DISCOVER_SOURCES':    return [...base, ...tavily];
-        case 'LAST_30_DAYS':
-        case 'APPLY_FACTLET':
-        case 'DRAFT_OUTREACH':      return base;
-        default:                    return [...base, ...tavily];
-    }
+    // Extension sets come from workerManifest.js (2026-08-06) -- the ONE table of
+    // worker capability. Each worker gets the absolute minimum set its skill
+    // actually calls (every extra schema is a per-turn token tax). The fb/ig
+    // browser branch ships chrome + developer: the harvester skills read shared
+    // rule files, and a DRILL_DOWN Signal task with a browserChannel still drills
+    // through the pipeline `browse` action (no chrome schema for it).
+    const EXT_BLOCKS = { developer, tavily, rss, chrome };
+    const m = WORKER_MANIFEST[taskType];
+    const names = (browserChannel && taskType === 'SCRAPE_SOURCE' && m && m.browser)
+        ? m.browser.extensions
+        : (m ? m.extensions : ['tavily']);
+    return [...precrime, ...names.flatMap(n => EXT_BLOCKS[n] || [])];
 }
 
 // Build a full recipe: named+scoped extensions + the skill (with injected packet) as the

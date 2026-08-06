@@ -166,6 +166,10 @@ function buildRuntimeConfig(vp, pcfg) {
         // LLM -- precrime_config.json (apiKey resolves from apiKeys[provider])
         llmProvider:          provider,
         llmModel:             llm.model || '',
+        // Role-keyed overrides (llm.models in precrime_config.json): {judge, gate,
+        // apply} route the high-volume one-word calls to a cheap model without
+        // downgrading long-form work. Unset roles fall back to llmModel.
+        llmModels:            llm.models || {},
         llmBaseUrl:           llm.baseUrl || '',
         llmApiKey:            keys[provider] || '',
         llmAnthropicVersion:  llm.anthropicVersion || '2023-06-01',

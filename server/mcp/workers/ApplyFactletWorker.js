@@ -126,7 +126,7 @@ async function run(task, deps) {
     const cards = clients.map(clientCard);
 
     const cfg = RUNTIME_CONFIG;
-    const raw = await llmComplete(buildPrompt(factlet, cards, vpSlice()), cfg, APPLY_LLM_MAX_TOKENS);
+    const raw = await llmComplete(buildPrompt(factlet, cards, vpSlice()), cfg, APPLY_LLM_MAX_TOKENS, 'apply');
     const parsed = extractJson(raw);
     if (!parsed || !Array.isArray(parsed.decisions)) {
         // Sweep with a silent/unparseable model answer is a terminal no-op, not a

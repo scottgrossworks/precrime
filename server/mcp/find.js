@@ -45,9 +45,25 @@ function createFindHandlers(deps) {
         }
     }
 
+    // TOKEN CAPS (2026-08-06): a find result lands in an LLM session transcript and
+    // is RE-BILLED on every later turn of that session. Uncapped limits + full
+    // unclipped rows (5-20KB dossiers) let one call pull 100k+ tokens into context.
+    // Every limit is ceilinged at 50 and the fat text fields on full (summary:false)
+    // rows are tail/head-clipped. dossierLimit=0 disables the dossier clip (same
+    // contract as the next/save paths' clipClientForResponse).
+    const capLimit = (v, dflt) => Math.min(Math.max(1, parseInt(v, 10) || dflt), 50);
+    function clipFullClient(c, dossierLimit) {
+        if (!c || typeof c !== 'object') return c;
+        const dLim = (dossierLimit === undefined || dossierLimit === null) ? 2000 : Number(dossierLimit);
+        if (dLim > 0 && typeof c.dossier === 'string' && c.dossier.length > dLim) c.dossier = '…' + c.dossier.slice(-dLim);
+        if (typeof c.draft === 'string' && c.draft.length > 1500) c.draft = c.draft.slice(0, 1500) + '…';
+        if (typeof c.clientNotes === 'string' && c.clientNotes.length > 600) c.clientNotes = c.clientNotes.slice(0, 600) + '…';
+        return c;
+    }
+
     async function findClients(id, args) {
         const filters = args.filters || {};
-        const limit = args.limit || 10;
+        const limit = capLimit(args.limit, 10);
         const useSummary = args.summary !== false;
         let where = {};
 
@@ -108,12 +124,13 @@ function createFindHandlers(deps) {
         }
 
         const clients = await prisma.client.findMany(queryOpts);
-        return createSuccessResponse(id, JSON.stringify(clients, null, 2));
+        if (!useSummary) clients.forEach(c => clipFullClient(c, args.dossierLimit));
+        return createSuccessResponse(id, JSON.stringify(clients));
     }
 
     async function findBookings(id, args) {
         const filters = args.filters || {};
-        const limit = args.limit || 20;
+        const limit = capLimit(args.limit, 20);
         const where = {};
 
         if (filters.id)     where.id     = filters.id;
@@ -161,6 +178,9 @@ function createFindHandlers(deps) {
         // If clientId is provided, return live Factlets relevant to that client via
         // cheap content/source overlap on name / company / website host. No join
         // table -- there is no longer a per-link "applied" pointer to read.
+        // List responses are capped + content-clipped: factlet content can be 3KB
+        // each and these lists were previously unbounded (no take at all).
+        const clipF = f => ({ ...f, content: String(f.content || '').slice(0, 300) });
         if (filters.clientId) {
             const client = await prisma.client.findUnique({ where: { id: filters.clientId } });
             if (!client) {
@@ -168,7 +188,7 @@ function createFindHandlers(deps) {
             }
             const staleDays = await getFactletStaleDays();
             const factlets = await findLiveFactletsForClient(client, staleDays);
-            return createSuccessResponse(id, JSON.stringify(factlets, null, 2));
+            return createSuccessResponse(id, JSON.stringify(factlets.slice(0, capLimit(args.limit, 25)).map(clipF)));
         }
 
         // Otherwise, global factlet query (queue checking)
@@ -178,13 +198,14 @@ function createFindHandlers(deps) {
 
         const factlets = await prisma.factlet.findMany({
             where: { createdAt: { gt: new Date(filters.sinceTimestamp) } },
-            orderBy: { createdAt: 'asc' }
+            orderBy: { createdAt: 'asc' },
+            take: capLimit(args.limit, 25)
         });
-        return createSuccessResponse(id, JSON.stringify(factlets, null, 2));
+        return createSuccessResponse(id, JSON.stringify(factlets.map(clipF)));
     }
 
     async function findDrafts(id, args) {
-        const limit = args.limit || 10;
+        const limit = capLimit(args.limit, 10);
         const useSummary = args.summary !== false;
         const filters = args.filters || {};
 
@@ -208,7 +229,8 @@ function createFindHandlers(deps) {
         }
 
         const clients = await prisma.client.findMany(queryOpts);
-        return createSuccessResponse(id, JSON.stringify(clients, null, 2));
+        if (!useSummary) clients.forEach(c => clipFullClient(c, args.dossierLimit));
+        return createSuccessResponse(id, JSON.stringify(clients));
     }
 
     return { handleFind, findClients, findBookings, findFactlets, findDrafts };

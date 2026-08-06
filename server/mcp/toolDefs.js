@@ -64,7 +64,7 @@ const TOOL_DEFS = [
                         properties: {
                             action: {
                                 type: 'string',
-                                enum: ['status', 'configure', 'get_config', 'get_task', 'next', 'save', 'delete', 'rescore', 'resolve_dates', 'share_booking', 'dismiss_booking', 'ignore', 'report_session', 'audit_session', 'next_source', 'mark_source', 'add_sources', 'import_sources', 'work_status', 'judge_affected', 'plan_tasks', 'enqueue', 'claim_task', 'complete_task', 'tasks', 'recycler', 'bounce_sweep'],
+                                enum: ['status', 'configure', 'get_config', 'get_task', 'next', 'save', 'delete', 'rescore', 'resolve_dates', 'share_booking', 'dismiss_booking', 'ignore', 'report_session', 'audit_session', 'next_source', 'mark_source', 'add_sources', 'import_sources', 'work_status', 'judge_affected', 'plan_tasks', 'enqueue', 'claim_task', 'complete_task', 'tasks', 'recycler', 'bounce_sweep', 'browse', 'signal', 'pause', 'resume', 'mark_sent', 'mark_bounced'],
                                 description: 'Which pipeline operation to run.'
                             },
                             term: {
@@ -375,7 +375,7 @@ const TOOL_DEFS = [
                             bookingIds: {
                                 type: 'array',
                                 items: { type: 'string' },
-                                description: 'For action=judge_affected: Booking ids to (re-)judge. For action=dismiss_booking: Booking ids to permanently skip in ONE batch call (preferred for "dismiss all" — never loop save calls to set status). Pass the array DIRECTLY, NOT a JSON string.'
+                                description: 'For action=judge_affected: Booking ids to (re-)judge. For action=dismiss_booking: Booking ids to permanently skip in ONE batch call (preferred for "dismiss all" — never loop one-id status writes). Pass the array DIRECTLY, NOT a JSON string.'
                             },
                             reason: {
                                 type: 'string',
@@ -498,24 +498,12 @@ const TOOL_DEFS = [
 // either), save/next_source/mark_source from DISCOVER_SOURCES (its skill says "Never call" them),
 // and next_source/mark_source from the drill/enrich types. toolDefs.test.js locks this per type.
 // get_task is absent everywhere: Half A injects the task as the ASSIGNED TASK packet.
-const SAVE_COMPLETE = ['save', 'complete_task'];
-const SCOPE_ACTIONS = {
-    // DRILL_DOWN gets `browse`: Signal-target drills fetch the demand post through
-    // the user's logged-in Chrome (server-side bridge; no chrome extension shipped).
-    DRILL_DOWN:          [...SAVE_COMPLETE, 'browse'],
-    DRILL_CONTAINER:     SAVE_COMPLETE,
-    ENRICH_CLIENT:       SAVE_COMPLETE,
-    FIND_CLIENT_SOURCES: SAVE_COMPLETE,
-    APPLY_FACTLET:       ['get_config', 'save', 'complete_task'],
-    DRAFT_OUTREACH:      ['get_config', 'save', 'complete_task'],
-    // SCRAPE_SOURCE gets `signal`: a scraper that senses demand it cannot attribute
-    // (an "ask" post with no capturable contact) queues a DRILL_DOWN instead of
-    // dropping it or saving a sparse client. And `browse`: reddit blocks Tavily AND
-    // plain Chrome fetches, but old.reddit.com/*.json through the bridge works
-    // (proven live 2026-07-20) — the reddit playbook in url-loop.md uses it.
-    SCRAPE_SOURCE:       ['save', 'complete_task', 'mark_source', 'add_sources', 'signal', 'browse'],
-    DISCOVER_SOURCES:    ['get_config', 'complete_task', 'add_sources'],
-};
+// Scopes now DERIVE from workerManifest.js (2026-08-06) -- the one table of
+// worker capability shared with db.js (skill map) and conductor.js (recipe
+// extensions). Edit the manifest, never a local copy here.
+const { WORKER_MANIFEST } = require('./workerManifest');
+const SCOPE_ACTIONS = Object.fromEntries(
+    Object.entries(WORKER_MANIFEST).map(([t, m]) => [t, m.actions]));
 // Union of every per-type scope — used only where a generic "is this a worker action" check is
 // needed. Never used AS a scope (that would re-grant forbidden actions).
 const WORKER_ACTIONS = [...new Set(Object.values(SCOPE_ACTIONS).flat())];
@@ -561,16 +549,8 @@ function _prunePipeline(pipeline, allowedActions) {
 // Which of the precrime tools each worker scope's skill actually calls (2026-07-19
 // context trim): scrapers never call find/trades; only discover-sources uses trades.
 // Dropping an unused tool removes its whole schema from EVERY turn of that worker.
-const SCOPE_TOOLS = {
-    DRILL_DOWN:          ['pipeline', 'find'],
-    DRILL_CONTAINER:     ['pipeline', 'find'],
-    ENRICH_CLIENT:       ['pipeline', 'find'],
-    FIND_CLIENT_SOURCES: ['pipeline', 'find'],
-    APPLY_FACTLET:       ['pipeline', 'find'],
-    DRAFT_OUTREACH:      ['pipeline', 'find'],
-    SCRAPE_SOURCE:       ['pipeline'],
-    DISCOVER_SOURCES:    ['pipeline', 'trades'],
-};
+const SCOPE_TOOLS = Object.fromEntries(
+    Object.entries(WORKER_MANIFEST).map(([t, m]) => [t, m.tools]));
 
 // Return the tools/list payload for a given connection scope. No/unknown scope => full set.
 function scopedToolDefs(scope) {

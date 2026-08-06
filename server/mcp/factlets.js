@@ -277,9 +277,15 @@ async function computeClientScore(clientId, intelOverride, opts = {}) {
 // thinking before the first output token even on fast providers; 20s produced
 // steady spurious timeouts. Still bounded -- the inline-gating rationale above holds.
 const LLM_TIMEOUT_MS = 30000;
-async function _llmComplete(prompt, cfg, maxTokens = 64) {
+// role (2026-08-06): optional key into cfg.llmModels ({judge, gate, apply} from
+// precrime_config.json llm.models) so the ~150 one-word judge/gate calls per
+// session can run a dirt-cheap model while long-form apply/draft keeps the good
+// one. Unset roles fall back to cfg.llmModel -- behavior unchanged until the
+// user fills the map.
+async function _llmComplete(prompt, cfg, maxTokens = 64, role = null) {
     if (!cfg || !cfg.llmApiKey) return null;
     const provider = (cfg.llmProvider || 'anthropic').toLowerCase();
+    const roleModel = (role && cfg.llmModels && cfg.llmModels[role]) || null;
     try {
         if (provider === 'anthropic') {
             const res = await fetch((cfg.llmBaseUrl || 'https://api.anthropic.com') + '/v1/messages', {
@@ -290,7 +296,7 @@ async function _llmComplete(prompt, cfg, maxTokens = 64) {
                     'anthropic-version': cfg.llmAnthropicVersion || '2023-06-01'
                 },
                 body: JSON.stringify({
-                    model: cfg.llmModel || 'claude-haiku-4-5-20251001',
+                    model: roleModel || cfg.llmModel || 'claude-haiku-4-5-20251001',
                     max_tokens: maxTokens,
                     messages: [{ role: 'user', content: prompt }]
                 }),
@@ -317,7 +323,7 @@ async function _llmComplete(prompt, cfg, maxTokens = 64) {
         // Two-part fix: floor the budget at 512 (non-reasoning models stop early; cost
         // unchanged), and ask for low reasoning effort (ignored by models without it).
         const body = {
-            model: cfg.llmModel || 'gpt-4o-mini',
+            model: roleModel || cfg.llmModel || 'gpt-4o-mini',
             max_tokens: Math.max(maxTokens || 0, 512),
             messages: [{ role: 'user', content: prompt }]
         };
@@ -376,7 +382,7 @@ async function judgeLeed(vp, dossier, booking, mode, cfg) {
         .replace('{bookingLine}', bookingLine)
         .replace('{modeGuidance}', modeGuidance);
 
-    const out = await _llmComplete(prompt, cfg);
+    const out = await _llmComplete(prompt, cfg, 64, 'judge');
     if (out === null) return { state: 'brewing', reason: 'judge_unavailable' };
     const word = out.trim().toLowerCase();
     if (word.startsWith('hot')) return { state: 'hot', reason: out.trim().slice(0, 200) };
@@ -398,16 +404,25 @@ async function judgeLeed(vp, dossier, booking, mode, cfg) {
 async function judgeContainerFit(vp, company, show, cfg) {
     if (!cfg || !cfg.llmApiKey) return { fit: false, reason: 'no_llm_key', decided: false };
     if (!company) return { fit: false, reason: 'no_company', decided: false };
+    // TOKEN DIET (2026-08-06): same diet judgeLeed got at line ~361 -- the old
+    // full pretty-printed VP dump (~625 tokens, ~30% indentation) shipped the
+    // signature, zip lists, and forbidden phrases into a YES/NO question, and a
+    // long SERVICE AREA list pushed the actual fit criteria past the 2500 cut.
+    // ~6 compact fields is everything a fit verdict uses (~60 tokens).
+    const gateVp = {
+        trade: vp.trade, pitch: vp.pitch, buyerRoles: vp.buyerRoles,
+        audienceSegments: vp.audienceSegments, notBuyer: vp.notBuyer
+    };
     const prompt = [
         'You gate B2B sales leads for this seller/product:',
-        JSON.stringify(vp, null, 2).slice(0, 2500),
+        JSON.stringify(gateVp),
         '',
         `Multi-vendor event: "${show || '(event)'}".`,
         `One participant/exhibitor at it: "${company}".`,
         "Would THIS company plausibly HIRE or BUY the seller's product for their presence at THIS event? Judge product-market fit only.",
         'Answer with exactly YES or NO, then a short reason (<=8 words).'
     ].join('\n');
-    const out = await _llmComplete(prompt, cfg, 24);
+    const out = await _llmComplete(prompt, cfg, 24, 'gate');
     if (out === null) return { fit: false, reason: 'fit_unavailable', decided: false };
     const word = out.trim().toLowerCase();
     // A DECIDED verdict requires the model to actually answer yes/no. An empty or ambiguous

@@ -1848,17 +1848,16 @@ async function pipelinePlanTasksInner(id, args) {
         }
         const sum = computeBudgetSummary(sessionCreatedSoFar);
         const closed = await maybeCloseSession();
+        // RESPONSE DIET (2026-08-06): same trim as the workflow return below --
+        // constants, usage tables, and the per-task array dropped; counts suffice.
         return createSuccessResponse(id, JSON.stringify({
-            mode, objective, session_id: sessionId, reclaimed, counts, created,
+            mode, objective, session_id: sessionId, reclaimed, counts,
             hotBookingCount: hotExists,
-            limits: TASK_TYPE_LIMITS,
-            sessionBudgets: TASK_SESSION_BUDGETS,
-            budgetUsage:    sum.budgetUsage,
             budgetExhausted: sum.budgetExhausted,
             sessionClosed:  closed.sessionClosed,
             closeReason:    closed.closeReason,
             explanation
-        }, null, 2));
+        }));
     }
 
     // Stage-gated workflow planning. See DOCS/WHAT_I_LEARNED.md for the
@@ -1974,6 +1973,7 @@ async function pipelinePlanTasksInner(id, args) {
                     }
                 }
                 const alreadyQueued = new Set(judgeNeededInputs.flatMap(j => j.bookingIds || []));
+                const proactiveIds = [];
                 for (const b of eligible) {
                     if (alreadyQueued.has(b.id)) continue;
                     const lj = lastJudged.get(b.id);
@@ -1982,7 +1982,15 @@ async function pipelinePlanTasksInner(id, args) {
                     // startup by the fingerprint check), forcing exactly one re-judge per booking
                     // against the new criteria; afterward the finishedAt watermark resumes.
                     if (lj && +lj >= +b.updatedAt && +lj >= SCORING_CRITERIA_CHANGED_AT) continue;
-                    judgeNeededInputs.push({ sourceTaskId: 'proactive_eligible', clientIds: [], bookingIds: [b.id] });
+                    proactiveIds.push(b.id);
+                }
+                // BATCH (2026-08-06): one task PER BOOKING burned the 150-task session
+                // budget on bookkeeping -- judgeAffected has always accepted arrays. 20
+                // bookings per task = one in-process claim/complete per 20 verdicts; the
+                // per-booking finishedAt watermark above still works because lastJudged
+                // is read from input.bookingIds, which stays a per-booking list.
+                for (let i = 0; i < proactiveIds.length; i += 20) {
+                    judgeNeededInputs.push({ sourceTaskId: 'proactive_eligible', clientIds: [], bookingIds: proactiveIds.slice(i, i + 20) });
                 }
             }
         } catch (e) {
@@ -2357,7 +2365,7 @@ async function pipelinePlanTasksInner(id, args) {
                 if (nhIds.length) {
                     for (const r of await prisma.booking.findMany({
                         where: { id: { in: nhIds } },
-                        select: { id: true, source: true, title: true,
+                        select: { id: true, source: true, title: true, notes: true,
                             client: { select: { company: true, name: true } } }
                     })) nhMeta.set(r.id, r);
                 }
@@ -2367,12 +2375,22 @@ async function pipelinePlanTasksInner(id, args) {
                     if ((drillCounts.get(nh.bookingId) || 0) >= capFor(nh.missingCount)) continue;
                     const meta = nhMeta.get(nh.bookingId);
                     if (meta && typeof meta.source === 'string' && meta.source.startsWith('container:')) {
+                        // UNDECIDED IS PERMANENT (2026-08-06): an unclear LLM verdict used to
+                        // write NOTHING, so the same vendor was re-gated with a byte-identical
+                        // prompt on every planning pass, forever. One unclear answer on
+                        // unchanged data will not become clear on retry #40 -- tag the booking
+                        // and never gate it again. Infra failures (no key / llm down /
+                        // fit_unavailable) still retry: those CAN succeed next cycle.
+                        if (meta.notes && meta.notes.includes('[fitgate:undecided]')) continue;
                         const company = (meta.client && (meta.client.company || meta.client.name)) || null;
                         const gate = await gateContainerVendor(company, meta.title);
                         if (!gate.fit) {
                             if (gate.decided) {
                                 await prisma.booking.update({ where: { id: nh.bookingId },
                                     data: actedOnData('unfit_vendor') }).catch(() => {});
+                            } else if (/^(unclear:|empty_response)/.test(gate.reason || '')) {
+                                await prisma.booking.update({ where: { id: nh.bookingId },
+                                    data: { notes: `${meta.notes ? meta.notes + ' ' : ''}[fitgate:undecided]` } }).catch(() => {});
                             }
                             logInfo(`container fit-gate: skip drill — ${company || '(no company)'} @ ${meta.title || '(event)'} [${gate.decided ? 'dismissed' : 'deferred'}]: ${gate.reason}`);
                             continue;
@@ -2753,6 +2771,12 @@ async function pipelinePlanTasksInner(id, args) {
         explanationParts.push(`session closed (${closed.closeReason})`);
     }
 
+    // RESPONSE DIET (2026-08-06): this payload is re-billed in the caller's context
+    // on every later turn, and the conductor self-feed calls it dozens of times per
+    // run. Dropped: `limits` + `sessionBudgets` (process-lifetime CONSTANTS shipped
+    // on every call), `budgetUsage` (restated them), `created` (one object per task;
+    // `counts` already says what was made), and the indent. Consumers verified:
+    // conductorReplan reads counts/workflowStrategy/sessionClosed/closeReason only.
     return createSuccessResponse(id, JSON.stringify({
         mode,
         objective,
@@ -2760,7 +2784,6 @@ async function pipelinePlanTasksInner(id, args) {
         session_id:     sessionId,
         reclaimed,
         counts,
-        created,
         workflowStrategy: workflowState ? {
             strategy: workflowState.strategy,
             unprocessedFactletCount: workflowState.unprocessedFactletCount,
@@ -2769,14 +2792,11 @@ async function pipelinePlanTasksInner(id, args) {
             factletStaleDays: workflowState.factletStaleDays,
             factletBacklogDiscoveryPause: workflowState.factletBacklogDiscoveryPause
         } : null,
-        limits:         TASK_TYPE_LIMITS,
-        sessionBudgets: TASK_SESSION_BUDGETS,
-        budgetUsage:    sum.budgetUsage,
         budgetExhausted: sum.budgetExhausted,
         sessionClosed:  closed.sessionClosed,
         closeReason:    closed.closeReason,
         explanation:    explanationParts.join('; ') + '.'
-    }, null, 2));
+    }));
 
     // ---------------- helpers (closures over sessionId / sessionCreatedSoFar) ----------------
     function computeBudgetSummary(_unused) {
@@ -3161,11 +3181,16 @@ async function pipelineCompleteTask(id, args) {
             logInfo(`complete_task audit log failed for task ${updated.id}: ${e.message}`);
         }
     }
+    // RESPONSE DIET (2026-08-06): the old return echoed the FULL task packet --
+    // including the worker's own just-submitted output -- straight back into the
+    // worker's context (~35k tokens of self-echo across a 50-completion run).
+    // The completer already knows what it submitted; it needs the ack only.
     return createSuccessResponse(id, JSON.stringify({
         completed: true,
-        task:       taskRowToPacket(updated),
+        taskId:     updated.id,
+        status:     updated.status,
         session_id: updated.sessionId || null
-    }, null, 2));
+    }));
 }
 
 async function pipelineTasks(id, args) {

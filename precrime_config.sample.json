@@ -24,6 +24,8 @@
   "llm": {
     "provider": "openrouter",
     "model": "anthropic/claude-haiku-4-5",
+    "_models_note": "OPTIONAL per-role overrides: route the high-volume one-word calls (judge = hot/brewing verdicts, gate = container-vendor YES/NO, apply = factlet application JSON) to a cheap fast model while `model` keeps the long-form work. Unset roles fall back to `model`.",
+    "models": {},
     "baseUrl": "https://openrouter.ai/api/v1"
   },
   "tasks": {

@@ -28,23 +28,13 @@ const coreTasks = require(path.join(LEEDZ_DB_HOME, 'tasks'));
 const prisma = core.prisma;
 core.connect().catch(e => console.error('[db] connect/WAL init failed:', e.message));
 
-// Task types the conductor can spawn a worker process for.
-// JUDGE_AFFECTED, SHOW_HOT_LEEDZ, SHARE_BOOKING are handled in-process by
-// the MCP server pipeline actions -- no external worker skill exists for them.
-const WORKER_SKILL_MAP = {
-    // APPLY_FACTLET moved to IN_PROCESS_TYPES (2026-07-19): one direct LLM call
-    // applies a factlet to a BATCH of clients (workers/ApplyFactletWorker.js) --
-    // no goose spawn per (factlet, client) pair, no ORPHAN failure mode.
-    ENRICH_CLIENT:       'enrichment-agent.md',
-    SCRAPE_SOURCE:       'url-loop.md',
-    FIND_CLIENT_SOURCES: 'find-client-sources.md',
-    DISCOVER_SOURCES:    'discover-sources.md',
-    DRILL_DOWN:          'drill-down.md',
-    DRILL_CONTAINER:     'drill-container.md',   // any multi-vendor event: organizer + expand fitting vendors + marketplace prep
-    DRAFT_OUTREACH:      'outreach-drafter.md'
-    // LAST_30_DAYS moved to IN_PROCESS_TYPES: it now runs as a procedural (zero-model)
-    // in-process worker (server/mcp/workers/Last30DaysWorker.js), not a spawned goose skill.
-};
+// Worker capability now lives in ONE place: workerManifest.js (2026-08-06).
+// WORKER_SKILL_MAP (spawnable types only -- skill:null entries are in-process)
+// and CHANNEL_SKILL_OVERRIDES are DERIVED views over it; edit the manifest,
+// never these.
+const { WORKER_MANIFEST } = require('./workerManifest');
+const WORKER_SKILL_MAP = Object.fromEntries(
+    Object.entries(WORKER_MANIFEST).filter(([, m]) => m.skill).map(([t, m]) => [t, m.skill]));
 
 const WORKER_TYPES = Object.keys(WORKER_SKILL_MAP);
 
@@ -52,12 +42,9 @@ const WORKER_TYPES = Object.keys(WORKER_SKILL_MAP);
 // fb/ig cannot render via Tavily in ANY mode -- they need the user's logged-in Chrome,
 // driven through the mcp-chrome bridge (127.0.0.1:12306). The planner only emits fb/ig
 // SCRAPE_SOURCE tasks when precrime_config.json chromeScrape=true, and the conductor
-// (a) adds the `chrome` extension to these workers' recipes and (b) serializes them --
-// the bridge accepts ONE client at a time.
-const CHANNEL_SKILL_OVERRIDES = {
-    fb: 'fb-factlet-harvester/SKILL.md',
-    ig: 'ig-factlet-harvester/SKILL.md'
-};
+// (a) adds the browser extension set to these workers' recipes and (b) serializes
+// them -- the bridge accepts ONE client at a time.
+const CHANNEL_SKILL_OVERRIDES = WORKER_MANIFEST.SCRAPE_SOURCE.browser.skills;
 
 // SCRAPE_SOURCE task input carries { url, channel }; DRILL_DOWN Signal tasks
 // (demand-signal bird-dog, 2026-07-20) carry { url, note, channel }. Other types

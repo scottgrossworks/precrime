@@ -475,7 +475,18 @@ async function pipelineReportSession(id, sessionId, close) {
         });
     }
 
-    return createSuccessResponse(id, JSON.stringify(summary, null, 2));
+    // RESPONSE DIET (2026-08-06): the old return shipped the full structured summary
+    // (task_history, failures[]) PLUS summary_markdown re-rendering the same facts
+    // PLUS a note ordering the model to echo it -- the same 40-60KB resident three
+    // ways in the model's context. The FULL summary is persisted to the session
+    // event log above (audit unbroken); the model gets the markdown it was going to
+    // echo anyway, plus the two scalars automations key off.
+    return createSuccessResponse(id, JSON.stringify({
+        session_id: sessionId,
+        status: summary.status,
+        summary_markdown: summary.summary_markdown,
+        note: 'Echo summary_markdown verbatim -- do not paraphrase. Full structured summary is in the session event log.'
+    }));
 }
 
 module.exports = { logSessionEvent, enforceSessionWatchdog, pipelineStartSession, pipelineReportSession };
