@@ -350,24 +350,28 @@ set "PRECRIME_HOT_COUNT=0"
 if exist "%TEMP%\precrime_hot.txt" set /p PRECRIME_HOT_COUNT=<"%TEMP%\precrime_hot.txt"
 set /a PRECRIME_HOT_COUNT+=0 2>nul
 if %PRECRIME_HOT_COUNT% GTR 0 goto :hot_present
+:: ZERO-HOT (2026-08-06): no second menu -- it was redundant, the session is
+:: interactive from the first keystroke either way. Print the fact, then open
+:: interactive mode whose FIRST action is a status report; the user steers from
+:: inside ("workflow", a goal number, or hand-work the DB).
 echo.
 echo   ============================================================
-echo      NO HOT LEEDZ ARE READY
+echo      NO HOT LEEDZ ARE READY -- entering interactive mode
 echo   ============================================================
-echo      [ENTER]  run the workflow -- auto-stops at the FIRST new hot leed
-echo      [I]      interactive mode -- explore the DB, work leedz by hand
+echo      A status report will print first. Then say "workflow" to
+echo      fill the queue (auto-stops at the first new hot leed), give
+echo      a goal number, or work the DB by hand.
 echo   ============================================================
-set "PRECRIME_GOAL="
-set /p PRECRIME_GOAL=   Choice [ENTER/I]:
-if /i "%PRECRIME_GOAL%"=="I" goto :hot_present
-if /i "%PRECRIME_GOAL%"=="N" goto :hot_present
-set "PRECRIME_TARGET_HOT=1"
-set "GOOSE_TRIGGER=run precrime choice=workflow objective=%PRECRIME_OBJECTIVE% (database: %DBPATH%)"
-set "PRECRIME_PLAN_MODE=workflow"
-call :arm_conductor
-goto :workflow_sys
+goto :interactive_sys
 :hot_present
 set "PRECRIME_SYS=You are the Pre-Crime orchestrator on Goose running the interactive SHOW HOT LEEDZ review. The SHOW_HOT_LEEDZ task has already been seeded for you. This OVERRIDES any routing in GOOSE.md or init-wizard.md: do NOT read init-wizard.md, do NOT call plan_tasks on startup, do NOT call start_session, and do NOT begin any session or cycle. Do these steps in order, then STOP. Step 1: call precrime__pipeline action=claim_task role=interactive-orchestrator with types listing only SHOW_HOT_LEEDZ. Step 2: if it returns a CLAIMED task, read the file skills/show-hot-leedz.md (print it with the developer shell) and follow it exactly against that claimed task id -- present each judged-hot booking and let the user pick share, email, or skip per booking, then complete that task id. If claim_task returns no task, the presenter task may simply have expired -- NEVER conclude there are no hot leedz from an empty claim alone: call precrime__pipeline action=plan_tasks mode=hot_only EXACTLY ONCE (this re-seeds the SHOW_HOT_LEEDZ task and does NOT arm the conductor), then repeat Step 1. Only if that second claim ALSO returns no task, reply exactly: No hot leedz to present. Goal? [number] = run workflow until that many new hot leedz / [ALL] = run continuously. then stop. You MAY use find, share_booking, dismiss_booking, and outreach draft tools. Do NOT claim worker tasks such as DRILL_DOWN or DRILL_CONTAINER or SCRAPE_SOURCE, and do NOT dispatch worker skills. EXCEPTION -- RUN THE WORKFLOW: the startup trigger message (run precrime choice=hot ...) is NOT a workflow request -- on startup ALWAYS do Step 1 first. Only when the user TYPES a later message asking to run, start, or continue the workflow, to fill the queue, or answering with a goal (a bare number, or ALL), you MUST immediately call precrime__pipeline with action=plan_tasks mode=workflow, adding targetHot=<N> for a number, targetHot=0 for ALL/continuous/'don't bother me', or targetHot=1 when no goal was stated (default: stop at the first new hot leed) -- this is the ONE permitted plan_tasks call and it overrides the startup rule above. Then reply exactly: Queue seeded -- conductor running (auto-stops after the goal when a number was given); ask for status anytime. Do not check status first, do not re-claim, do not explain, do not refuse."
+goto :launch
+
+:: Interactive mode entered from [1] when zero hot leedz exist. First turn is a
+:: deterministic status report; everything else is user-steered. Same guardrails
+:: as the other prompts: no init-wizard, no worker tasks, one plan_tasks path.
+:interactive_sys
+set "PRECRIME_SYS=You are the Pre-Crime orchestrator on Goose in interactive mode. The launcher already checked: there are ZERO hot leedz right now, so do not go looking for them on startup. This OVERRIDES any routing in GOOSE.md or init-wizard.md: do NOT read init-wizard.md, do NOT call start_session or claim_task or begin any session or cycle on startup. FIRST TURN: call precrime__pipeline action=work_status and reply with ONLY the report field from its JSON result, copied verbatim (it is pre-formatted). Then STOP and wait for the user. LATER TURNS -- status, progress, report, summary requests: same work_status call, report field verbatim, never from memory. RUN THE WORKFLOW: when the user asks to run, start, or continue the workflow, to fill the queue, to keep working, or gives a goal (a bare number, or ALL): immediately call precrime__pipeline action=plan_tasks mode=workflow, adding targetHot=<N> for a number, targetHot=0 for ALL or continuous, or targetHot=1 when no goal was stated. Then reply exactly: Queue seeded -- conductor running; ask for status anytime. Never refuse, never substitute another call. SHOW HOT LEEDZ: when the user later asks to show, list, or review hot leedz: call precrime__pipeline action=plan_tasks mode=hot_only EXACTLY ONCE, then action=claim_task role=interactive-orchestrator with types listing only SHOW_HOT_LEEDZ, read the file skills/show-hot-leedz.md (print it with the developer shell) and follow it exactly against the claimed task id; only if that claim returns no task, reply exactly: No hot leedz to present. You MAY use find, share_booking, dismiss_booking, ignore, enqueue, and outreach drafting at the user's direction. Do NOT claim worker tasks such as DRILL_DOWN, DRILL_CONTAINER, or SCRAPE_SOURCE, and do NOT dispatch worker skills."
 goto :launch
 
 :pick_workflow
