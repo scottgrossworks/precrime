@@ -55,6 +55,91 @@ function nonEmpty(v) {
     return !!(v !== null && v !== undefined && String(v).trim());
 }
 
+// ============================================================================
+// TEXT-LEVEL OUT-OF-AREA GATE (2026-08-06). The zip gate below only fires when a
+// booking HAS a parseable zip -- so "Fan Expo Chicago 2026" with location_with_zip
+// still missing sailed past it, ranked near-hot (few missing fields!), and earned
+// DRILL_DOWN workers whose job was literally to discover the zip code of a city
+// the deployment will never serve. This gate reads what the TEXT already says:
+// derive the ALLOWED STATES from serviceZipPrefixes (zip3 -> state, coarse static
+// table), then scan title+location for "City, ST" state tokens, full state names,
+// and unambiguous major metros. A booking whose text names ONLY out-of-area
+// places goes cold before any drill or judge spend. Generic: a Chicago deployment
+// with 606xx prefixes resolves IL as allowed and keeps its own events.
+// ============================================================================
+const ZIP3_STATE_RANGES = [
+    ['AL',350,369],['AK',995,999],['AZ',850,865],['AR',716,729],['CA',900,961],
+    ['CO',800,816],['CT',60,69],['DE',197,199],['DC',200,205],['FL',320,349],
+    ['GA',300,319],['GA',398,399],['HI',967,968],['ID',832,838],['IL',600,629],
+    ['IN',460,479],['IA',500,528],['KS',660,679],['KY',400,427],['LA',700,714],
+    ['ME',39,49],['MD',206,219],['MA',10,27],['MI',480,499],['MN',550,567],
+    ['MS',386,397],['MO',630,658],['MT',590,599],['NE',680,693],['NV',889,898],
+    ['NH',30,38],['NJ',70,89],['NM',870,884],['NY',100,149],['NY',5,5],
+    ['NC',270,289],['ND',580,588],['OH',430,459],['OK',730,749],['OR',970,979],
+    ['PA',150,196],['RI',28,29],['SC',290,299],['SD',570,577],['TN',370,385],
+    ['TX',750,799],['TX',885,885],['UT',840,847],['VT',50,59],['VA',201,201],
+    ['VA',220,246],['WA',980,994],['WV',247,268],['WI',530,549],['WY',820,831]
+];
+// Full state names -> code. "washington" and "louisiana"'s ", LA" abbrev are
+// EXCLUDED on purpose: "Washington Blvd" and "Los Angeles"/"LA" would misfire.
+const STATE_NAME_CODES = {
+    'alabama':'AL','alaska':'AK','arizona':'AZ','arkansas':'AR','colorado':'CO',
+    'connecticut':'CT','delaware':'DE','florida':'FL','hawaii':'HI','idaho':'ID',
+    'illinois':'IL','indiana':'IN','iowa':'IA','kansas':'KS','kentucky':'KY',
+    'louisiana':'LA','maine':'ME','maryland':'MD','massachusetts':'MA','michigan':'MI',
+    'minnesota':'MN','mississippi':'MS','missouri':'MO','montana':'MT','nebraska':'NE',
+    'nevada':'NV','new hampshire':'NH','new jersey':'NJ','new mexico':'NM','new york':'NY',
+    'north carolina':'NC','north dakota':'ND','ohio':'OH','oklahoma':'OK','oregon':'OR',
+    'pennsylvania':'PA','rhode island':'RI','south carolina':'SC','south dakota':'SD',
+    'tennessee':'TN','texas':'TX','utah':'UT','vermont':'VT','virginia':'VA',
+    'washington dc':'DC','west virginia':'WV','wisconsin':'WI','wyoming':'WY','california':'CA'
+};
+// Unambiguous major metros only -- every name here exists in exactly one state a
+// convention would plausibly be in. Deliberately EXCLUDES names California reuses
+// (Ontario, Pasadena, Glendale, Long Beach, Richmond, Orange, Riverside...).
+const OUT_CITY_STATE = {
+    'chicago':'IL','denver':'CO','seattle':'WA','houston':'TX','dallas':'TX',
+    'austin':'TX','san antonio':'TX','fort worth':'TX','phoenix':'AZ','tucson':'AZ',
+    'albuquerque':'NM','las vegas':'NV','reno':'NV','salt lake city':'UT','boise':'ID',
+    'miami':'FL','orlando':'FL','tampa':'FL','jacksonville':'FL','atlanta':'GA',
+    'nashville':'TN','memphis':'TN','new orleans':'LA','boston':'MA','philadelphia':'PA',
+    'pittsburgh':'PA','baltimore':'MD','detroit':'MI','cleveland':'OH','cincinnati':'OH',
+    'indianapolis':'IN','milwaukee':'WI','minneapolis':'MN','st. louis':'MO',
+    'kansas city':'MO','oklahoma city':'OK','tulsa':'OK','charlotte':'NC','raleigh':'NC',
+    'brooklyn':'NY','manhattan':'NY','honolulu':'HI','anchorage':'AK','denton':'TX'
+};
+const STATE_ABBREV_SET = new Set(ZIP3_STATE_RANGES.map(r => r[0]));
+
+function statesForZipPrefixes(prefixes) {
+    const out = new Set();
+    for (const p of prefixes || []) {
+        const n = parseInt(String(p), 10);
+        if (!Number.isFinite(n)) continue;
+        for (const [st, lo, hi] of ZIP3_STATE_RANGES) if (n >= lo && n <= hi) out.add(st);
+    }
+    return out;
+}
+
+// States the text names: "City, ST" comma-abbrevs (", LA" ignored -- see above),
+// full state names, and major-metro names. Empty array = text is silent on place.
+function detectTextStates(text) {
+    const found = new Set();
+    const t = String(text || '');
+    const lower = t.toLowerCase();
+    let m;
+    const abbrevRe = /,\s*([A-Z]{2})\b/g;
+    while ((m = abbrevRe.exec(t)) !== null) {
+        if (m[1] !== 'LA' && STATE_ABBREV_SET.has(m[1])) found.add(m[1]);
+    }
+    for (const [name, code] of Object.entries(STATE_NAME_CODES)) {
+        if (new RegExp(`\\b${name.replace('.', '\\.')}\\b`, 'i').test(lower)) found.add(code);
+    }
+    for (const [city, code] of Object.entries(OUT_CITY_STATE)) {
+        if (new RegExp(`\\b${city.replace('.', '\\.')}\\b`, 'i').test(lower)) found.add(code);
+    }
+    return Array.from(found);
+}
+
 function cold(reason) {
     return { state: 'cold', reason, missing: [] };
 }
@@ -112,6 +197,18 @@ function classify(client, booking, opts) {
     if (Array.isArray(o.serviceZipPrefixes) && o.serviceZipPrefixes.length && booking) {
         const zm = String(booking.zip || '').trim().match(/^(\d{3})\d{2}/);
         if (zm && !o.serviceZipPrefixes.includes(zm[1])) return cold('out_of_area');
+        // TEXT gate (2026-08-06): NO parseable zip -- the case the zip gate skips and
+        // exactly where drills were being spent finding zips for Chicago/Denver events.
+        // If the title/location names a state or major metro and NONE of them fall in
+        // an allowed state (derived from the zip prefixes), the booking is out of area
+        // NOW; do not wait for a drill to prove it. Text silent on place -> no verdict.
+        if (!zm) {
+            const allowed = statesForZipPrefixes(o.serviceZipPrefixes);
+            if (allowed.size) {
+                const named = detectTextStates(`${booking.title || ''} ${booking.location || ''}`);
+                if (named.length && !named.some(s => allowed.has(s))) return cold('out_of_area_text');
+            }
+        }
     }
 
     // ---- HOT PREREQUISITES (all required) -> otherwise BREWING ----
