@@ -2004,7 +2004,13 @@ async function pipelinePlanTasksInner(id, args) {
             suppressed.add('SHOW_HOT_LEEDZ');
             suppressed.add('SHARE_BOOKING');
             suppressed.add('DRAFT_OUTREACH');
-            suppressed.add('APPLY_FACTLET');
+            // APPLY_FACTLET is FOUNDATIONAL too (2026-08-05): with a large brewing
+            // backlog the proactive judge sweep has a task open on virtually EVERY
+            // replan, so gating apply behind judge starved it to zero -- 101 of 145
+            // live factlets sat unprocessed and aged out stale while discovery was
+            // ALSO paused on that same backlog (squeezed at both ends). Same disease,
+            // same cure as ENRICH/SCRAPE below: it is already throttled (concurrency
+            // 5, session budget 50), so let it drain evidence every pass.
             // ENRICH_CLIENT and SCRAPE_SOURCE are FOUNDATIONAL stages (like
             // DRILL_DOWN): they promote brewing->hot (find the decision-maker
             // contact) and provide fresh fuel. They are budget-capped, so they
@@ -2148,15 +2154,15 @@ async function pipelinePlanTasksInner(id, args) {
             }
             // Spec ("Exact Code Changes Required" #4 + funnel invariant):
             // once hot work was planned, is already open, OR hot Bookings
-            // exist, skip every lower stage. Apply must also pause -- it
-            // creates more judge-needed output that would compete with the
-            // hot action we just scheduled.
+            // exist, skip open-ended discovery. APPLY_FACTLET no longer pauses
+            // here (2026-08-05): an always-hot queue starved evidence consumption
+            // exactly like it once starved enrichment -- factlets aged out stale
+            // while a handful of hot bookings sat awaiting user action. Apply is
+            // budget-capped (5 concurrent / 50 per session) and its judge-needed
+            // output is itself capped, so it cannot crowd out the hot action.
+            // ENRICH_CLIENT/SCRAPE_SOURCE stay foundational for the same reason.
+            // Only DISCOVER pauses for hot action.
             if (hotPlanned > 0 || hotActionOpen > 0 || hotExists > 0) {
-                suppressed.add('APPLY_FACTLET');
-                // ENRICH_CLIENT/SCRAPE_SOURCE stay foundational even with hot
-                // work pending (budget-capped small slice) -- an always-hot
-                // backlog must not starve enrichment/scraping, or the funnel
-                // never refills. Only DISCOVER pauses for hot action.
                 suppressed.add('DISCOVER_SOURCES');
             }
         }
