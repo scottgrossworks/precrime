@@ -23,7 +23,7 @@ const TOOL_DEFS = [
                         '',
                         'action="enqueue": USER-ORDERED TASK for ONE named client — the front-of-queue lever. When the user names a specific client/company and asks to drill, dig into, research, or enrich it ("DRILL_DOWN Rock Dimension", "dig into Acme Corp", "find their upcoming events"), THIS is the ONE correct call — NEVER plan_tasks (system-wide, cannot target a client) and NEVER an explanation of why you cannot. Pass client:"<name substring>" (or clientId), optional type ("DRILL_DOWN" default | "ENRICH_CLIENT" | "FIND_CLIENT_SOURCES"), optional missing[] gap codes (server derives sensible defaults from the client record). The task bypasses planner budgets, is timestamped to the FRONT of the queue (drills dispatch before all other work), and the conductor is auto-armed if dormant. Returns ENQUEUED/BUMPED_TO_FRONT with taskId, ALREADY_RUNNING if a worker holds it, or AMBIGUOUS with candidates[] (re-call with clientId). Quote the literal status to the user, then continue what you were doing.',
                         '',
-                        'action="status": Read full system state in one call. Returns { config, stats, completeness, readyDrafts, brewingCount }. completeness is a derived check of whether config has the fields needed for the current defaultBookingAction. Use this at startup and between enrichment rounds.',
+                        'action="status": Read system state. Pass report=true (ALWAYS do this when a user asked for status/progress/a report) to get ONLY the pre-formatted human report text -- output it exactly as returned, never summarize it. Without report=true returns the full JSON { report, config, stats, completeness, readyDrafts, brewingCount } for programmatic use.',
                         '',
                         'action="ignore": PERMANENT BLACKLIST for a named company or person. When the user says "ignore X", "blacklist X", "never show me X again", "no more X" -- this is the ONE correct call: pass term:"<the name>". Server-side it dismisses every existing matching booking (cold forever), cancels open tasks on them, and refuses ALL future saves mentioning the term (stored in DOCS/BLACKLIST.md, survives restarts). Effective immediately. Returns { ignored, dismissedBookings, clientsReset, cancelledOpenTasks }. Distinct from dismiss_booking (one booking only) -- ignore kills the name everywhere, forever.',
                         '',
@@ -70,6 +70,10 @@ const TOOL_DEFS = [
                             term: {
                                 type: 'string',
                                 description: 'For action=ignore: the company/person name to permanently blacklist (>= 3 chars, substring-matched against all client and booking identity text -- keep it specific: "Rivian" yes, "LA Auto Show" NO, that would kill every exhibitor at the show).'
+                            },
+                            report: {
+                                type: 'boolean',
+                                description: 'For action=status: true returns ONLY the pre-formatted human report text (no JSON). Always pass true when answering a user status request; echo the result verbatim.'
                             },
                             key: {
                                 type: 'string',

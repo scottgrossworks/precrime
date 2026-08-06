@@ -233,7 +233,7 @@ async function handlePipeline(id, params) {
     }
 
     switch (action) {
-        case 'status':         return await pipelineStatus(id);
+        case 'status':         return await pipelineStatus(id, args);
         case 'configure':      return await pipelineConfigure(id, args.patch || {});
         case 'get_config':     return await pipelineGetConfig(id, args);
         case 'get_task':       return await pipelineGetTask(id, args);
@@ -625,7 +625,7 @@ async function pipelineRescore(id, scope, procedural = false) {
     }, null, 2));
 }
 
-async function pipelineStatus(id) {
+async function pipelineStatus(id, args) {
     // Config -- in-memory runtime config (see buildRuntimeConfig)
     const cfg = RUNTIME_CONFIG;
 
@@ -724,6 +724,15 @@ async function pipelineStatus(id) {
         `FACTLETS  ${factletLine}`,
         `CLIENTS   ${totalClients}  ·  drafts: ${brewing} brewing / ${ready} ready / ${sent} sent`
     ].join('\n');
+
+    // REPORT-ONLY mode (2026-08-06): report=true returns the pre-formatted text and
+    // NOTHING else. Asking the model to extract the report field from a 4.6KB JSON
+    // blob failed both ways at once -- weak models summarized it down to one useless
+    // sentence, and the blob burned ~1% of session context per status request. When
+    // the tool result IS the finished report, echoing it is the lazy path.
+    if (args && (args.report === true || args.report === 'true')) {
+        return createSuccessResponse(id, report);
+    }
 
     // Completeness: check if config has the fields needed for current mode
     const completeness = {};
