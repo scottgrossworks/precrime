@@ -435,12 +435,20 @@ const TOOL_DEFS = [
                             },
                             filters: {
                                 type: 'object',
-                                description: 'Action-specific filters. clients: search, name, email, company, segment, source, draftStatus, warmthScore, minWarmthScore, maxWarmthScore. bookings: status, trade, source, search, monthIn (array of 1-12, any year), anniversaryWithinDays (number, cyclic proximity to today). factlets: sinceTimestamp, clientId. drafts: minScore.',
+                                description: 'Action-specific filters. All actions: id (fetch one record by id). clients: search, name, email, company, exactCompany (exact dedup match), segment, source, draftStatus, warmthScore, minWarmthScore, maxWarmthScore. bookings: status, trade, source, search, shared (boolean), future (boolean, startDate >= now), startDateGte (ISO date), monthIn (array of 1-12, any year), anniversaryWithinDays (number, cyclic proximity to today). factlets: sinceTimestamp, clientId. drafts: minScore.',
                                 properties: {
+                                    id: {
+                                        type: 'string',
+                                        description: 'Fetch a single record by its id (any action). Not combinable with other filters.'
+                                    },
                                     search:         { type: 'string' },
                                     name:           { type: 'string' },
                                     email:          { type: 'string' },
                                     company:        { type: 'string' },
+                                    exactCompany: {
+                                        type: 'string',
+                                        description: 'clients only: exact (case-insensitive) company match, for dedup lookups before creating a new client.'
+                                    },
                                     segment:        { type: 'string' },
                                     // Provenance prefix match -- how an entire import cohort is
                                     // recovered later, e.g. source:"square:" for every Square customer.
@@ -454,6 +462,18 @@ const TOOL_DEFS = [
                                     sinceTimestamp: { type: 'string' },
                                     clientId:       { type: 'string' },
                                     minScore:       { type: 'number' },
+                                    shared: {
+                                        type: 'boolean',
+                                        description: 'bookings only: filter by whether the booking has already been shared.'
+                                    },
+                                    future: {
+                                        type: 'boolean',
+                                        description: 'bookings only: when true, only bookings with startDate >= now.'
+                                    },
+                                    startDateGte: {
+                                        type: 'string',
+                                        description: 'bookings only: ISO date string, only bookings starting on or after this date.'
+                                    },
                                     monthIn: {
                                         type: 'array', items: { type: 'number' },
                                         description: 'bookings only: calendar months 1-12, any year (e.g. [9,10] for Sept/Oct across all years).'
