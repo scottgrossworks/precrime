@@ -336,20 +336,27 @@ goto :menu
 :pick_hot
 set "GOOSE_TRIGGER=run precrime choice=hot objective=%PRECRIME_OBJECTIVE% (database: %DBPATH%)"
 :: SHOW HOT LEEDZ is a FOREGROUND presenter. Prime the SHOW_HOT_LEEDZ task deterministically
-:: (hot_only does NOT arm the conductor, so it stays dormant and will not steal the task);
-:: the orchestrator then only has to CLAIM it and present. Priming here removes the flaky
-:: model from the seeding step.
+:: (hot_only does NOT arm the conductor, so it stays dormant and will not steal the task).
 set "PRECRIME_TARGET_HOT="
 set "PRECRIME_PLAN_MODE=hot_only"
 call :arm_conductor
-:: ZERO-HOT UX (deterministic, launcher-owned): check the hot count HERE and, when it is
-:: zero, present the goal menu in the SAME style as the main menu -- the LLM never formats
-:: UX. The user decides a goal before the session even opens; [N] opens it anyway.
-powershell -NoProfile -ExecutionPolicy Bypass -Command "$out = '0'; try { $b = @{ jsonrpc='2.0'; id=1; method='tools/call'; params=@{ name='pipeline'; arguments=@{ action='status' } } } | ConvertTo-Json -Depth 8; $r = Invoke-RestMethod -Uri 'http://127.0.0.1:5179/mcp' -Method Post -ContentType 'application/json' -Body $b -TimeoutSec 20; $j = $r.result.content[0].text | ConvertFrom-Json; $out = [string][int]$j.stats.bookings.hot } catch {}; Set-Content -Path (Join-Path $env:TEMP 'precrime_hot.txt') -Value $out"
-set "PRECRIME_HOT_COUNT=0"
-if exist "%TEMP%\precrime_hot.txt" set /p PRECRIME_HOT_COUNT=<"%TEMP%\precrime_hot.txt"
-set /a PRECRIME_HOT_COUNT+=0 2>nul
-if %PRECRIME_HOT_COUNT% GTR 0 goto :hot_present
+:: DETERMINISTIC CLAIM (2026-08-07): claim the SHOW_HOT_LEEDZ task HERE, in the
+:: launcher, instead of asking the model to decide whether to call claim_task.
+:: Observed live: given trigger "run precrime choice=hot ...", the model called
+:: plan_tasks(mode=workflow) on turn 1 instead -- running RUN WORKFLOW when the
+:: user chose SHOW HOT LEEDZ. Same "remove the flaky model from the decision"
+:: principle as arm_conductor above: SHOW_HOT_LEEDZ tasks carry NO user-generated
+:: text (targetType:"none", input:null -- just a cuid id), so claiming here and
+:: passing only the id is as safe as the hot-count probe this replaces. This also
+:: retires the old count-then-guess flow: claim_task's own answer (CLAIMED /
+:: NO_TASK) is the ground truth "is there something to present", not a bookings
+:: count used as a proxy for it (the exact gap behind the "11 hot then 0" bug).
+powershell -NoProfile -ExecutionPolicy Bypass -Command "$status='NO_TASK'; $tid=''; try { $claim = { $b = @{ jsonrpc='2.0'; id=1; method='tools/call'; params=@{ name='pipeline'; arguments=@{ action='claim_task'; role='interactive-orchestrator'; types=@('SHOW_HOT_LEEDZ') } } } | ConvertTo-Json -Depth 8; $r = Invoke-RestMethod -Uri 'http://127.0.0.1:5179/mcp' -Method Post -ContentType 'application/json' -Body $b -TimeoutSec 20; return $r.result.content[0].text | ConvertFrom-Json }; $j = & $claim; if ($j.status -ne 'CLAIMED') { $seed = @{ jsonrpc='2.0'; id=2; method='tools/call'; params=@{ name='pipeline'; arguments=@{ action='plan_tasks'; mode='hot_only' } } } | ConvertTo-Json -Depth 8; Invoke-RestMethod -Uri 'http://127.0.0.1:5179/mcp' -Method Post -ContentType 'application/json' -Body $seed -TimeoutSec 20 | Out-Null; $j = & $claim }; $status = $j.status; if ($j.task -and $j.task.id) { $tid = $j.task.id } } catch {}; Set-Content -Path (Join-Path $env:TEMP 'precrime_claim_status.txt') -Value $status; Set-Content -Path (Join-Path $env:TEMP 'precrime_claim_taskid.txt') -Value $tid"
+set "PRECRIME_CLAIM_STATUS=NO_TASK"
+set "PRECRIME_CLAIM_TASKID="
+if exist "%TEMP%\precrime_claim_status.txt" set /p PRECRIME_CLAIM_STATUS=<"%TEMP%\precrime_claim_status.txt"
+if exist "%TEMP%\precrime_claim_taskid.txt" set /p PRECRIME_CLAIM_TASKID=<"%TEMP%\precrime_claim_taskid.txt"
+if /i "%PRECRIME_CLAIM_STATUS%"=="CLAIMED" goto :hot_present
 :: ZERO-HOT (2026-08-06): no second menu -- it was redundant, the session is
 :: interactive from the first keystroke either way. Print the fact, then open
 :: interactive mode whose FIRST action is a status report; the user steers from
@@ -364,7 +371,11 @@ echo      a goal number, or work the DB by hand.
 echo   ============================================================
 goto :interactive_sys
 :hot_present
-set "PRECRIME_SYS=You are the Pre-Crime orchestrator on Goose running the interactive SHOW HOT LEEDZ review. The SHOW_HOT_LEEDZ task has already been seeded for you. This OVERRIDES any routing in GOOSE.md or init-wizard.md: do NOT read init-wizard.md, do NOT call plan_tasks on startup, do NOT call start_session, and do NOT begin any session or cycle. Do these steps in order, then STOP. Step 1: call precrime__pipeline action=claim_task role=interactive-orchestrator with types listing only SHOW_HOT_LEEDZ. Step 2: if it returns a CLAIMED task, read the file skills/show-hot-leedz.md (print it with the developer shell) and follow it exactly against that claimed task id -- present each judged-hot booking and let the user pick share, email, or skip per booking, then complete that task id. If claim_task returns no task, the presenter task may simply have expired -- NEVER conclude there are no hot leedz from an empty claim alone: call precrime__pipeline action=plan_tasks mode=hot_only EXACTLY ONCE (this re-seeds the SHOW_HOT_LEEDZ task and does NOT arm the conductor), then repeat Step 1. Only if that second claim ALSO returns no task, reply exactly: No hot leedz to present. Goal? [number] = run workflow until that many new hot leedz / [ALL] = run continuously. then stop. You MAY use find, share_booking, dismiss_booking, and outreach draft tools. Do NOT claim worker tasks such as DRILL_DOWN or DRILL_CONTAINER or SCRAPE_SOURCE, and do NOT dispatch worker skills. EXCEPTION -- RUN THE WORKFLOW: the startup trigger message (run precrime choice=hot ...) is NOT a workflow request -- on startup ALWAYS do Step 1 first. Only when the user TYPES a later message asking to run, start, or continue the workflow, to fill the queue, or answering with a goal (a bare number, or ALL), you MUST immediately call precrime__pipeline with action=plan_tasks mode=workflow, adding targetHot=<N> for a number, targetHot=0 for ALL/continuous/'don't bother me', or targetHot=1 when no goal was stated (default: stop at the first new hot leed) -- this is the ONE permitted plan_tasks call and it overrides the startup rule above. Then reply exactly: Queue seeded -- conductor running (auto-stops after the goal when a number was given); ask for status anytime. Do not check status first, do not re-claim, do not explain, do not refuse."
+:: The model has NOTHING to decide here: the task is already claimed, the id is
+:: known, the only job is to read the skill and follow it. Later-turn requests
+:: (workflow / drill / enrich) are handled by show-hot-leedz.md's own Step 4 --
+:: no separate SYS-level exception needed.
+set "PRECRIME_SYS=You are the Pre-Crime orchestrator on Goose running the interactive SHOW HOT LEEDZ review. A SHOW_HOT_LEEDZ task is ALREADY CLAIMED for you: taskId=%PRECRIME_CLAIM_TASKID%. This OVERRIDES any routing in GOOSE.md or init-wizard.md: do NOT read init-wizard.md, do NOT call claim_task, do NOT call plan_tasks, do NOT call start_session, and do NOT begin any session or cycle. Immediately read the file skills/show-hot-leedz.md (print it with the developer shell) and follow it exactly using taskId=%PRECRIME_CLAIM_TASKID% as the already-claimed task id -- present each judged-hot booking and let the user pick share, email, or skip per booking, then complete that task id. The skill file's own Step 4 covers later requests to drill, enrich, ignore, or run the workflow -- follow it exactly for those, do not improvise a separate response. You MAY use find, share_booking, dismiss_booking, ignore, enqueue, and outreach draft tools per the skill. Do NOT claim worker tasks such as DRILL_DOWN or DRILL_CONTAINER or SCRAPE_SOURCE, and do NOT dispatch worker skills."
 goto :launch
 
 :: Interactive mode entered from [1] when zero hot leedz exist. First turn is a

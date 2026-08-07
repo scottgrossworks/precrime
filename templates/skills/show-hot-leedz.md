@@ -1,5 +1,5 @@
 ---
-name: {{DEPLOYMENT_NAME}}-show-hot-leedz
+name: MyProject-show-hot-leedz
 description: One-Task SHOW_HOT_LEEDZ presenter. Consume one already-claimed Task, show judged hot Bookings, route sharing through share_booking, complete, stop.
 triggers:
   - show hot leedz
@@ -13,11 +13,7 @@ Read judged state only. Do not scrape, enrich, rescore, resolve dates, save, pla
 
 ## Step 1 -- Accept Claimed Task
 
-The orchestrator has already called `claim_task` and handed you the Task packet.
-
-Set `taskId = task.id`.
-
-Expected Task: `{ type:"SHOW_HOT_LEEDZ", targetType:"none" }`. If the Task is missing or not this type, stop and report `wrong_task_type`; do not claim another Task.
+The task is ALREADY claimed for you (2026-08-07: the launcher claims it deterministically, not you). Your system prompt gives you `taskId=<id>` directly -- use that value as `taskId`. Do NOT call `claim_task` yourself; there is no Task packet to read, only the id.
 
 ## Step 2 -- Read Bookings
 
