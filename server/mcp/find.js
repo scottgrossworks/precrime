@@ -61,6 +61,19 @@ function createFindHandlers(deps) {
         return c;
     }
 
+    // Shortest distance in days between two (month,day) pairs, ignoring year and
+    // wrapping the year boundary (Dec 30 vs Jan 5 = 6, not 360). Reference year
+    // 2001 (non-leap) sidesteps Feb 29 for every date except Feb 29 itself, which
+    // Date() silently rolls into Mar 1 -- an acceptable one-day skew once every 4
+    // years for a "within N days" proximity filter, not worth the added complexity.
+    function dayOfYearUTC(mo, day) {
+        return Math.round((Date.UTC(2001, mo - 1, day) - Date.UTC(2001, 0, 1)) / 86400000) + 1;
+    }
+    function cyclicMonthDayDistance(mo1, day1, mo2, day2) {
+        const diff = Math.abs(dayOfYearUTC(mo1, day1) - dayOfYearUTC(mo2, day2));
+        return Math.min(diff, 365 - diff);
+    }
+
     async function findClients(id, args) {
         const filters = args.filters || {};
         const limit = capLimit(args.limit, 10);
@@ -143,6 +156,56 @@ function createFindHandlers(deps) {
         if (filters.future === true) where.startDate = { gte: new Date() };
         if (filters.startDateGte) {
             where.startDate = Object.assign(where.startDate || {}, { gte: new Date(filters.startDateGte) });
+        }
+
+        // CALENDAR FILTERS (2026-08-07): "show me every Sept/Oct booking, any year"
+        // and "what anniversaries are coming up" were UNANSWERABLE before this --
+        // Prisma has no month/day-of-year predicate, so there was no tool call that
+        // could satisfy the question. The model, given no way to answer, fabricated
+        // three different wrong tables rather than saying so. Resolved in JS over a
+        // lean {id,startDate} scan (cheap even at thousands of rows) so accuracy
+        // never depends on the LLM doing date arithmetic in its head.
+        //   monthIn: [9,10]              -- literal calendar month match, any year
+        //   anniversaryWithinDays: N     -- within N days of TODAY's month/day,
+        //                                    cyclic (wraps Dec->Jan), sorted soonest first
+        // Not combinable with filters.id (a single-record lookup); calendar filters
+        // are list queries by nature.
+        if (!filters.id && ((Array.isArray(filters.monthIn) && filters.monthIn.length) || filters.anniversaryWithinDays != null)) {
+            const leanWhere = { ...where, startDate: { not: null } };
+            const rows = await prisma.booking.findMany({ where: leanWhere, select: { id: true, startDate: true } });
+            const wantMonths = new Set((filters.monthIn || []).map(m => parseInt(m, 10)));
+            const withinDays = filters.anniversaryWithinDays != null ? Number(filters.anniversaryWithinDays) : null;
+            const today = new Date();
+            const todayMo = today.getUTCMonth() + 1, todayDay = today.getUTCDate();
+            const scored = [];
+            for (const r of rows) {
+                const d = new Date(r.startDate);
+                const mo = d.getUTCMonth() + 1, day = d.getUTCDate();
+                const dist = cyclicMonthDayDistance(mo, day, todayMo, todayDay);
+                const hit = (wantMonths.size && wantMonths.has(mo)) || (withinDays != null && dist <= withinDays);
+                if (hit) scored.push({ id: r.id, mo, day, dist });
+            }
+            // Anniversary mode: soonest first. Plain month mode: calendar order
+            // (month, then day) so a "Sept/Oct" list reads chronologically.
+            scored.sort((a, b) => withinDays != null ? (a.dist - b.dist) : (a.mo - b.mo || a.day - b.day));
+            const totalMatched = scored.length;
+            const orderedIds = scored.slice(0, limit).map(s => s.id);
+            where.id = { in: orderedIds };
+            const calRows = await prisma.booking.findMany({
+                where,
+                include: { client: { select: { id: true, name: true, company: true, email: true, phone: true, segment: true } } }
+            });
+            const byId = new Map(calRows.map(r => [r.id, r]));
+            const ordered = orderedIds.map(i => byId.get(i)).filter(Boolean);
+            // Truncation is now VISIBLE instead of silent (yesterday's limit cap
+            // could otherwise hide it exactly the way it did here): append one
+            // marker row rather than changing the response from array to object,
+            // so every existing caller that iterates a bare array is unaffected.
+            if (totalMatched > ordered.length) {
+                ordered.push({ _truncated: true, totalMatched, returned: ordered.length,
+                    note: `${totalMatched} total match(es); showing the ${ordered.length} ${withinDays != null ? 'soonest' : 'first'}. Raise limit or narrow the filter to see the rest.` });
+            }
+            return createSuccessResponse(id, safeJson(ordered));
         }
 
         if (filters.search) {

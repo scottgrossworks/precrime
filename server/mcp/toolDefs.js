@@ -419,7 +419,7 @@ const TOOL_DEFS = [
                         '',
                         'action="clients": Search clients by name, email, company, segment, draftStatus, warmth range. Default summary=true returns slim records (no dossier/draft/targetUrls). Pass summary=false only when you need full records. Default limit 10. Sorted by dossierScore descending.',
                         '',
-                        'action="bookings": Search bookings by status, trade, keyword (checks title, description, notes, location). Returns bookings with slim client stub. Default limit 20. Sorted by createdAt descending.',
+                        'action="bookings": Search bookings by status, trade, keyword (checks title, description, notes, location). Returns bookings with slim client stub. Default limit 20. Sorted by createdAt descending. CALENDAR (any year, ignores the year entirely): filters.monthIn:[9,10] returns every booking whose start month is September or October in ANY year, calendar-ordered; filters.anniversaryWithinDays:60 returns bookings whose month/day falls within 60 days of TODAY (cyclic, wraps Dec->Jan), soonest first -- use this for "who should I proactively re-contact" / upcoming-anniversary requests. These do the month math in code; never estimate or filter by year yourself when the user asked for "any year" or "anniversaries" -- there is no other way to answer that correctly. If the result array\'s last element has _truncated:true, more matches exist than were returned (totalMatched in that element) -- say so, do not claim the list is complete.',
                         '',
                         'action="factlets": Get factlets. Pass filters.sinceTimestamp (ISO string) for queue checking, or filters.clientId for a specific client. Returns factlets sorted by createdAt ascending.',
                         '',
@@ -435,7 +435,7 @@ const TOOL_DEFS = [
                             },
                             filters: {
                                 type: 'object',
-                                description: 'Action-specific filters. clients: search, name, email, company, segment, source, draftStatus, warmthScore, minWarmthScore, maxWarmthScore. bookings: status, trade, source, search. factlets: sinceTimestamp, clientId. drafts: minScore.',
+                                description: 'Action-specific filters. clients: search, name, email, company, segment, source, draftStatus, warmthScore, minWarmthScore, maxWarmthScore. bookings: status, trade, source, search, monthIn (array of 1-12, any year), anniversaryWithinDays (number, cyclic proximity to today). factlets: sinceTimestamp, clientId. drafts: minScore.',
                                 properties: {
                                     search:         { type: 'string' },
                                     name:           { type: 'string' },
@@ -453,7 +453,15 @@ const TOOL_DEFS = [
                                     trade:          { type: 'string' },
                                     sinceTimestamp: { type: 'string' },
                                     clientId:       { type: 'string' },
-                                    minScore:       { type: 'number' }
+                                    minScore:       { type: 'number' },
+                                    monthIn: {
+                                        type: 'array', items: { type: 'number' },
+                                        description: 'bookings only: calendar months 1-12, any year (e.g. [9,10] for Sept/Oct across all years).'
+                                    },
+                                    anniversaryWithinDays: {
+                                        type: 'number',
+                                        description: 'bookings only: within N days of TODAY\'s month/day, cyclic across the year boundary. For "upcoming anniversary" / proactive-recontact requests.'
+                                    }
                                 }
                             },
                             summary: {
