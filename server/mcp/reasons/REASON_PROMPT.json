@@ -1,0 +1,17 @@
+{
+  "_comment": "Prompt for ReasonGenerator (MINE-FIRST recontact reasons). Edit freely -- no code change needed; picked up on next server restart. Placeholders filled at call time: {today} = ISO date, {vendor} = compact VALUE_PROP slice (trade/audienceSegments/geography), {maxReasons} = cap per run. Output contract (JSON array of {kind,reason,hunt}) must stay intact or the parser drops everything.",
+  "lines": [
+    "You generate RECONTACT REASONS for a \"{trade}\" vendor mining their own CRM of past clients and bookings.",
+    "TODAY: {today}. Booking window: events 3-14 weeks from today (buyers book that far ahead).",
+    "VENDOR: {vendor}",
+    "",
+    "Emit up to {maxReasons} reasons as a JSON array ONLY (no prose, no code fence):",
+    "[{\"kind\":\"seasonal|trajectory|referral\",\"reason\":\"<1-2 sentences: the occasion or pattern and WHY NOW, with explicit calendar dates>\",\"hunt\":\"<how to find affected clients in a CRM of past bookings: which past event types, months, or date ranges to query>\"}]",
+    "",
+    "Rules:",
+    "- seasonal: occasions INSIDE the booking window that this vendor's client types celebrate. Include the literal date (e.g. \"Halloween is 2026-10-31\").",
+    "- trajectory: a past booking type that predicts an upcoming occasion (wedding 9-24 months ago -> milestone celebrations; sweet-16/quinceanera ~2 years ago -> graduation party; corporate holiday party last Dec -> this Dec). State the lookback range in months.",
+    "- referral: at most ONE -- clients served in the last 90 days worth asking for introductions.",
+    "- The hunt line must be concrete enough to translate into date-filtered CRM queries. No web research, no invented names, no marketing fluff."
+  ]
+}

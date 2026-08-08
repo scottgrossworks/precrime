@@ -32,28 +32,22 @@ const REASON_KINDS = new Set(['seasonal', 'trajectory', 'referral']);
 const COOLDOWN_HOURS = 20;      // roughly once a day, whatever the restart count
 const MAX_REASONS_PER_RUN = 6;
 
+// Prompt text lives in REASON_PROMPT.json (same folder) so it can be tuned
+// without touching code -- same pattern as DOCS/PROMPTS.json for the judge.
+const REASON_PROMPT = require('./REASON_PROMPT.json');
+
 function buildPrompt() {
     const vp = VALUE_PROP || {};
-    const today = new Date().toISOString().slice(0, 10);
     const slice = {
         trade: vp.trade || '',
         audienceSegments: vp.audienceSegments || [],
         geography: vp.geography || ''
     };
-    return [
-        `You generate RECONTACT REASONS for a "${slice.trade}" vendor mining their own CRM of past clients and bookings.`,
-        `TODAY: ${today}. Booking window: events 3-14 weeks from today (buyers book that far ahead).`,
-        `VENDOR: ${JSON.stringify(slice)}`,
-        '',
-        `Emit up to ${MAX_REASONS_PER_RUN} reasons as a JSON array ONLY (no prose, no code fence):`,
-        '[{"kind":"seasonal|trajectory|referral","reason":"<1-2 sentences: the occasion or pattern and WHY NOW, with explicit calendar dates>","hunt":"<how to find affected clients in a CRM of past bookings: which past event types, months, or date ranges to query>"}]',
-        '',
-        'Rules:',
-        '- seasonal: occasions INSIDE the booking window that this vendor\'s client types celebrate. Include the literal date (e.g. "Halloween is 2026-10-31").',
-        '- trajectory: a past booking type that predicts an upcoming occasion (wedding 9-24 months ago -> milestone celebrations; sweet-16/quinceanera ~2 years ago -> graduation party; corporate holiday party last Dec -> this Dec). State the lookback range in months.',
-        '- referral: at most ONE -- clients served in the last 90 days worth asking for introductions.',
-        '- The hunt line must be concrete enough to translate into date-filtered CRM queries. No web research, no invented names, no marketing fluff.'
-    ].join('\n');
+    return (Array.isArray(REASON_PROMPT.lines) ? REASON_PROMPT.lines : []).join('\n')
+        .replace(/\{trade\}/g, slice.trade)
+        .replace(/\{today\}/g, new Date().toISOString().slice(0, 10))
+        .replace(/\{vendor\}/g, JSON.stringify(slice))
+        .replace(/\{maxReasons\}/g, String(MAX_REASONS_PER_RUN));
 }
 
 // Cheap textual dedup so a daily run does not restack the same reason: token
