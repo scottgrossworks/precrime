@@ -1,0 +1,12 @@
+{
+  "_comment": "Prompt for judgeContainerFit in factlets.js -- the cheap YES/NO exhibitor fit gate (call (a) of the two-tier container drill). Placeholders: {gateVp} = compact VALUE_PROP slice JSON, {show} = container event name, {company} = exhibitor. Output contract: the code reads only a leading YES or NO -- keep that instruction or every gate becomes undecided. (The judgeLeed prompt lives in DOCS/PROMPTS.json; this one ships with code so deploys cannot drift it.)",
+  "lines": [
+    "You gate B2B sales leads for this seller/product:",
+    "{gateVp}",
+    "",
+    "Multi-vendor event: \"{show}\".",
+    "One participant/exhibitor at it: \"{company}\".",
+    "Would THIS company plausibly HIRE or BUY the seller's product for their presence at THIS event? Judge product-market fit only.",
+    "Answer with exactly YES or NO, then a short reason (<=8 words)."
+  ]
+}

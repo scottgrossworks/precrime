@@ -18,6 +18,8 @@
 const { prisma } = require('../db');
 const { VALUE_PROP, RUNTIME_CONFIG } = require('../runtime');
 const { llmComplete } = require('../factlets');
+const { fillPrompt } = require('../promptLoader');
+const APPLY_PROMPT = require('./APPLY_PROMPT.json');   // prompt text: edit the JSON, not this file
 
 const APPLY_LLM_MAX_TOKENS = 2000;
 
@@ -61,22 +63,19 @@ function clientCard(c) {
 
 function buildPrompt(factlet, cards, vp) {
     const sweep = cards.length === 0;
-    return [
-        `You are applying one sales-intelligence FACTLET to candidate CLIENTS for a "${vp.trade}" vendor.`,
-        `VALUE_PROP: geography=${vp.geography}; buyerRoles=${JSON.stringify(vp.buyerRoles)}; audienceSegments=${JSON.stringify(vp.audienceSegments)}; notBuyer=${JSON.stringify(vp.notBuyer)}.`,
-        ``,
-        `FACTLET (source: ${factlet.source}; date: ${new Date(factlet.createdAt).toISOString().slice(0, 10)}):`,
-        `"""${String(factlet.content).slice(0, 3000)}"""`,
-        ``,
-        sweep ? `CLIENTS: none matched (SWEEP).` : `CLIENTS (JSON): ${JSON.stringify(cards)}`,
-        ``,
-        `For EACH client decide if the factlet has sales-intelligence value for selling "${vp.trade}" to that client or clients like them. LEAN RELEVANT; a false negative costs more than a false positive. RELEVANT if it provides ANY of: an event/occasion matching audienceSegments (need not name the client); demand for the trade or adjacent (RFP, seeking vendors, implied is fine); a NAMED contact person with a role at THAT client; geography placing the client inside/outside the service area; trade/buyer-profile intel (incl. notBuyer negatives). NOT relevant only if clearly unrelated, a name-collision (different org sharing a name token -- check company/website/bookings), or a verbatim duplicate of the client's dossierTail.`,
-        `If the factlet describes a FUTURE dated event NOT already among a client's bookings, include a booking (omit "id" to CREATE; copy an existing booking's "id" to UPDATE it). Include email/phone/zip/date parts ONLY if they appear verbatim in the factlet text -- the server verifies and drops anything it cannot find there.`,
-        sweep ? `SWEEP rule: if the factlet clearly names a REAL prospective client (an in-trade org or person, never a competitor vendor) AND a future bookable event (a date and a place), return it in "newClient". Otherwise newClient=null.` : `newClient must be null (candidates were provided).`,
-        ``,
-        `Return STRICT JSON only, no prose, exactly this shape:`,
-        `{"decisions":[{"clientId":"<id from CLIENTS>","relevant":true|false,"category":"event|demand|contact|geography|background","dossierLine":"one concise sentence. Source: <factlet source>","email":null,"phone":null,"booking":null|{"id":null,"title":"","location":"","zip":"","startDateParts":{"year":2026,"month":1,"day":1,"hour":null,"minute":null,"ampm":null}}}],"newClient":null|{"name":"","company":"","dossierLine":"","email":null,"phone":null,"booking":{"title":"","location":"","zip":"","startDateParts":{"year":2026,"month":1,"day":1,"hour":null,"minute":null,"ampm":null}}}}`
-    ].join('\n');
+    return fillPrompt(APPLY_PROMPT.lines, {
+        trade:            vp.trade,
+        geography:        vp.geography,
+        buyerRoles:       JSON.stringify(vp.buyerRoles),
+        audienceSegments: JSON.stringify(vp.audienceSegments),
+        notBuyer:         JSON.stringify(vp.notBuyer),
+        factletSource:    factlet.source,
+        factletDate:      new Date(factlet.createdAt).toISOString().slice(0, 10),
+        factletContent:   String(factlet.content).slice(0, 3000),
+        clientsLine:      sweep ? APPLY_PROMPT.clientsNone
+                                : fillPrompt(APPLY_PROMPT.clientsSome, { cards: JSON.stringify(cards) }),
+        sweepLine:        sweep ? APPLY_PROMPT.sweepRule : APPLY_PROMPT.noSweepRule
+    });
 }
 
 // Build a pipelineSave patch from one decision. Strips null/empty fields so the

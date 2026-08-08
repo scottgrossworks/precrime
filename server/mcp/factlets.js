@@ -11,6 +11,8 @@
 const { prisma } = require('./db');
 const { RUNTIME_CONFIG, VALUE_PROP, SCORING, PROMPTS } = require('./runtime');
 const classification = require('./classification');
+const { fillPrompt } = require('./promptLoader');
+const GATE_PROMPT = require('./GATE_PROMPT.json');   // container-fit gate prompt: edit the JSON, not this file
 
 let GENERIC_EMAIL_PREFIXES = new Set();
 
@@ -413,15 +415,11 @@ async function judgeContainerFit(vp, company, show, cfg) {
         trade: vp.trade, pitch: vp.pitch, buyerRoles: vp.buyerRoles,
         audienceSegments: vp.audienceSegments, notBuyer: vp.notBuyer
     };
-    const prompt = [
-        'You gate B2B sales leads for this seller/product:',
-        JSON.stringify(gateVp),
-        '',
-        `Multi-vendor event: "${show || '(event)'}".`,
-        `One participant/exhibitor at it: "${company}".`,
-        "Would THIS company plausibly HIRE or BUY the seller's product for their presence at THIS event? Judge product-market fit only.",
-        'Answer with exactly YES or NO, then a short reason (<=8 words).'
-    ].join('\n');
+    const prompt = fillPrompt(GATE_PROMPT.lines, {
+        gateVp:  JSON.stringify(gateVp),
+        show:    show || '(event)',
+        company: company
+    });
     const out = await _llmComplete(prompt, cfg, 24, 'gate');
     if (out === null) return { fit: false, reason: 'fit_unavailable', decided: false };
     const word = out.trim().toLowerCase();

@@ -18,6 +18,8 @@
 const { prisma } = require('../db');
 const { RUNTIME_CONFIG, VALUE_PROP } = require('../runtime');
 const { llmComplete } = require('../factlets');
+const { fillPrompt } = require('../promptLoader');
+const ENRICH_PROMPT = require('./ENRICH_PROMPT.json');   // prompt text: edit the JSON, not this file
 
 function safeParse(s) { try { return JSON.parse(s); } catch (_) { return null; } }
 function extractJson(raw) {
@@ -58,22 +60,18 @@ async function run(task, deps) {
     let needsJudge = false;
 
     if (summary) {
-        const today = new Date().toISOString().slice(0, 10);
         const isContainerVendor = typeof client.source === 'string' && client.source.startsWith('container:');
-        const prompt = [
-            `Fold ONE source summary into the sales dossier of a prospect for a "${(VALUE_PROP && VALUE_PROP.trade) || 'events'}" vendor.`,
-            `CLIENT: ${JSON.stringify({ name: client.name, company: client.company, website: client.website, segment: client.segment })}`,
-            `DOSSIER TAIL (do not repeat facts already here): """${String(client.dossier || '').slice(-1500)}"""`,
-            `SOURCE (url: ${url || 'unknown'}): """${summary.slice(0, 2000)}"""`,
-            '',
-            'Return STRICT JSON only, exactly: {"lines":["..."],"email":null,"phone":null}',
-            `Rules: lines are NEW dossier facts about THIS client only, taken from the SOURCE -- invent nothing, skip anything already in the dossier tail. Format each line as "[PERMANENT] <stable fact>" or "[${today}] time-sensitive signal from ${url || 'source'}: <buying occasion / event date / budget / trend>".`,
-            'email/phone: ONLY if a direct, personal (non-generic, not info@/sales@) one appears VERBATIM in the SOURCE text; otherwise null.',
-            isContainerVendor
-                ? 'This client is a container-event vendor: if the SOURCE shows fit evidence for the vendor above (prior photo booth / caricature / live-entertainment use, crowd type that buys it), add a line "[PERMANENT] synergy: <specific evidence>". No evidence, no synergy line.'
-                : '',
-            'No new facts -> {"lines":[],"email":null,"phone":null}. JSON only, no prose.'
-        ].filter(Boolean).join('\n');
+        // Trailing .filter(Boolean) mirrors the original builder: an empty
+        // {containerLine} leaves no blank line in the prompt.
+        const prompt = fillPrompt(ENRICH_PROMPT.lines, {
+            trade:         (VALUE_PROP && VALUE_PROP.trade) || 'events',
+            client:        JSON.stringify({ name: client.name, company: client.company, website: client.website, segment: client.segment }),
+            dossierTail:   String(client.dossier || '').slice(-1500),
+            url:           url || 'unknown',
+            summary:       summary.slice(0, 2000),
+            today:         new Date().toISOString().slice(0, 10),
+            containerLine: isContainerVendor ? ENRICH_PROMPT.containerVendorRule : ''
+        }).split('\n').filter(Boolean).join('\n');
 
         const raw = await llmComplete(prompt, RUNTIME_CONFIG, 700, 'apply');
         const parsed = extractJson(raw);

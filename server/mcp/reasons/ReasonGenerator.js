@@ -35,6 +35,7 @@ const MAX_REASONS_PER_RUN = 6;
 // Prompt text lives in REASON_PROMPT.json (same folder) so it can be tuned
 // without touching code -- same pattern as DOCS/PROMPTS.json for the judge.
 const REASON_PROMPT = require('./REASON_PROMPT.json');
+const { fillPrompt } = require('../promptLoader');
 
 function buildPrompt() {
     const vp = VALUE_PROP || {};
@@ -43,11 +44,12 @@ function buildPrompt() {
         audienceSegments: vp.audienceSegments || [],
         geography: vp.geography || ''
     };
-    return (Array.isArray(REASON_PROMPT.lines) ? REASON_PROMPT.lines : []).join('\n')
-        .replace(/\{trade\}/g, slice.trade)
-        .replace(/\{today\}/g, new Date().toISOString().slice(0, 10))
-        .replace(/\{vendor\}/g, JSON.stringify(slice))
-        .replace(/\{maxReasons\}/g, String(MAX_REASONS_PER_RUN));
+    return fillPrompt(REASON_PROMPT.lines, {
+        trade:      slice.trade,
+        today:      new Date().toISOString().slice(0, 10),
+        vendor:     JSON.stringify(slice),
+        maxReasons: MAX_REASONS_PER_RUN
+    });
 }
 
 // Cheap textual dedup so a daily run does not restack the same reason: token

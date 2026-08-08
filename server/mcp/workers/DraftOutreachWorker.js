@@ -21,6 +21,8 @@
 const { prisma } = require('../db');
 const { RUNTIME_CONFIG, VALUE_PROP } = require('../runtime');
 const { llmComplete, isGenericEmail } = require('../factlets');
+const { fillPrompt } = require('../promptLoader');
+const DRAFT_PROMPT = require('./DRAFT_PROMPT.json');   // prompt text: edit the JSON, not this file
 
 function stripDashes(s) {
     // Em dash, en dash, and " -- " all become commas (mail path decodes UTF-8
@@ -57,24 +59,15 @@ async function run(task, deps) {
     if (client.draftStatus === 'sent' || client.sentAt) return { status: 'done', output: out('skip: already contacted', clientId), summary: `draft "${label}": skip, already contacted` };
 
     const isoDate = booking.startDate ? new Date(booking.startDate).toISOString().slice(0, 10) : '';
-    const prompt = [
-        `You draft outreach for a "${(VALUE_PROP && VALUE_PROP.trade) || 'events'}" seller. Your draft IS the SAMPLE EMAIL below rewritten for THIS lead. You are not an author; you are doing a careful find-and-replace on a proven letter.`,
-        'Rules, in order:',
-        '1. Keep the skeleton: same paragraphs, order, approximate length, tone. First line stays a salutation + a question about THEIR event whose answer is obviously yes. Last line stays an imperative close retargeted to THEIR event/brand.',
-        '2. Swap ONLY the lead facts: recipient first name, their company/brand, event name, date in plain words, venue/city, all taken from LEAD DATA. A fact you do not have: drop that clause, never guess.',
-        '3. Keep every seller fact exactly as written: rates line, no-deposit line, video link, credentials. The sample tailors ONE product detail to its own event; retarget that one detail to THIS event or drop it.',
-        '4. Salutation: first name only.',
-        '5. NO em dash, en dash, or double hyphen anywhere; use commas.',
-        '6. Do NOT include the signature block; it is appended separately. End at the imperative close.',
-        'FIRST decide the gate: is this a plausible buyer for the product at this event (product-market fit, contact looks like a decision-maker)? If NOT, reply with exactly: SKIP: <short reason>',
-        'Otherwise reply with ONLY the rewritten email body text, nothing else.',
-        `SAMPLE EMAIL: """${tpl}"""`,
-        `LEAD DATA: ${JSON.stringify({
+    const prompt = fillPrompt(DRAFT_PROMPT.lines, {
+        trade:       (VALUE_PROP && VALUE_PROP.trade) || 'events',
+        sampleEmail: tpl,
+        leadData:    JSON.stringify({
             contactName: client.name, company: client.company, email: client.email,
             event: booking.title, date: isoDate, location: booking.location,
             dossierTail: String(client.dossier || '').slice(-1200)
-        })}`
-    ].join('\n');
+        })
+    });
 
     const raw = await llmComplete(prompt, RUNTIME_CONFIG, 900, 'draft');
     if (raw === null) {

@@ -1,0 +1,23 @@
+{
+  "_comment": "Prompt for ApplyFactletWorker (in-process APPLY_FACTLET, one call per factlet batch). Placeholders: {trade} {geography} {buyerRoles} {audienceSegments} {notBuyer} = VALUE_PROP slice; {factletSource} {factletDate} {factletContent} = the factlet; {clientsLine} = clientsSome/clientsNone below; {sweepLine} = sweepRule/noSweepRule below. Output contract: the STRICT JSON shape on the last line is parsed by code -- change wording freely, never the shape.",
+  "lines": [
+    "You are applying one sales-intelligence FACTLET to candidate CLIENTS for a \"{trade}\" vendor.",
+    "VALUE_PROP: geography={geography}; buyerRoles={buyerRoles}; audienceSegments={audienceSegments}; notBuyer={notBuyer}.",
+    "",
+    "FACTLET (source: {factletSource}; date: {factletDate}):",
+    "\"\"\"{factletContent}\"\"\"",
+    "",
+    "{clientsLine}",
+    "",
+    "For EACH client decide if the factlet has sales-intelligence value for selling \"{trade}\" to that client or clients like them. LEAN RELEVANT; a false negative costs more than a false positive. RELEVANT if it provides ANY of: an event/occasion matching audienceSegments (need not name the client); demand for the trade or adjacent (RFP, seeking vendors, implied is fine); a NAMED contact person with a role at THAT client; geography placing the client inside/outside the service area; trade/buyer-profile intel (incl. notBuyer negatives). NOT relevant only if clearly unrelated, a name-collision (different org sharing a name token -- check company/website/bookings), or a verbatim duplicate of the client's dossierTail.",
+    "If the factlet describes a FUTURE dated event NOT already among a client's bookings, include a booking (omit \"id\" to CREATE; copy an existing booking's \"id\" to UPDATE it). Include email/phone/zip/date parts ONLY if they appear verbatim in the factlet text -- the server verifies and drops anything it cannot find there.",
+    "{sweepLine}",
+    "",
+    "Return STRICT JSON only, no prose, exactly this shape:",
+    "{\"decisions\":[{\"clientId\":\"<id from CLIENTS>\",\"relevant\":true|false,\"category\":\"event|demand|contact|geography|background\",\"dossierLine\":\"one concise sentence. Source: <factlet source>\",\"email\":null,\"phone\":null,\"booking\":null|{\"id\":null,\"title\":\"\",\"location\":\"\",\"zip\":\"\",\"startDateParts\":{\"year\":2026,\"month\":1,\"day\":1,\"hour\":null,\"minute\":null,\"ampm\":null}}}],\"newClient\":null|{\"name\":\"\",\"company\":\"\",\"dossierLine\":\"\",\"email\":null,\"phone\":null,\"booking\":{\"title\":\"\",\"location\":\"\",\"zip\":\"\",\"startDateParts\":{\"year\":2026,\"month\":1,\"day\":1,\"hour\":null,\"minute\":null,\"ampm\":null}}}}"
+  ],
+  "clientsNone": "CLIENTS: none matched (SWEEP).",
+  "clientsSome": "CLIENTS (JSON): {cards}",
+  "sweepRule": "SWEEP rule: if the factlet clearly names a REAL prospective client (an in-trade org or person, never a competitor vendor) AND a future bookable event (a date and a place), return it in \"newClient\". Otherwise newClient=null.",
+  "noSweepRule": "newClient must be null (candidates were provided)."
+}

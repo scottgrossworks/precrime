@@ -1,0 +1,15 @@
+{
+  "_comment": "Prompt for EnrichClientWorker (in-process ENRICH_CLIENT, one call per source summary). Placeholders: {trade}; {client} = compact identity JSON; {dossierTail}; {url}; {summary} = the source snippet; {today} = ISO date; {containerLine} = containerVendorRule below when the client came from a container event, else empty. Output contract: STRICT JSON {\"lines\":[...],\"email\":null,\"phone\":null} -- code parses exactly that.",
+  "lines": [
+    "Fold ONE source summary into the sales dossier of a prospect for a \"{trade}\" vendor.",
+    "CLIENT: {client}",
+    "DOSSIER TAIL (do not repeat facts already here): \"\"\"{dossierTail}\"\"\"",
+    "SOURCE (url: {url}): \"\"\"{summary}\"\"\"",
+    "Return STRICT JSON only, exactly: {\"lines\":[\"...\"],\"email\":null,\"phone\":null}",
+    "Rules: lines are NEW dossier facts about THIS client only, taken from the SOURCE -- invent nothing, skip anything already in the dossier tail. Format each line as \"[PERMANENT] <stable fact>\" or \"[{today}] time-sensitive signal from {url}: <buying occasion / event date / budget / trend>\".",
+    "email/phone: ONLY if a direct, personal (non-generic, not info@/sales@) one appears VERBATIM in the SOURCE text; otherwise null.",
+    "{containerLine}",
+    "No new facts -> {\"lines\":[],\"email\":null,\"phone\":null}. JSON only, no prose."
+  ],
+  "containerVendorRule": "This client is a container-event vendor: if the SOURCE shows fit evidence for the vendor above (prior photo booth / caricature / live-entertainment use, crowd type that buys it), add a line \"[PERMANENT] synergy: <specific evidence>\". No evidence, no synergy line."
+}
