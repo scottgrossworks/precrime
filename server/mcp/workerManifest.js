@@ -37,6 +37,12 @@ const WORKER_MANIFEST = {
     DRILL_DOWN:          { skill: 'drill-down.md',          extensions: ['tavily'], actions: [...SAVE_COMPLETE, 'browse'], tools: ['pipeline', 'find'] },
     DRILL_CONTAINER:     { skill: 'drill-container.md',     extensions: ['tavily'], actions: SAVE_COMPLETE,                tools: ['pipeline', 'find'] },
     DISCOVER_SOURCES:    { skill: 'discover-sources.md',    extensions: ['tavily'], actions: ['get_config', 'complete_task', 'add_sources'], tools: ['pipeline', 'trades'] },
+    // MINE_REASON (2026-08-08): the curiosity worker -- given one recontact
+    // REASON, hunt backwards through the existing client/booking DB until the
+    // affected clients are found. Deliberately a SPAWNED goose session (the
+    // multi-turn query loop IS the work) and deliberately ships NO tavily
+    // extension: it structurally cannot spend a web-search credit.
+    MINE_REASON:         { skill: 'mine-reason.md',         extensions: [],         actions: SAVE_COMPLETE,                tools: ['pipeline', 'find'] },
     // skill:null = IN-PROCESS (never spawns, never connects with ?scope=); the
     // entry is kept so the scope table stays total over historical task types.
     // FIND/ENRICH/DRAFT converted 2026-08-06 (workers/FindClientSourcesWorker.js,

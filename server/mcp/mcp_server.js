@@ -62,6 +62,11 @@ if (!fs.existsSync(resolvedDbPath)) {
 // if absent so the server still boots during the transition.
 const { PRECRIME_CONFIG, RUNTIME_CONFIG, VALUE_PROP, SCORING, PROMPTS, CHROME_SCRAPE_ACTIVE, BLACKLIST_PATH } = require('./runtime');
 
+// Mine-first (2026-08-08): Stage 1 of plan_tasks lives in its own class --
+// recontact-reason generation + MINE_REASON scheduling + outbound-lane gating.
+const { planMineReasons } = require('./reasons/ReasonPlanner');
+const { REASON_SOURCE_PREFIX } = require('./reasons/ReasonGenerator');
+
 // DATABASE_URL is now guaranteed to be a `file:` URL pointing at an existing DB
 // (the safety block above falls back or exits). dbPath is reused in startup logs.
 const dbPath = process.env.DATABASE_URL.replace(/^file:/, '');
@@ -1037,6 +1042,7 @@ const { pipelineShareBooking } = require('./share').createShareHandlers({
 // Per-Task-type planner limits. Hardcoded defaults preserved as fallback;
 // precrime_config.json taskLimits overrides on a per-key basis (Subproject 10).
 const _TASK_TYPE_LIMITS_DEFAULT = {
+    MINE_REASON:      2,   // concurrent curiosity hunts over the OWN-BOOK lane (mine-first, 2026-08-08)
     DISCOVER_SOURCES: 1,
     SCRAPE_SOURCE:    5,
     APPLY_FACTLET:    5,
@@ -1060,13 +1066,19 @@ const TASK_TYPE_LIMITS = Object.assign({}, _TASK_TYPE_LIMITS_DEFAULT, _CFG_TASK_
 // Budget-exhausted inputs (Sources, Clients, Factlets, Bookings) stay in
 // SQLite for the next Session; nothing is deleted.
 const _TASK_SESSION_BUDGETS_DEFAULT = {
+    MINE_REASON:      10,  // own-book curiosity hunts: DB queries only, zero Tavily
     DISCOVER_SOURCES: 1,
     SCRAPE_SOURCE:    25,
     APPLY_FACTLET:    50,
-    DRILL_DOWN:       30,   // total near-hot drill-downs per session
-    DRILL_CONTAINER:  5,   // total container drills per session. PRIVATE > public (2026-07-19): containers are the fallback, not the diet
-    LAST_30_DAYS:     12,   // total last30days seeds per session (cheap search; let it run)
-    FIND_CLIENT_SOURCES: 25,
+    // MOVE 2 re-weights (2026-08-08): Tavily burn audit showed DRILL_DOWN was the
+    // whale (open-ended searches x 30/session x every restart, ~1,400 searches in
+    // one debugging day). Mine-first: drills are RESERVED for closing near-hot
+    // leads missing contact info; containers stay starved; FIND stops blanket-
+    // enriching the client base (see Stage 5 missing-email gate).
+    DRILL_DOWN:       8,   // was 30 -- total near-hot drill-downs per session
+    DRILL_CONTAINER:  2,   // was 5 -- containers de-emphasized: they sell YOU a booth
+    LAST_30_DAYS:     12,   // total last30days seeds per session (no Tavily involved)
+    FIND_CLIENT_SOURCES: 10, // was 25 -- 2 Tavily searches per run; missing-email clients only
     ENRICH_CLIENT:    50,
     JUDGE_AFFECTED:   150,  // proactive sweep can queue every eligible booking in one session
     SHOW_HOT_LEEDZ:   1,
@@ -1131,6 +1143,7 @@ const TASK_CLAIM_PRIORITY = [
     'SHARE_BOOKING',
     'DRAFT_OUTREACH',
     'APPLY_FACTLET',
+    'MINE_REASON',
     'FIND_CLIENT_SOURCES',
     'ENRICH_CLIENT',
     'SCRAPE_SOURCE',
@@ -1922,6 +1935,21 @@ async function pipelinePlanTasksInner(id, args) {
             logInfo(`Planner factlet prune skipped: ${e.message}`);
         }
 
+        // ---------- Stage 1: MINE_REASON -- mine the existing client base FIRST ----------
+        // Mine-first inversion (2026-08-08): generate recontact REASONS (seasonal /
+        // trajectory / referral), hunt backwards to affected clients, and suppress
+        // the outbound lanes while the mining lane is active. Discovery is the
+        // fallback when the book is dry, not the default motion. Extracted to
+        // reasons/ReasonPlanner.js (planner stages leave the monolith as touched).
+        try {
+            await planMineReasons({
+                prisma, suppressed, countReady, createBudget, createTask, logInfo,
+                staleCutoff: new Date(Date.now() - getFactletStaleDays() * 86400000)
+            });
+        } catch (e) {
+            logInfo(`ReasonPlanner skipped (non-fatal): ${e.message}`);
+        }
+
         // ---------- Stage 2: JUDGE_AFFECTED for done worker output ----------
         // If any completed worker Task carries affected ids but has not been
         // judged yet, judge it first. While judge work is created OR already
@@ -2245,8 +2273,11 @@ async function pipelinePlanTasksInner(id, args) {
                 // pairs that already have a task, so partially-applied factlets resume
                 // where they left off across plan passes rather than being skipped.
                 const staleCutoff = new Date(Date.now() - getFactletStaleDays() * 86400000);
+                // Reason factlets (source "reason:*") are EXCLUDED: they are hunted by
+                // MINE_REASON curiosity workers (Stage 1), never token-grepped here --
+                // a graduation reason and a 2024 Sweet-16 booking share zero tokens.
                 const allLiveFactletIds = (await prisma.factlet.findMany({
-                    where: { createdAt: { gte: staleCutoff } },
+                    where: { createdAt: { gte: staleCutoff }, NOT: { source: { startsWith: REASON_SOURCE_PREFIX } } },
                     orderBy: { createdAt: 'desc' },
                     select: { id: true }
                 })).map(f => f.id);
@@ -2589,7 +2620,7 @@ async function pipelinePlanTasksInner(id, args) {
                     // The 14-day window keeps this population small by design; over-fetch and
                     // heat-sort in JS (Prisma can't ORDER BY a bookings aggregate).
                     take: 500,
-                    select: { id: true, targetUrls: true,
+                    select: { id: true, targetUrls: true, email: true,
                         bookings: { where: liveBookingWhere, select: { status: true, updatedAt: true,
                             title: true, description: true, location: true, source: true } } }
                 });
@@ -2643,6 +2674,11 @@ async function pipelinePlanTasksInner(id, args) {
                         // email hunt is DRILL_DOWN's mission (Stage 4.5), not FIND's — the
                         // old focus:'contact_email' variant needed full-page extracts that
                         // FIND no longer performs (snippet-first credit guard).
+                        // MOVE 2 (2026-08-08): FIND is the only remaining blanket Tavily
+                        // spender (2 searches/run). A live client who ALREADY has an email
+                        // doesn't need it -- the judge/drill path owns them from here.
+                        // Reserve FIND for live clients still missing contact info.
+                        if (c.email) continue;
                         if ((await createBudget('FIND_CLIENT_SOURCES')).eff <= 0) continue;
                         const row = await createTask('FIND_CLIENT_SOURCES', { targetType: 'Client', targetId: c.id, input: {} });
                         if (row) clientWorkPlanned++;
