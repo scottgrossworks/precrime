@@ -35,10 +35,13 @@ what would their booking history look like?
 Design queries from these primitives and iterate. Always `summary:true` (the
 default), small limits first (10-25); widen or narrow based on what comes back.
 
-- `find bookings` filters: `monthIn:[9,10]` (calendar months, ANY year),
-  `anniversaryWithinDays:N` (near today's month/day, cyclic), `startDateGte`,
-  `search` (matches title/description/notes/location), `trade`, `status`.
+- `find bookings` filters: `monthIn:[9,10]` (ALWAYS an array, even one month:
+  `monthIn:[12]` never `monthIn:12`), `anniversaryWithinDays:N` (near today's
+  month/day, cyclic), `startDateGte`, `search` (matches title/description/
+  notes/location), `trade`, `status`.
 - `find clients` filters: `search`, `segment`, `company`, `name`.
+- ONE tool call per message. NEVER glue two JSON payloads into one call --
+  a doubled payload fails validation and orphans the whole task.
 
 Recipes by reason kind:
 - **seasonal** ("Halloween approaching"): who has EVER thrown this kind of
@@ -62,7 +65,7 @@ Rules of the hunt:
 Rank by fit: repeated pattern (2+ matching bookings) > single strong match >
 plausible. For finalists load detail: `find({ action:"clients", filters:{ id: clientId }, summary:false, limit:1 })`.
 
-## Step 4 -- Save the case per client
+## Step 4 -- Save the case per client (fold completion into the LAST save)
 One save per affected client. ALWAYS pass `factletId` (server verifies
 structured values against the reason text and drops what it cannot verify).
 - `dossier`: full updated text, appending one entry:
@@ -70,6 +73,8 @@ structured values against the reason text and drops what it cannot verify).
 - Predicted booking ONLY when the reason states a concrete date/window AND their
   history supports it. OMIT booking `id` (server creates). Description must be
   honest: `PREDICTED from <their real history>` -- never fake a confirmed event.
+
+Every save EXCEPT the last:
 ```
 precrime__pipeline({ action:"save", id: clientId, factletId, judge:false,
   patch:{
@@ -79,17 +84,29 @@ precrime__pipeline({ action:"save", id: clientId, factletId, judge:false,
       startDateParts:{ year:2026, month:10, day:31 } }]   // only when justified
   }})
 ```
+The LAST save carries `completeTask` so the task can never be left open by a
+forgotten final call (the server folds the completion into the save -- one turn):
+```
+precrime__pipeline({ action:"save", id: lastClientId, factletId, judge:false,
+  patch:{ dossier:"<full updated dossier>" },
+  completeTask:{ taskId, status:"done",
+    output:{ clientIds:[<all saved clientIds>], bookingIds:[], factletIds:[factletId], sourceIds:[],
+      summary:"Reason '<short>': N affected client(s), M predicted booking(s).",
+      needsJudge:true } }})
+```
 The re-hire case in the dossier is what DRAFT_OUTREACH later turns into the
 email ("we drew at your Halloween party in '24 and '25...") -- write it with
 that use in mind. Facts from THEIR history only; invariant: no invented facts.
+After the folded save succeeds you are DONE -- STOP.
 
-## Step 5 -- Complete
+## Step 5 -- Completion for the NO-SAVE paths only
+Dry hole (an honest hunt found nobody) or failure -- there is no save to fold
+into, so call complete_task directly. NEVER write this as prose or narrate
+"Task completed" in text: only the tool call below ends the task.
 ```
 precrime__pipeline({ action:"complete_task", taskId, status:"done",
-  output:{ clientIds:[<all saved clientIds>], bookingIds:[], factletIds:[factletId], sourceIds:[],
-    summary:"Reason '<short>': N affected client(s), M predicted booking(s).",
-    needsJudge:true }})
+  output:{ clientIds:[], bookingIds:[], factletIds:[factletId], sourceIds:[],
+    summary:"no affected clients after <N> query rounds", needsJudge:false }})
 ```
-Dry hole: same call, empty ids, `summary:"no affected clients after <N> query rounds"`,
-`needsJudge:false`. Failure: `status:"failed"`, `error:"<reason>"`.
+Failure: same call with `status:"failed"`, `error:"<reason>"`.
 Never leave the task open. Then STOP -- do not claim another task.

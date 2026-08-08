@@ -24,7 +24,12 @@
 
 const { maybeGenerateReasons, REASON_SOURCE_PREFIX } = require('./ReasonGenerator');
 
-const OUTBOUND_LANES = ['SCRAPE_SOURCE', 'DISCOVER_SOURCES', 'DRILL_CONTAINER', 'LAST_30_DAYS'];
+// DRILL_DOWN included since 2026-08-08 test run: the near-hot queue can be
+// full of pre-mining container leftovers (cannabis-expo exhibitors at LACC),
+// so "drills stay live during mining" in practice meant "keep working the
+// trade-show backlog." Mining is STRICTLY first; drills resume the moment the
+// mining lane drains -- a real hot lead waits minutes, not days.
+const OUTBOUND_LANES = ['DRILL_DOWN', 'SCRAPE_SOURCE', 'DISCOVER_SOURCES', 'DRILL_CONTAINER', 'LAST_30_DAYS'];
 
 // ctx: { prisma, suppressed, countReady, createBudget, createTask, staleCutoff, logInfo }
 // All helpers are the planner's own closures -- budgets, session accounting,
@@ -62,7 +67,7 @@ async function planMineReasons(ctx) {
     if (planned > 0 || open > 0) {
         for (const t of OUTBOUND_LANES) suppressed.add(t);
         const working = planned + open;
-        logInfo(`CLIENT MINING: ${working} worker(s) ${planned ? `queued (${planned} new)` : 'still running'} to search your existing client base for re-contact matches. Web scraping and discovery are PAUSED until mining finishes -- your own clients get worked first, at zero search-credit cost.`);
+        logInfo(`CLIENT MINING: ${working} worker(s) ${planned ? `queued (${planned} new)` : 'still running'} to search your existing client base for re-contact matches. Drills, web scraping, and discovery are ALL PAUSED until mining finishes -- your own clients get worked first, at zero search-credit cost.`);
     }
     return { planned, open };
 }

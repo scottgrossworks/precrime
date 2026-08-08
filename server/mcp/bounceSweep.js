@@ -74,6 +74,59 @@ async function _gmail(path, token) {
     return res.json();
 }
 
+// Pull every recipient address out of a To/Cc header line ("Name <a@b.c>, x@y").
+function extractRecipients(headerValue) {
+    const out = [];
+    const re = /[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}/g;
+    let m;
+    while ((m = re.exec(String(headerValue || ''))) !== null) out.push(m[0].toLowerCase());
+    return out;
+}
+
+// OUTREACH RECONCILE (2026-08-08, the rich@aitkenlaw incident): the Gmail
+// Drafts/Sent folders are the GROUND TRUTH of who has been contacted. The
+// mark_sent stamp normally fires from mcp_gmail the moment a draft is created,
+// but that call is fire-and-forget HTTP -- if the pipeline server is down or
+// restarting (every debugging day), the draft is created and the stamp is LOST
+// FOREVER, so the client stays "never contacted" and gets re-promoted hot every
+// session. This sweep recovers the truth from Gmail itself: every draft
+// recipient + every sent-mail recipient (60-day window) comes back for the
+// caller to back-stamp. Self-healing; no LLM, no manual DB edits.
+// Returns { addresses: string[], scannedDrafts, scannedSent, reason?: string }.
+async function sweepOutreachRecipients() {
+    const token = await _getToken();
+    if (!token) return { addresses: [], scannedDrafts: 0, scannedSent: 0, reason: 'no_gmail_token' };
+    const found = new Set();
+    let scannedDrafts = 0, scannedSent = 0;
+    try {
+        const drafts = await _gmail('/drafts?maxResults=100', token);
+        for (const d of (drafts.drafts || [])) {
+            try {
+                const full = await _gmail(`/drafts/${d.id}?format=metadata`, token);
+                scannedDrafts++;
+                const headers = (full.message && full.message.payload && full.message.payload.headers) || [];
+                for (const h of headers) {
+                    if (/^(to|cc)$/i.test(h.name)) for (const a of extractRecipients(h.value)) found.add(a);
+                }
+            } catch (_) { /* skip one unreadable draft */ }
+        }
+        const sent = await _gmail(`/messages?q=${encodeURIComponent('in:sent newer_than:60d')}&maxResults=100`, token);
+        for (const s of (sent.messages || [])) {
+            try {
+                const msg = await _gmail(`/messages/${s.id}?format=metadata&metadataHeaders=To&metadataHeaders=Cc`, token);
+                scannedSent++;
+                for (const h of ((msg.payload && msg.payload.headers) || [])) {
+                    if (/^(to|cc)$/i.test(h.name)) for (const a of extractRecipients(h.value)) found.add(a);
+                }
+            } catch (_) { /* skip one unreadable message */ }
+        }
+    } catch (e) {
+        return { addresses: Array.from(found), scannedDrafts, scannedSent,
+                 reason: e.status === 403 ? 'gmail_readonly_scope_missing' : `gmail_error:${e.message}` };
+    }
+    return { addresses: Array.from(found), scannedDrafts, scannedSent };
+}
+
 // Return { addresses: string[], scanned: number, reason?: string }. Never throws;
 // a missing token / 403 (scope not yet granted) / network error yields an empty
 // result with a reason, so the caller (an in-process task) always completes cleanly.
@@ -99,4 +152,4 @@ async function sweepBounces() {
     return { addresses: Array.from(found), scanned };
 }
 
-module.exports = { sweepBounces, extractHardBounces, collectText };
+module.exports = { sweepBounces, sweepOutreachRecipients, extractHardBounces, extractRecipients, collectText };

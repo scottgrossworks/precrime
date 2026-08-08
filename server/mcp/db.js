@@ -78,13 +78,25 @@ const IN_PROCESS_TYPES = ['JUDGE_AFFECTED', 'SHOW_HOT_LEEDZ', 'LAST_30_DAYS', 'B
     'FIND_CLIENT_SOURCES', 'ENRICH_CLIENT', 'DRAFT_OUTREACH'];
 
 // Poll for ready Tasks that have a worker skill. Returns rows with an extra
-// `skillFile` field + a human `label`. VERTICAL-FIRST (2026-07-20): ready
-// DRILL_DOWN tasks are fetched FIRST (oldest first), then everything else fills
-// the remainder oldest-first — a queued drill (near-hot booking or demand
-// Signal) always jumps every queued scrape/enrich, matching the planner's
-// drill-focus. Bird-dogging a hot leed outranks growing the tree.
+// `skillFile` field + a human `label`.
+// MINE-FIRST (2026-08-08): while ANY MINE_REASON task is open (ready or
+// claimed), the conductor dispatches ONLY mining work -- leftover drills and
+// scrapes from before a restart must not beat the own-book hunt to the worker
+// slots (observed: 3 stale container-era cannabis drills spawned ahead of the
+// first-ever mining workers). Drills and the rest resume the moment the
+// mining lane drains.
+// VERTICAL-FIRST (2026-07-20) still holds below mining: ready DRILL_DOWN
+// tasks are fetched before everything else -- a queued drill (near-hot
+// booking or demand Signal) jumps every queued scrape/enrich.
 async function conductorGetReadyTasks(limit) {
     const cap = limit || 10;
+    const mines = await coreTasks.getReadyTasksByTypes(['MINE_REASON'], cap);
+    const miningActive = mines.length > 0
+        || (await prisma.task.count({ where: { type: 'MINE_REASON', status: 'claimed' } })) > 0;
+    if (miningActive) {
+        await coreTasks.attachTaskLabels(mines);
+        return mines.map(r => ({ ...r, skillFile: WORKER_SKILL_MAP[r.type], browserChannel: null }));
+    }
     const drills = await coreTasks.getReadyTasksByTypes(['DRILL_DOWN'], cap);
     const rest = cap - drills.length;
     const others = rest > 0

@@ -1021,7 +1021,7 @@ const { pipelineSave } = require('./saveClient').createSaveHandler({ isHttpUrl }
 // handlers. Imported by same names so save, the executor, and the share.js
 // factory wiring below resolve unchanged. See judge.js.
 const { judgeAffected, pipelineDismissBooking, pipelineJudgeAffected, actedOnData, buildActedVetoSets, actedVetoHit } = require('./judge');
-const { sweepBounces } = require('./bounceSweep');
+const { sweepBounces, sweepOutreachRecipients } = require('./bounceSweep');
 
 // ============================================================================
 // SHARE BOOKING -- the only sanctioned marketplace posting path (Phase 5)
@@ -3151,10 +3151,36 @@ async function runBounceSweepOnce() {
             flagged += (JSON.parse(txt || '{}').marked || 0);
         } catch (_) {}
     }
+
+    // OUTREACH RECONCILE (2026-08-08, the rich@aitkenlaw incident): Gmail
+    // Drafts + Sent are the ground truth of who has been contacted. mark_sent
+    // stamps can be lost forever when the pipeline server is down at draft time
+    // (fire-and-forget HTTP from mcp_gmail) -- the client then stays "never
+    // contacted" and is re-promoted hot every session. Recover the truth here:
+    // any tracked client whose address appears in Drafts/Sent but is not yet
+    // stamped gets mark_sent now (idempotent; already-sent clients untouched).
+    let reconciled = 0;
+    const outreach = await sweepOutreachRecipients();
+    if (!outreach.reason && outreach.addresses.length) {
+        const contactedSet = new Set(outreach.addresses);
+        const candidates = await prisma.client.findMany({
+            where: { email: { not: null }, sentAt: null, OR: [{ draftStatus: null }, { draftStatus: { not: 'sent' } }] },
+            select: { id: true, email: true, name: true, company: true }
+        });
+        for (const c of candidates) {
+            if (!contactedSet.has(String(c.email).trim().toLowerCase())) continue;
+            await pipelineMarkSent('inproc-bounce', { clientId: c.id });
+            reconciled++;
+            logInfo(`OUTREACH RECONCILE: a Gmail draft/sent message to ${c.email} (${c.company || c.name}) was never recorded -- marking them CONTACTED now so they stop resurfacing as hot.`);
+        }
+    }
+
     const summary = reason
         ? `bounce sweep skipped: ${reason}`
-        : `bounce sweep: scanned ${scanned} daemon msg(s), ${addresses.length} bounced address(es), dead-flagged ${flagged} client(s)`;
-    return { addresses, scanned, flagged, reason: reason || null, summary };
+        : `bounce sweep: scanned ${scanned} daemon msg(s), ${addresses.length} bounced address(es), dead-flagged ${flagged} client(s)`
+          + (outreach.reason ? `; outreach reconcile skipped: ${outreach.reason}`
+                             : `; outreach reconcile: ${outreach.scannedDrafts} draft(s) + ${outreach.scannedSent} sent checked, ${reconciled} un-stamped contacted client(s) fixed`);
+    return { addresses, scanned, flagged, reconciled, reason: reason || null, summary };
 }
 
 // bounce_sweep -- ON-DEMAND, synchronous action (standing rule 2026-07-13, mirrors
