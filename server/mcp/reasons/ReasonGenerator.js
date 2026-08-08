@@ -93,7 +93,9 @@ async function maybeGenerateReasons(staleCutoff, logInfo) {
         const raw = await llmComplete(buildPrompt(), RUNTIME_CONFIG, 900, 'reason');
         const proposed = parseReasons(raw);
         if (!proposed.length) {
-            if (raw !== null) log('ReasonGenerator: LLM returned no parseable reasons.');
+            log(raw === null
+                ? 'CLIENT MINING: could not generate re-contact reasons (the LLM did not answer). Skipping mining this cycle -- normal discovery will run instead. Will retry next cycle.'
+                : 'CLIENT MINING: could not generate re-contact reasons (the LLM answer was not usable). Skipping mining this cycle -- normal discovery will run instead. Will retry next cycle.');
             return 0;
         }
         const live = await prisma.factlet.findMany({
@@ -107,11 +109,16 @@ async function maybeGenerateReasons(staleCutoff, logInfo) {
             await prisma.factlet.create({ data: { content, source: `${REASON_SOURCE_PREFIX}${r.kind}` } });
             live.push({ content });
             created++;
+            log(`CLIENT MINING: new reason to re-contact past clients (${r.kind}): ${String(r.reason).slice(0, 160)}`);
         }
-        if (created) log(`ReasonGenerator: ${created} new recontact reason(s) emitted.`);
+        if (created) {
+            log(`CLIENT MINING: ${created} reason(s) generated. Each gets its own worker to search YOUR existing client base for people it applies to -- no web searches involved.`);
+        } else {
+            log('CLIENT MINING: every reason generated this cycle already exists and is being (or has been) worked. Nothing new to mine.');
+        }
         return created;
     } catch (e) {
-        log(`ReasonGenerator error (non-fatal): ${e.message}`);
+        log(`CLIENT MINING: reason generation hit an error (${e.message}). Skipping mining this cycle -- normal discovery will run instead.`);
         return 0;
     }
 }

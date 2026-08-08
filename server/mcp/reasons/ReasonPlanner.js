@@ -61,7 +61,8 @@ async function planMineReasons(ctx) {
 
     if (planned > 0 || open > 0) {
         for (const t of OUTBOUND_LANES) suppressed.add(t);
-        logInfo(`MINE-FIRST — ${planned} planned + ${open} open MINE_REASON task(s); outbound lanes (${OUTBOUND_LANES.join('/')}) suppressed this pass.`);
+        const working = planned + open;
+        logInfo(`CLIENT MINING: ${working} worker(s) ${planned ? `queued (${planned} new)` : 'still running'} to search your existing client base for re-contact matches. Web scraping and discovery are PAUSED until mining finishes -- your own clients get worked first, at zero search-credit cost.`);
     }
     return { planned, open };
 }

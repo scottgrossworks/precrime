@@ -287,7 +287,14 @@ const LLM_TIMEOUT_MS = 30000;
 async function _llmComplete(prompt, cfg, maxTokens = 64, role = null) {
     if (!cfg || !cfg.llmApiKey) return null;
     const provider = (cfg.llmProvider || 'anthropic').toLowerCase();
-    const roleModel = (role && cfg.llmModels && cfg.llmModels[role]) || null;
+    // Model resolution is CONFIG-ONLY: llm.models.<role> override, else llm.model.
+    // NO hardcoded fallback model (removed 2026-08-08) -- an unconfigured model is
+    // a loud error, never a silent call to some model the user did not choose.
+    const model = (role && cfg.llmModels && cfg.llmModels[role]) || cfg.llmModel || null;
+    if (!model) {
+        console.error(`[judge-llm] NO MODEL CONFIGURED -- set llm.model (or llm.models.${role || '<role>'}) in precrime_config.json. Refusing to guess a model.`);
+        return null;
+    }
     try {
         if (provider === 'anthropic') {
             const res = await fetch((cfg.llmBaseUrl || 'https://api.anthropic.com') + '/v1/messages', {
@@ -298,7 +305,7 @@ async function _llmComplete(prompt, cfg, maxTokens = 64, role = null) {
                     'anthropic-version': cfg.llmAnthropicVersion || '2023-06-01'
                 },
                 body: JSON.stringify({
-                    model: roleModel || cfg.llmModel || 'claude-haiku-4-5-20251001',
+                    model,
                     max_tokens: maxTokens,
                     messages: [{ role: 'user', content: prompt }]
                 }),
@@ -325,7 +332,7 @@ async function _llmComplete(prompt, cfg, maxTokens = 64, role = null) {
         // Two-part fix: floor the budget at 512 (non-reasoning models stop early; cost
         // unchanged), and ask for low reasoning effort (ignored by models without it).
         const body = {
-            model: roleModel || cfg.llmModel || 'gpt-4o-mini',
+            model,
             max_tokens: Math.max(maxTokens || 0, 512),
             messages: [{ role: 'user', content: prompt }]
         };
