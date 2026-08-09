@@ -47,15 +47,26 @@ async function planMineReasons(ctx) {
             orderBy: { createdAt: 'desc' },
             select: { id: true }
         });
-        // One hunt per reason per its lifetime: ANY existing MINE_REASON task
-        // (done included) means this reason was already worked. Reasons expire
-        // via factlet staleness and are re-emitted fresh by the generator, so
-        // a recurring season gets a NEW hunt through a NEW factlet -- never a
-        // re-run of a consumed one.
-        const hunted = new Set((await prisma.task.findMany({
+        // One SUCCESSFUL hunt per reason: an open or done MINE_REASON task means
+        // it was (or is being) worked. A FAILED hunt (orphaned worker) retries --
+        // 2026-08-09: the old any-task-ever rule let two orphans permanently burn
+        // their reasons, so the evening session had nothing to mine. Two failures
+        // and the reason is abandoned (no infinite retry loop).
+        const taskRows = await prisma.task.findMany({
             where: { type: 'MINE_REASON', targetType: 'Factlet' },
-            select: { targetId: true }
-        })).map(t => t.targetId).filter(Boolean));
+            select: { targetId: true, status: true }
+        });
+        const hunted = new Set();
+        const failCount = new Map();
+        for (const t of taskRows) {
+            if (!t.targetId) continue;
+            if (['ready', 'claimed', 'done'].includes(t.status)) hunted.add(t.targetId);
+            else {
+                const n = (failCount.get(t.targetId) || 0) + 1;
+                failCount.set(t.targetId, n);
+                if (n >= 2) hunted.add(t.targetId);
+            }
+        }
         for (const f of liveReasons) {
             if (hunted.has(f.id)) continue;
             if ((await createBudget('MINE_REASON')).eff <= 0) break;

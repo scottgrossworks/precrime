@@ -29,7 +29,10 @@ const { llmComplete } = require('../factlets');
 
 const REASON_SOURCE_PREFIX = 'reason:';
 const REASON_KINDS = new Set(['seasonal', 'trajectory', 'referral']);
-const COOLDOWN_HOURS = 20;      // roughly once a day, whatever the restart count
+// 2026-08-09: was 20h -- which guaranteed an evening session after a morning
+// batch mined NOTHING. The similarity dedup below is the real duplicate guard;
+// this clock only throttles LLM calls, so it can be short.
+const COOLDOWN_HOURS = 2;
 const MAX_REASONS_PER_RUN = 6;
 
 // Prompt text lives in REASON_PROMPT.json (same folder) so it can be tuned
