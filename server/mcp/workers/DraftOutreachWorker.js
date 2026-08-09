@@ -24,6 +24,34 @@ const { llmComplete, isGenericEmail } = require('../factlets');
 const { fillPrompt } = require('../promptLoader');
 const DRAFT_PROMPT = require('./DRAFT_PROMPT.json');   // prompt text: edit the JSON, not this file
 
+// Create the Gmail DRAFT directly (2026-08-08): hot leedz = drafts in the
+// user's Gmail Drafts folder, not rows in a DB. Same shared OAuth token the
+// bounce sweep uses (mcp_gmail serves it on :7000/token). DRAFT ONLY -- this
+// posts to /drafts, never /messages/send; the Gmail hard gate is untouched.
+const TOKEN_URL = process.env.PRECRIME_GMAIL_TOKEN_URL || 'http://127.0.0.1:7000/token';
+async function createGmailDraft(to, subject, bodyText) {
+    let token = null;
+    try {
+        const r = await fetch(TOKEN_URL, { signal: AbortSignal.timeout(3000) });
+        if (r.ok) token = ((await r.json()) || {}).token || null;
+    } catch (_) {}
+    if (!token) return { ok: false, why: 'no gmail token on :7000 (is the Gmail MCP running / authorized?)' };
+    const mime = [`To: ${to}`, `Subject: ${subject}`, 'Content-Type: text/plain; charset=utf-8', '', bodyText].join('\r\n');
+    const raw = Buffer.from(mime, 'utf8').toString('base64').replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+    try {
+        const res = await fetch('https://gmail.googleapis.com/gmail/v1/users/me/drafts', {
+            method: 'POST',
+            headers: { Authorization: `Bearer ${token}`, 'content-type': 'application/json' },
+            body: JSON.stringify({ message: { raw } }),
+            signal: AbortSignal.timeout(10000)
+        });
+        if (!res.ok) return { ok: false, why: `gmail api ${res.status}` };
+        return { ok: true };
+    } catch (e) {
+        return { ok: false, why: e.message };
+    }
+}
+
 function stripDashes(s) {
     // Em dash, en dash, and " -- " all become commas (mail path decodes UTF-8
     // dashes as mojibake; standing rule 2026-07-13).
@@ -94,8 +122,21 @@ async function run(task, deps) {
         return { status: 'done', output: out(`save blocked (${body.blockedReason || 'gate'})`, clientId),
                  summary: `draft "${label}": save blocked by gate` };
     }
-    return { status: 'done', output: out(`drafted outreach (${draft.length} chars), draftStatus:ready`, clientId),
-             summary: `draft "${label}": outreach draft ready (template rewrite, ${draft.length} chars)` };
+
+    // Put the draft in the user's Gmail Drafts folder and mark the client
+    // contacted RIGHT NOW (drafting IS contacting -- same rule as mcp_gmail's
+    // synchronous mark_sent). On Gmail failure the DB draft survives and the
+    // summary says loudly what to do.
+    const subject = stripDashes(`Live ${(VALUE_PROP && VALUE_PROP.trade) || 'entertainment'} for ${booking.title || 'your event'}`);
+    const g = await createGmailDraft(client.email, subject, draft);
+    if (g.ok && deps.pipelineMarkSent) {
+        await deps.pipelineMarkSent('inproc-draft', { clientId });
+    }
+    const note = g.ok
+        ? 'draft is in the Gmail Drafts folder; client marked CONTACTED'
+        : `WARNING: Gmail draft FAILED (${g.why}) -- the draft text is saved on the client record; fix Gmail and re-run, client NOT marked contacted`;
+    return { status: 'done', output: out(`drafted outreach (${draft.length} chars); ${note}`, clientId),
+             summary: `draft "${label}": ${note}` };
 }
 
 module.exports = { run };

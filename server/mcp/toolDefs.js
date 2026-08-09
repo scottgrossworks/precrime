@@ -133,7 +133,7 @@ const TOOL_DEFS = [
                             },
                             bookingId: {
                                 type: 'string',
-                                description: 'For action=share_booking: Booking.id to share. For action=dismiss_booking: a single Booking.id to permanently skip (or use bookingIds[] to dismiss many in ONE call).'
+                                description: 'For action=share_booking: Booking.id to share. For action=dismiss_booking: a single Booking.id to permanently skip (or use bookingIds[] to dismiss many in ONE call). For action=enqueue type=DRAFT_OUTREACH: the Booking.id to draft outreach for.'
                             },
                             mode: {
                                 type: 'string',
@@ -351,7 +351,7 @@ const TOOL_DEFS = [
                             },
                             type: {
                                 type: 'string',
-                                description: 'For action=enqueue: task type to create for the named client -- DRILL_DOWN (default; find missing contact/upcoming events), ENRICH_CLIENT, or FIND_CLIENT_SOURCES. For action=tasks: optional filter, any task type.'
+                                description: 'For action=enqueue: task type to create -- DRILL_DOWN (default; find missing contact/upcoming events), ENRICH_CLIENT, FIND_CLIENT_SOURCES (all take client/clientId), or DRAFT_OUTREACH (takes bookingId; the draft worker rewrites the VALUE_PROP Sample Email from the dossier and puts the draft in the Gmail Drafts folder -- NEVER compose outreach yourself). For action=tasks: optional filter, any task type.'
                             },
                             missing: {
                                 type: 'array',

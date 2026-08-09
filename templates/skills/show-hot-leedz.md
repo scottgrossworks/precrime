@@ -86,31 +86,21 @@ Ask once per Booking:
   ```
   Quote the response. Do not write shared fields by hand.
 
-- `outreach`: user wants the gig; email the client. **You do not WRITE this email. You REWRITE the seller's approved template. Composing from scratch is FORBIDDEN.**
-  1. Fetch the template and signature (two calls, always first):
-     `precrime__pipeline({ action:"get_config", key:"sampleEmail" })` and
-     `precrime__pipeline({ action:"get_config", key:"signature" })`.
-     These keys are ALWAYS present on this server. If you think one is missing, you did not
-     actually make the call — make it now. NEVER tell the user the template is missing and
-     NEVER compose without it.
-  2. Rewrite the `value` of sampleEmail for THIS booking. Keep every sentence, same order,
-     same length, same tone. Change ONLY: recipient first name, their company/brand, event
-     name, event date in plain words, venue/city — all taken from the card you showed in
-     Step 3. A fact you do not have: drop that clause, never guess. Keep the rates line,
-     the no-deposit line, and the video link EXACTLY as written. The template tailors one
-     product detail to its own event (pre-printed car bodies for an auto show): retarget
-     that ONE detail to this event's theme, or drop it if nothing fits.
-  3. End with the signature `value` VERBATIM. No em dash, en dash, or double hyphen
-     anywhere in subject or body — use commas.
-  4. Call `gmail__gmail_send` IMMEDIATELY with the rewritten email. Do NOT print the
-     email in the terminal first and do NOT ask "shall I create the draft?" — the user
-     saying draft/outreach IS the instruction, and the tool is HARD-GATED DRAFT-ONLY:
-     it puts the email in the user's Gmail Drafts folder and NEVER sends it. The user
-     reviews it IN GMAIL, so showing it on screen or asking permission only wastes
-     their time and tokens. After the call, report exactly ONE line:
-     `Draft in your Gmail Drafts folder: <client> / <event>` — never say "sent".
-  **This is NOT the marketplace path. Do NOT call `share_booking` (that builds a marketplace brief, not a client email). Do NOT call any `tavily__*` tool. Do NOT call `pipeline.save` or write factlets. Do NOT research the client or event on the web — every fact you need is already loaded.** If the user supplies a template path, you MAY read it once with `developer__shell` `type` and follow its structure — that is the ONLY additional read allowed on this branch. Keep it brief when asked.
-  You do NOT record the send. The gmail send tool marks the client sent and resets its bookings out of hot PROCEDURALLY — the action records itself, no save from you. This applies to BOTH a real send AND `draft:true`: a Gmail draft consumes the leed exactly like a send — the client goes cold and never returns to the hot list. Never re-present a leed after drafting for it, and never claim the client was not contacted when a draft exists. (A client already at `draftStatus:"sent"` is prior outreach: it should not be in your hot list at all; if you somehow see one, warn "already emailed" and skip.)
+- `outreach`: user wants the gig; email the client. **You COMPOSE NOTHING (2026-08-08: the chat model freehanding emails produced generic, dossier-blind drafts). The in-process draft worker rewrites the Sample Email from the client's dossier on the dedicated draft model. Your ONLY job is one call:**
+  ```
+  precrime__pipeline({ action:"enqueue", type:"DRAFT_OUTREACH", bookingId:<id> })
+  ```
+  The worker fetches the dossier, rewrites the VALUE_PROP Sample Email for this lead,
+  appends the signature, puts the draft in the user's Gmail Drafts folder, and marks the
+  client CONTACTED -- all procedurally, within moments. After the call, report exactly
+  ONE line: `Outreach draft queued: <client> / <event> -- it lands in your Gmail Drafts folder.`
+  Do NOT call `gmail__gmail_send`. Do NOT call `get_config`. Do NOT write or show any
+  email text. Do NOT ask permission -- the user saying outreach IS the instruction.
+  **This is NOT the marketplace path: do NOT call `share_booking`, any `tavily__*` tool, or `pipeline.save`.**
+  A drafted client is CONSUMED: it goes cold and never returns to the hot list. Never
+  re-present a leed after outreach was queued for it. (A client already at
+  `draftStatus:"sent"` is prior outreach: it should not be in your hot list at all; if
+  you somehow see one, warn "already emailed" and skip.)
 
 - `skip`: PERMANENT dismissal. The user rejected this leed; it must never be presented as hot again. Call:
   ```

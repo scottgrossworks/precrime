@@ -1572,7 +1572,7 @@ async function runInProcessTask(task) {
     }
     if (task.type === 'DRAFT_OUTREACH') {
         const { run } = require('./workers/DraftOutreachWorker');
-        const r = await run(task, { pipelineSave });
+        const r = await run(task, { pipelineSave, pipelineMarkSent });
         await pipelineCompleteTask('inproc-draft', {
             taskId: task.id, status: r.status || 'done', output: r.output || {}, error: r.error
         });
@@ -1602,9 +1602,37 @@ let PLAN_TASKS_IN_FLIGHT = false;
 // (targetHot 1) so the order actually runs instead of sitting in a dead queue.
 async function pipelineEnqueue(id, args) {
     const type = String(args.type || 'DRILL_DOWN').toUpperCase();
-    const ENQUEUE_TYPES = new Set(['DRILL_DOWN', 'ENRICH_CLIENT', 'FIND_CLIENT_SOURCES']);
+    const ENQUEUE_TYPES = new Set(['DRILL_DOWN', 'ENRICH_CLIENT', 'FIND_CLIENT_SOURCES', 'DRAFT_OUTREACH']);
     if (!ENQUEUE_TYPES.has(type)) {
         return createErrorResponse(id, -32602, `enqueue type must be one of: ${[...ENQUEUE_TYPES].join(', ')}.`);
+    }
+    // DRAFT_OUTREACH targets a BOOKING (the worker reads task.targetId as the
+    // bookingId). 2026-08-08: interactive outreach routes HERE instead of the
+    // chat model composing -- the in-process draft worker rewrites the Sample
+    // Email from the dossier on the config `draft` model and puts the result in
+    // the user's Gmail Drafts folder. The chat model composes NOTHING.
+    if (type === 'DRAFT_OUTREACH') {
+        const bookingId = String(args.bookingId || '').trim();
+        if (!bookingId) return createErrorResponse(id, -32602, 'enqueue DRAFT_OUTREACH requires bookingId.');
+        const booking = await prisma.booking.findUnique({
+            where: { id: bookingId },
+            include: { client: { select: { company: true, name: true } } }
+        });
+        if (!booking) return createErrorResponse(id, -32602, `enqueue: no booking with id "${bookingId}".`);
+        const bLabel = `${booking.title || bookingId} (${(booking.client && (booking.client.company || booking.client.name)) || 'no client'})`;
+        const dup = await prisma.task.findFirst({
+            where: { type, targetType: 'Booking', targetId: bookingId, status: { in: ['ready', 'claimed'] } }
+        });
+        const row = dup || await prisma.task.create({
+            data: { type, status: 'ready', targetType: 'Booking', targetId: bookingId, input: JSON.stringify({ userOrdered: true }) }
+        });
+        const cond = conductorStatus();
+        if (!(cond && cond.armed)) armConductor({ targetHot: 1 });
+        logInfo(`enqueue: user-ordered DRAFT_OUTREACH for ${bLabel} -> ${dup ? 'already queued' : 'queued'} [${row.id}].`);
+        return createSuccessResponse(id, JSON.stringify({
+            status: dup ? 'ALREADY_QUEUED' : 'ENQUEUED', taskId: row.id, type, booking: bLabel,
+            note: 'The draft worker rewrites the VALUE_PROP Sample Email from this client\'s dossier and puts the draft in the Gmail Drafts folder within moments.'
+        }, null, 2));
     }
     // Resolve the target client: exact id wins; else substring match on
     // name/company/email (SQLite LIKE -- case-insensitive for ASCII).
