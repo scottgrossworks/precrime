@@ -146,16 +146,26 @@ const _FACTLET_MON = { jan: 0, feb: 1, mar: 2, apr: 3, may: 4, jun: 5, jul: 6, a
 function factletEventPassed(f) {
     const text = `${(f && f.content) || ''} ${(f && f.source) || ''}`;
     if (!text.trim()) return false;
-    let latest = null;   // latest concrete time reference in the text
+    let latest = null;   // latest CONCRETE date reference (day- or month-level)
     const bump = (d) => { if (d && !isNaN(d.getTime()) && (!latest || d > latest)) latest = d; };
     let m;
-    // month-name day[, year] -- e.g. "June 14, 2026" / "Jul 4 2025"
-    const mdRe = /\b(jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)[a-z]*\.?\s+(\d{1,2})(?:st|nd|rd|th)?(?:,?\s*(20\d{2}))?\b/gi;
+    // month-name day[-endDay][, year] -- "June 14, 2026" / "Jul 4 2025" / "July 10-11, 2026"
+    // (2026-08-08 World Cup incident: date RANGES like "July 18-19, 2026" previously
+    // parsed as a year-less "July 18" and bailed, keeping dead Fan Zone factlets alive.)
+    const mdRe = /\b(jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)[a-z]*\.?\s+(\d{1,2})(?:st|nd|rd|th)?(?:\s*[-–—]\s*(\d{1,2})(?:st|nd|rd|th)?)?(?:,?\s*(20\d{2}))?\b/gi;
     while ((m = mdRe.exec(text)) !== null) {
         const day = parseInt(m[2], 10);
         if (day < 1 || day > 31) continue;
-        if (!m[3]) return false;   // year-less date is ambiguous -> conservative: keep the factlet
-        bump(new Date(parseInt(m[3], 10), _FACTLET_MON[m[1].slice(0, 3).toLowerCase()], day));
+        if (!m[4]) return false;   // year-less date is ambiguous -> conservative: keep the factlet
+        const endDay = m[3] ? parseInt(m[3], 10) : day;
+        bump(new Date(parseInt(m[4], 10), _FACTLET_MON[m[1].slice(0, 3).toLowerCase()],
+                      (endDay >= day && endDay <= 31) ? endDay : day));
+    }
+    // month-name year with NO day -- "in July 2026" -> the event window is that month;
+    // dead once the month ends.
+    const myRe = /\b(jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)[a-z]*\.?\s+(20\d{2})\b/gi;
+    while ((m = myRe.exec(text)) !== null) {
+        bump(new Date(parseInt(m[2], 10), _FACTLET_MON[m[1].slice(0, 3).toLowerCase()] + 1, 0));
     }
     // numeric m/d/yyyy -- e.g. "6/14/2026"
     const numRe = /\b(\d{1,2})\/(\d{1,2})\/(20\d{2})\b/g;
@@ -163,10 +173,13 @@ function factletEventPassed(f) {
         const mon = parseInt(m[1], 10) - 1, day = parseInt(m[2], 10);
         if (mon >= 0 && mon < 12 && day >= 1 && day <= 31) bump(new Date(parseInt(m[3], 10), mon, day));
     }
-    // bare year -- "World Cup 2025". Treated as Dec 31 of that year, so it only kills
-    // once the whole year is over.
-    const yrRe = /\b(20\d{2})\b/g;
-    while ((m = yrRe.exec(text)) !== null) bump(new Date(parseInt(m[1], 10), 11, 31));
+    // bare year -- "World Cup 2025" -- FALLBACK ONLY, when no concrete date exists.
+    // It used to bump unconditionally, so the "2026" inside "July 10-11, 2026"
+    // dragged the deadline to Dec 31 and kept every finished 2026 event alive all year.
+    if (!latest) {
+        const yrRe = /\b(20\d{2})\b/g;
+        while ((m = yrRe.exec(text)) !== null) bump(new Date(parseInt(m[1], 10), 11, 31));
+    }
     if (!latest) return false;
     return latest.getTime() < Date.now() - 24 * 60 * 60 * 1000;
 }

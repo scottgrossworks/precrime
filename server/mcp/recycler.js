@@ -10,7 +10,7 @@
 const { prisma } = require('./db');
 const { PRECRIME_CONFIG } = require('./runtime');
 const { createSuccessResponse } = require('./responses');
-const { getFactletStaleDays } = require('./factlets');
+const { getFactletStaleDays, factletEventPassed } = require('./factlets');
 
 // Delete Factlets older than the stale window. PreCrime is about CURRENT demand:
 // stale evidence is REMOVED, never re-animated. Shared by startup, the planner
@@ -24,10 +24,24 @@ async function pruneStaleFactlets({ dryRun = false, staleDays } = {}) {
         select: { id: true }
     });
     const ids = stale.map(f => f.id);
+    // PAST-EVENT prune (2026-08-08, the World Cup Fan Zone incident): age alone
+    // let two-week-old factlets about a FINISHED event keep drawing APPLY calls
+    // and drills every pass. factletEventPassed already zeroed their SCORE, but
+    // nothing stopped the SPEND. An event that is over is dead demand -- delete
+    // the factlet. Reason factlets ("reason:*") are exempt: their text cites
+    // past bookings by design (the lookback) while pointing at future occasions.
+    const live = await prisma.factlet.findMany({
+        where: { createdAt: { gte: cutoff }, NOT: { source: { startsWith: 'reason:' } } },
+        select: { id: true, content: true, source: true }
+    });
+    let pastEvent = 0;
+    for (const f of live) {
+        if (factletEventPassed(f)) { ids.push(f.id); pastEvent++; }
+    }
     if (!dryRun && ids.length > 0) {
         await prisma.factlet.deleteMany({ where: { id: { in: ids } } });
     }
-    return { deleted: ids.length, ids, cutoffIso: cutoff.toISOString() };
+    return { deleted: ids.length, pastEvent, ids, cutoffIso: cutoff.toISOString() };
 }
 
 async function pipelineRecycler(id, args) {

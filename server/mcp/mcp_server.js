@@ -1958,7 +1958,7 @@ async function pipelinePlanTasksInner(id, args) {
         // backlog reflects only LIVE demand and never re-animates old news.
         try {
             const _p = await pruneStaleFactlets();
-            if (_p.deleted) logInfo(`Planner pruned ${_p.deleted} stale factlet(s) before planning.`);
+            if (_p.deleted) logInfo(`Planner pruned ${_p.deleted} dead factlet(s) before planning${_p.pastEvent ? ` -- ${_p.pastEvent} were about events that already happened (no more spend on them)` : ''}.`);
         } catch (e) {
             logInfo(`Planner factlet prune skipped: ${e.message}`);
         }
