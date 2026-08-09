@@ -674,9 +674,13 @@ async function pipelineStatus(id, args) {
         }
     });
 
-    // Latest bookings (most-recently discovered) — for the status report's
-    // "who / where / when" rows. status previously exposed only counts.
+    // Latest WON gigs -- status "booked" ONLY (2026-08-09: this section used to
+    // list the newest rows of ANY status, so cold/dismissed prospects like a
+    // passed Collect-A-Con showed up under the BOOKED headline looking like
+    // recent wins. Bookings-the-table is the prospect pipeline; bookings-the-
+    // report-section means gigs WON, so filter to won).
     const latestBookings = await prisma.booking.findMany({
+        where: { status: 'booked' },
         orderBy: { createdAt: 'desc' },
         take: 3,
         select: {
@@ -723,7 +727,7 @@ async function pipelineStatus(id, args) {
         `  BREWING    ${bookingsBrewing}`,
         `  COLD       ${bookingsCold}`,
         '',
-        'LATEST BOOKINGS  (client · location · date)',
+        'LATEST WON GIGS  (client · location · date)',
         bookingLines,
         '',
         `FACTLETS  ${factletLine}`,
