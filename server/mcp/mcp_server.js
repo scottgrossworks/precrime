@@ -2652,7 +2652,7 @@ async function pipelinePlanTasksInner(id, args) {
                     // The 14-day window keeps this population small by design; over-fetch and
                     // heat-sort in JS (Prisma can't ORDER BY a bookings aggregate).
                     take: 500,
-                    select: { id: true, targetUrls: true, email: true,
+                    select: { id: true, targetUrls: true, email: true, source: true,
                         bookings: { where: liveBookingWhere, select: { status: true, updatedAt: true,
                             title: true, description: true, location: true, source: true } } }
                 });
@@ -2711,6 +2711,12 @@ async function pipelinePlanTasksInner(id, args) {
                         // doesn't need it -- the judge/drill path owns them from here.
                         // Reserve FIND for live clients still missing contact info.
                         if (c.email) continue;
+                        // OWN-BOOK clients are NEVER web-searched (2026-08-09, the Veronica
+                        // Esquivias credit burn): a Square/Gmail import is a private person
+                        // from the user's own records -- the public web has never heard of
+                        // them, and their email often sits on a duplicate row in OUR DB.
+                        // Tavily is for organizations discovered in the wild, only.
+                        if (/^(square|gmail)/i.test(c.source || '')) continue;
                         if ((await createBudget('FIND_CLIENT_SOURCES')).eff <= 0) continue;
                         const row = await createTask('FIND_CLIENT_SOURCES', { targetType: 'Client', targetId: c.id, input: {} });
                         if (row) clientWorkPlanned++;

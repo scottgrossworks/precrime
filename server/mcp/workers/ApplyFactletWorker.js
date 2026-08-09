@@ -81,6 +81,21 @@ function buildPrompt(factlet, cards, vp) {
 // Build a pipelineSave patch from one decision. Strips null/empty fields so the
 // save path never sees placeholder values.
 function decisionPatch(d, factlet) {
+    // FABRICATION GUARD (2026-08-09): the model attached bookings for conventions
+    // the factlet never mentions -- 20 past-dated expos invented in one evening
+    // (VidCon, PyCon, ADLM...) from vendor-directory factlets. A proposed booking
+    // date must be traceable to the factlet text: its month must appear there
+    // (name, abbreviation, or numeric m/d). verify.js date verification (Phase 2b)
+    // is the full fix; this closes the flood at the only booking-creating caller.
+    if (d.booking && d.booking.startDateParts && d.booking.startDateParts.month) {
+        const txt = String(factlet.content || '').toLowerCase();
+        const mo = parseInt(d.booking.startDateParts.month, 10);
+        const names = ['january','february','march','april','may','june','july','august','september','october','november','december'];
+        const ok = mo >= 1 && mo <= 12 && (
+            txt.includes(names[mo - 1]) || txt.includes(names[mo - 1].slice(0, 3)) ||
+            new RegExp('\\b' + mo + '\\s*/\\s*\\d{1,2}\\b').test(txt));
+        if (!ok) d.booking = null;   // date not in the evidence -> no booking
+    }
     const patch = {};
     if (d.dossierLine) {
         const cat = d.category ? `[${d.category}] ` : '';
