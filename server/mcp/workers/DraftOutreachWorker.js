@@ -87,8 +87,12 @@ async function run(task, deps) {
     if (client.draftStatus === 'sent' || client.sentAt) return { status: 'done', output: out('skip: already contacted', clientId), summary: `draft "${label}": skip, already contacted` };
 
     const isoDate = booking.startDate ? new Date(booking.startDate).toISOString().slice(0, 10) : '';
+    // Anniversary re-book (Stage 1, 2026-08-09): a PAST booking means this is a
+    // re-hire pitch -- reference the history, target this year's occasion.
+    const isRehire = booking.startDate && new Date(booking.startDate) < new Date();
     const prompt = fillPrompt(DRAFT_PROMPT.lines, {
         trade:       (VALUE_PROP && VALUE_PROP.trade) || 'events',
+        rehireLine:  isRehire ? fillPrompt(DRAFT_PROMPT.rehireRule, { pastTitle: booking.title || 'their event', pastDate: isoDate }) : '',
         sampleEmail: tpl,
         leadData:    JSON.stringify({
             contactName: client.name, company: client.company, email: client.email,

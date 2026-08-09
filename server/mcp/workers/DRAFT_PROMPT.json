@@ -11,7 +11,9 @@
     "6. Do NOT include the signature block; it is appended separately. End at the imperative close.",
     "FIRST decide the gate: is this a plausible buyer for the product at this event (product-market fit, contact looks like a decision-maker)? If NOT, reply with exactly: SKIP: <short reason>",
     "Otherwise reply with ONLY the rewritten email body text, nothing else.",
+    "{rehireLine}",
     "SAMPLE EMAIL: \"\"\"{sampleEmail}\"\"\"",
     "LEAD DATA: {leadData}"
-  ]
+  ],
+  "rehireRule": "RE-HIRE: they already hired this seller for \"{pastTitle}\" on {pastDate}. Do NOT pitch that past date as upcoming. Pitch the SAME occasion for THIS year, referencing the history naturally (e.g. \"after drawing at your {pastTitle}...\"). The gate is automatically YES for a re-hire."
 }
