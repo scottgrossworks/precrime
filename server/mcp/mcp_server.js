@@ -689,6 +689,35 @@ async function pipelineStatus(id, args) {
         }
     });
 
+    // OUTREACH-READY (2026-08-10): the user's actionable list. A booking earns a row
+    // here when a DRAFT_OUTREACH could be enqueued for it RIGHT NOW -- same relaxed
+    // gate as Stage 3's outreach query (hot OR brewing, unshared, future date, client
+    // has an email; zip/time NOT required -- finding the venue is often the purpose
+    // of the email). Seed stubs are excluded: "(seed) awaiting real event" rows have
+    // no occasion to write about. Re-engagement rows STAY -- synthetic date, but a
+    // real reason (they paid us before). Drafting remains user-triggered (enqueue);
+    // this section exists so the user can SEE the candidates without hunting.
+    const outreachWhere = {
+        status: { in: ['hot', 'brewing'] },
+        shared: false,
+        startDate: { gte: new Date() },
+        client: { email: { not: null } },
+        NOT: { title: { contains: '(seed)' } }
+    };
+    const [outreachReadyCount, outreachReady, brewingSeedStubs] = await Promise.all([
+        prisma.booking.count({ where: outreachWhere }),
+        prisma.booking.findMany({
+            where: outreachWhere,
+            orderBy: { startDate: 'asc' },   // soonest event first = most urgent to write
+            take: 8,
+            select: { id: true, title: true, startDate: true,
+                      client: { select: { name: true, company: true } } }
+        }),
+        // BREWING honesty: how much of the brewing pile is auto-minted seed stubs
+        // (placeholder booking created with every new client) vs real prospect work.
+        prisma.booking.count({ where: { status: 'brewing', title: { contains: '(seed)' } } })
+    ]);
+
     // Factlet processing visibility. The raw factlet.count() is a rolling
     // ~staleDays window (evidence already folded into dossiers but not yet aged
     // out), NOT a backlog. The meaningful number is `unprocessed` — live
@@ -716,6 +745,19 @@ async function pipelineStatus(id, args) {
     const bookingLines = latestBookings.length
         ? latestBookings.map(bookingRow).join('\n')
         : '  (none yet)';
+    // Outreach-ready rows carry the booking id -- it is the handle the user quotes
+    // back ("draft outreach for booking <id>") to trigger the DRAFT_OUTREACH enqueue.
+    const outreachRow = (b, i) => {
+        const who = (b.client && (b.client.name || b.client.company)) || 'Unknown';
+        const when = b.startDate ? new Date(b.startDate).toISOString().slice(0, 10) : '—';
+        return `  ${i + 1}. ${pad(clip(who, 22), 22)}  ${pad(clip(b.title || '—', 32), 32)}  ${when}  ${b.id}`;
+    };
+    const outreachLines = outreachReady.length
+        ? outreachReady.map(outreachRow).join('\n')
+          + (outreachReadyCount > outreachReady.length
+              ? `\n  … ${outreachReadyCount - outreachReady.length} more (find bookings status:brewing shared:false future:true)`
+              : '')
+        : '  (none -- no unshared future booking with a client email)';
     const factletLine = unprocessedFactlets == null
         ? `${totalFactlets} total`
         : `${totalFactlets} total  ·  ${unprocessedFactlets} unprocessed (of ${liveFactlets} live; discovery pauses at ${factletPause})`;
@@ -724,11 +766,14 @@ async function pipelineStatus(id, args) {
         `  BOOKED     ${bookingsBooked}   <- gigs WON (the goal)`,
         `  CONTACTED  ${bookingsContacted}`,
         `  HOT        ${bookingsHot}`,
-        `  BREWING    ${bookingsBrewing}`,
+        `  BREWING    ${bookingsBrewing}   (${bookingsBrewing - brewingSeedStubs} real · ${brewingSeedStubs} seed stubs awaiting a real event)`,
         `  COLD       ${bookingsCold}`,
         '',
         'LATEST WON GIGS  (client · location · date)',
         bookingLines,
+        '',
+        `OUTREACH-READY  ${outreachReadyCount}  (client · event · date · bookingId -- say "draft outreach for <bookingId>" to queue one)`,
+        outreachLines,
         '',
         `FACTLETS  ${factletLine}`,
         `CLIENTS   ${totalClients}  ·  drafts: ${brewing} brewing / ${ready} ready / ${sent} sent`
@@ -779,6 +824,8 @@ async function pipelineStatus(id, args) {
                 contacted: bookingsContacted,
                 booked: bookingsBooked,      // gigs WON — the headline conversion metric
                 shared: bookingsShared,
+                brewingSeedStubs,            // of `brewing`: auto-minted "(seed)" placeholder rows
+                outreachReady: outreachReadyCount,   // draft-able now (relaxed gate, seeds excluded)
                 latest: latestBookings
             }
         },
