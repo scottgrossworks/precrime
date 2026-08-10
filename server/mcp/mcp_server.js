@@ -2605,8 +2605,18 @@ async function pipelinePlanTasksInner(id, args) {
                     // burned credits). They carry source="container:<id>" and are already-expanded
                     // DIRECT leads -- never re-expand them as containers.
                     if (typeof b.source === 'string' && b.source.startsWith('container:')) continue;
+                    // ALLOW-LIST, not deny-list (2026-08-10). This read `if (cls === 'direct')
+                    // continue;` -- which skipped 'direct' but let 'private' fall straight
+                    // through, so the single most valuable class in the system (rank 0: one
+                    // host, one celebration, no competing vendors) was being handed to the
+                    // convention lane. Observed live: "Rae Salazar House Party" and "Labor Day
+                    // Weekend Party 2026" both classified 'private', both given a
+                    // DRILL_CONTAINER worker sent to find their "organizer + vendor list" --
+                    // 2 of the only 7 live private bookings in the whole database.
+                    // classifyEventClass returns 'private' | 'direct' | 'container'; ONLY a
+                    // real container belongs here. DRILL_CONTAINER itself is unchanged.
                     const cls = classification.classifyEventClass(b);
-                    if (cls === 'direct') continue;          // single private host -> normal flow
+                    if (cls !== 'container') continue;        // private/direct -> normal flow
                     if (priorContainer.has(b.id)) continue;
                     if ((await createBudget('DRILL_CONTAINER')).eff <= 0) break;
                     await createTask('DRILL_CONTAINER', {
@@ -2831,6 +2841,26 @@ async function pipelinePlanTasksInner(id, args) {
                     ? sourceStore.readySources({
                           limit: 1, onlyChannels: ['fb', 'ig'], excludeUrls: skipUrls })
                     : [];
+                // PRIVATE-DEMAND RESERVATION (2026-08-10). readySources orders
+                // never-scraped-first, which sounds fair but starves the one channel that
+                // carries PRIVATE hosts. DISCOVER_SOURCES keeps appending fresh directory/
+                // website URLs (theknot profiles, rostercon pages); every new arrival sorts
+                // to position 0, while reddit's fixed ~19 subs all carry scrape timestamps
+                // and sink. Measured live: 6 hours of scraping = 16 directory + 4 ig, and
+                // ZERO reddit -- r/OCParents, r/occlassified and the wedding subs went
+                // untouched while the crawler worked convention calendars and planner
+                // directories. Those subs are where a person planning their own party
+                // actually posts; a vendor directory can never contain one.
+                // Reserve ONE slot per pass for reddit, exactly as fb/ig get one above.
+                // This is a FLOOR, not a cap -- reddit still competes in the general pool
+                // below (readySources marks picks claimed, so it is never double-picked).
+                const redditOpen = planned.some(p =>
+                    (p.status === 'ready' || p.status === 'claimed') &&
+                    /"channel"\s*:\s*"reddit"/.test(p.input || ''));
+                if (!redditOpen && ckScrape.eff > sources.length) {
+                    sources.push(...sourceStore.readySources({
+                        limit: 1, onlyChannels: ['reddit'], excludeUrls: skipUrls }));
+                }
                 sources.push(...sourceStore.readySources({
                     limit: Math.max(0, ckScrape.eff - sources.length),
                     excludeChannels: ['fb', 'ig'],
