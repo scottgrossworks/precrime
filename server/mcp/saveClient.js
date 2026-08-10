@@ -76,6 +76,38 @@ function selfIdentityTokens() {
     return [...toks];
 }
 
+// COMPETITOR GATE (2026-08-10, vendor-directory incident): a scrape of
+// partyslate.com/find-vendors and thereveryla.com/preferred-vendor-list fed
+// COMPETITORS into the client base. "BUYERS ONLY" was already written, in detail,
+// in skills/url-loop.md — as prose, which workers ignored. Same lesson as Banned
+// Terms and self-exclusion: the rule only holds in code, at the save choke point.
+//
+// Where there is honey there are bees. Every vendor directory lists buyers and
+// sellers together, so the test is not "is this page a directory" but "is THIS
+// record a seller of the services we sell?".
+//
+// BUYER ROLES WIN TIES. A planner/agency/venue/coordinator HIRES entertainment —
+// they are the honey even when their name contains a trade word ("Photo Booth
+// Events" can be a planner). So a competitor-trade match is overridden whenever
+// the identity also reads as a buyer role. Returns the matched trade, or null.
+const BUYER_ROLE_WORDS = ['planner', 'planning', 'coordinator', 'agency', 'venue',
+    'organizer', 'organiser', 'director', 'manager', 'host', 'school', 'district',
+    'chamber', 'foundation', 'museum', 'resort', 'hotel', 'country club', 'college',
+    'university', 'city of', 'parks and rec', 'recreation', 'library', 'hospital'];
+function competitorHit(text) {
+    const trades = (VALUE_PROP || {}).competitorTrades || [];
+    if (!trades.length || !text) return null;
+    const hay = String(text).toLowerCase();
+    let matched = null;
+    for (const t of trades) {
+        const needle = String(t || '').trim().toLowerCase();
+        if (needle && hay.includes(needle)) { matched = needle; break; }
+    }
+    if (!matched) return null;
+    for (const w of BUYER_ROLE_WORDS) if (hay.includes(w)) return null;   // buyer wins
+    return matched;
+}
+
 function selfIdentityHit(text) {
     if (!text) return null;
     const hay = String(text).toLowerCase();
@@ -352,6 +384,22 @@ async function pipelineSave(id, clientId, patch, sessionId, judge, factletId) {
                     return createSuccessResponse(id, JSON.stringify({
                         saved: false, blocked: true, bannedTerm: hit,
                         note: `Refused: "${patch.name || patch.company}" matches VALUE_PROP banned term "${hit}". This category is permanently excluded. Do not retry, rename, or work around.`
+                    }));
+                }
+                // COMPETITOR GATE (create only): refuse saving a SELLER of event
+                // services (VALUE_PROP ### Competitor Trades). Identity fields only —
+                // a booking title may legitimately mention a photo booth at an event
+                // we want; the CLIENT being a photo-booth company is what disqualifies.
+                const compHit = competitorHit([patch.name, patch.company, patch.segment]
+                    .filter(Boolean).join(' '));
+                if (compHit) {
+                    console.error(`[save] COMPETITOR "${compHit}" — refused new client "${patch.name || patch.company || '(unnamed)'}" (sells event services; VALUE_PROP ### Competitor Trades)`);
+                    await logSessionEvent(sessionId, 'save_blocked_competitor', {
+                        name: patch.name, company: patch.company, trade: compHit
+                    });
+                    return createSuccessResponse(id, JSON.stringify({
+                        saved: false, blocked: true, competitorTrade: compHit,
+                        note: `Refused: "${patch.name || patch.company}" is a SELLER of event services ("${compHit}") — a competitor bidding for the same bookings we want, not a buyer. Skip it entirely: no client, no enrichment, no booking. If this is actually a planner/agency/venue that HIRES entertainment, save it with that role in the name or segment.`
                     }));
                 }
                 // SELF-EXCLUSION GATE (create only): refuse saving the seller's own

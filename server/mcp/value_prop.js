@@ -92,6 +92,14 @@ function parse(md) {
         buyerRoles:       _bullets(who['Buyer Roles']),
         audienceSegments: _bullets(who['Audience Segments']),
         notBuyer:         _bullets(who['Who Is Not A Buyer']),
+        // The '### Competitor Trades' sub-section — HARD save-time blocklist for SELLERS
+        // (2026-08-10, vendor-directory incident). "BUYERS ONLY" existed as prose in
+        // skills/url-loop.md and did not hold: a scrape of partyslate find-vendors and a
+        // venue preferred-vendor list fed competitors straight into the client base. Same
+        // lesson as Banned Terms and self-identity — the rule only sticks in code.
+        // saveClient.js refuses a NEW client naming one of these trades, unless its
+        // identity ALSO reads as a Buyer Role (planner/agency/venue win ties).
+        competitorTrades: _bullets(who['Competitor Trades']),
         relevanceSignals: _bullets((sec['RELEVANCE SIGNALS'] || {}).intro),
         // The '### Not Relevant Signals' sub-section — the fit-gate's negative criteria.
         // Parsed so workers (drill-container fit gate) get it from the packet instead of
