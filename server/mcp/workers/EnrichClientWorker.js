@@ -95,6 +95,29 @@ async function run(task, deps) {
         if (parsed.phone && summary.replace(/[^0-9]/g, '').includes(String(parsed.phone).replace(/[^0-9]/g, ''))) patch.phone = String(parsed.phone);
     }
 
+    // NO SIGNAL -> STOP, GO TO THE BACK OF THE QUEUE (2026-08-10, user rule).
+    // FIND_CLIENT_SOURCES stores 4 snippets per client and the planner queues ONE
+    // ENRICH per snippet, so a client whose first snippet is barren still burned four
+    // LLM calls to learn the same thing four times (observed live: Roberto Maldonado
+    // x4, Robert Mills x4, Richard Cabrera x4 — most returning "no enrichable signal").
+    // The first barren snippet is the signal: consume the client's REMAINING snippets
+    // and cancel its sibling ENRICH tasks. Nothing is deleted and the client is not
+    // punished — with no unconsumed summaries left it simply falls out of the consumer
+    // branch, and Stage 5's heat sort puts it behind everyone with live activity until
+    // a later FIND pass brings genuinely new material. Enrichment resumes then.
+    let stopped = 0, cancelled = 0;
+    if (resultLine === 'no enrichable signal') {
+        for (const e of targetUrls) {
+            if (e && e.url && !e.consumed) { e.consumed = true; stopped++; }
+        }
+        if (stopped) patch.targetUrls = JSON.stringify(targetUrls);
+        cancelled = (await prisma.task.updateMany({
+            where: { type: 'ENRICH_CLIENT', targetType: 'Client', targetId: clientId,
+                     status: { in: ['ready', 'claimed'] }, NOT: { id: task.id } },
+            data: { status: 'cancelled', error: 'no_enrichable_signal_stop' }
+        })).count;
+    }
+
     if (Object.keys(patch).length) {
         const resp = await deps.pipelineSave('inproc-enrich', clientId, patch, task.sessionId || null, false);
         let body = {};
@@ -104,8 +127,11 @@ async function run(task, deps) {
                      summary: `enrich "${label}": save blocked by gate` };
         }
     }
+    const stopNote = (stopped || cancelled)
+        ? ` — stopping here: ${stopped} unread snippet(s) shelved, ${cancelled} queued enrichment(s) cancelled. Back of the queue until a new FIND pass finds fresh material.`
+        : '';
     return { status: 'done', output: out(`Enriched from ${url || 'source'}: ${resultLine}`, needsJudge),
-             summary: `enrich "${label}": ${resultLine}` };
+             summary: `enrich "${label}": ${resultLine}${stopNote}` };
 }
 
 module.exports = { run };

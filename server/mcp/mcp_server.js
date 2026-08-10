@@ -3202,24 +3202,50 @@ async function pipelineMarkBounced(id, args) {
     if (hits.length === 0) {
         return createSuccessResponse(id, JSON.stringify({ marked: 0, note: `no client with email ${email}` }, null, 2));
     }
+    // A BOUNCE IS A CONTACT PROBLEM, NOT A LEAD PROBLEM (2026-08-10, user rule).
+    // The old behaviour dead-flagged the whole client -- draftStatus 'sent' plus
+    // actedOnData('bounced') (shared+cold) across EVERY unshared booking. That did two
+    // things wrong at once:
+    //   1) it swept TERMINAL rows. 'booked' = a gig already WON and paid; 'contacted' =
+    //      outreach already out. Both went cold, and expirePastBookings then moved the
+    //      past-dated ones to 'expired' -- so BOOKED, the headline conversion metric,
+    //      silently decayed every time an old client's mailbox died. Observed live:
+    //      Christina Conner's two won gigs, BOOKED 546 -> 544.
+    //   2) it killed the LEAD. Her Halloween party is still real; we just lost her
+    //      address. The right move is to go FIND the new one.
+    // Now: clear the dead address, leave every booking alone (classify() already holds
+    // an email-less client at brewing -- it can never reach hot, so the cold-write was
+    // redundant as well as destructive), and queue a DRILL_DOWN to hunt a new contact.
     const stamp = new Date().toISOString().slice(0, 10);
     for (const c of hits) {
-        const note = `[${stamp}] [PERMANENT] BOUNCED: ${email} is undeliverable (mailer-daemon). Email cleared; find a new contact.`;
+        const note = `[${stamp}] [PERMANENT] BOUNCED: ${email} is undeliverable (mailer-daemon). Email cleared; DRILL_DOWN queued to find a new contact.`;
         const dossier = (c.dossier ? c.dossier + '\n\n' : '') + note;
-        // Clear email + fail the contact gate; record the bounce in the dossier.
+        // draftStatus back to 'brewing', NOT 'sent': 'sent' is the acted-on tombstone
+        // (classify -> cold('acted_on_outreach')) and would bury this client forever.
+        // We never reached them, so nothing was "sent". A null email keeps them out of
+        // the outreach candidate query until the drill finds a real one.
         await prisma.client.update({
             where: { id: c.id },
-            data: { email: null, contactGate: false, draftStatus: 'sent', dossier }
+            data: { email: null, contactGate: false, draftStatus: 'brewing', dossier }
         });
     }
-    // Keep their bookings out of the live/hot set (dead-flag). Idempotent.
     const ids = hits.map(c => c.id);
-    const bk = await prisma.booking.updateMany({
-        where: { clientId: { in: ids }, shared: false },
-        data: actedOnData('bounced')
-    });
-    logInfo(`mark_bounced: ${email} -> dead-flagged ${ids.length} client(s), ${bk.count} booking(s) cleared out of hot.`);
-    return createSuccessResponse(id, JSON.stringify({ marked: ids.length, bookingsCleared: bk.count }, null, 2));
+    // One open email-hunt per client -- never stack drills on repeat bounces.
+    let drills = 0;
+    for (const cid of ids) {
+        const open = await prisma.task.count({
+            where: { type: 'DRILL_DOWN', targetType: 'Client', targetId: cid,
+                     status: { in: ['ready', 'claimed'] } }
+        });
+        if (open > 0) continue;
+        await createTaskRow('DRILL_DOWN', {
+            targetType: 'Client', targetId: cid,
+            input: { clientId: cid, missing: ['client_email'], reason: `bounced:${email}` }
+        });
+        drills++;
+    }
+    logInfo(`mark_bounced: ${email} -> cleared the dead address on ${ids.length} client(s) and queued ${drills} DRILL_DOWN(s) to find a new contact. Bookings untouched -- a bad address does not cancel a real event, and won gigs stay WON.`);
+    return createSuccessResponse(id, JSON.stringify({ marked: ids.length, drillsQueued: drills, bookingsCleared: 0 }, null, 2));
 }
 
 // Shared sweep logic: poll Gmail for hard bounces, dead-flag each undeliverable client.
