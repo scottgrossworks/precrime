@@ -292,11 +292,22 @@ async function computeClientScore(clientId, intelOverride, opts = {}) {
 // thinking before the first output token even on fast providers; 20s produced
 // steady spurious timeouts. Still bounded -- the inline-gating rationale above holds.
 const LLM_TIMEOUT_MS = 30000;
-// role (2026-08-06): optional key into cfg.llmModels ({judge, gate, apply} from
-// precrime_config.json llm.models) so the ~150 one-word judge/gate calls per
-// session can run a dirt-cheap model while long-form apply/draft keeps the good
-// one. Unset roles fall back to cfg.llmModel -- behavior unchanged until the
-// user fills the map.
+// Per-role reasoning effort for OpenRouter (2026-08-10). Roles NOT listed default
+// to 'low' -- correct for judge/gate/reason, which ask short questions and would
+// otherwise spend their whole token budget thinking (see _llmComplete). The two
+// long-form roles are listed explicitly:
+//   draft -- the outreach email. Lowest volume in the system (user-triggered only,
+//            a handful per session) and the ONLY output a customer ever reads, so
+//            it gets the most thinking. Cheapest possible place to buy quality.
+//   apply -- factlet/enrichment JSON. Structured extraction; needs enough room to
+//            reason then emit valid JSON, which is exactly what it kept failing at.
+const REASONING_EFFORT = { draft: 'high', apply: 'medium' };
+
+// role (2026-08-06): optional key into cfg.llmModels ({judge, gate, apply, draft,
+// reason} from precrime_config.json llm.models) so the ~150 one-word judge/gate
+// calls per session can run a dirt-cheap model while long-form apply/draft keeps
+// the good one. Unset roles fall back to cfg.llmModel -- behavior unchanged until
+// the user fills the map.
 async function _llmComplete(prompt, cfg, maxTokens = 64, role = null) {
     if (!cfg || !cfg.llmApiKey) return null;
     const provider = (cfg.llmProvider || 'anthropic').toLowerCase();
@@ -344,12 +355,26 @@ async function _llmComplete(prompt, cfg, maxTokens = 64, role = null) {
         // content -- every judge call "malformed", every apply truncated mid-JSON.
         // Two-part fix: floor the budget at 512 (non-reasoning models stop early; cost
         // unchanged), and ask for low reasoning effort (ignored by models without it).
+        // REASONING EFFORT IS PER-ROLE (2026-08-10). 'low' used to be blanket-applied to
+        // every OpenRouter call. That was right for the reason it was added -- judge/gate
+        // ask a ONE-WORD question on a 24-64 token budget, and a reasoning model spent the
+        // whole budget thinking and returned empty (the gpt-oss-120b incident) -- but it
+        // was silently also applied to the two LONG-FORM roles. So the outreach writer was
+        // a reasoning model instructed not to think, and `apply` (structured JSON) kept
+        // coming back "unparseable": both were being starved, not misconfigured.
+        // Short verdict roles stay cheap and fast; thinking roles get to think.
+        const effort = REASONING_EFFORT[role] || 'low';
+        // Reasoning tokens count toward max_tokens on OpenRouter, so raising effort
+        // WITHOUT raising headroom just relocates the original bug -- the model thinks
+        // until the budget is gone and the visible answer truncates mid-sentence. Each
+        // effort tier carries its own floor; callers asking for more still win.
+        const floor = effort === 'high' ? 4096 : (effort === 'medium' ? 2048 : 512);
         const body = {
             model,
-            max_tokens: Math.max(maxTokens || 0, 512),
+            max_tokens: Math.max(maxTokens || 0, floor),
             messages: [{ role: 'user', content: prompt }]
         };
-        if (provider === 'openrouter') body.reasoning = { effort: 'low' };
+        if (provider === 'openrouter') body.reasoning = { effort };
         const res = await fetch(url, {
             method: 'POST',
             headers,

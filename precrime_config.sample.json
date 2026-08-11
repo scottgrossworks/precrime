@@ -24,8 +24,11 @@
   "llm": {
     "provider": "openrouter",
     "model": "anthropic/claude-haiku-4-5",
-    "_models_note": "OPTIONAL per-role overrides: route the high-volume one-word calls (judge = hot/brewing verdicts, gate = container-vendor YES/NO, apply = factlet/enrichment JSON, draft = outreach template rewrite) to a cheap fast model while `model` keeps the long-form work. Unset roles fall back to `model`.",
-    "models": {},
+    "_models_note": "OPTIONAL per-role overrides. Unset roles fall back to `model`. Roles: judge (hot/brewing verdicts, ~150-400/session, one word out), gate (container-vendor YES/NO, one word out), reason (re-contact reasons, short JSON list), apply (factlet/enrichment JSON), draft (the outreach email). SPEND ASYMMETRICALLY: judge+gate+reason are high-volume and want the cheapest fast model; draft is the LOWEST-volume call in the system (user-triggered only) and the only output a customer ever reads -- give it your best model, the cost is negligible.",
+    "_reasoning_note": "Reasoning effort is set per-role IN CODE (server/mcp/factlets.js REASONING_EFFORT), not here: draft='high', apply='medium', everything else='low'. It is not a config knob because it must stay coupled to the max_tokens floor -- on OpenRouter, hidden reasoning tokens count against max_tokens, so raising effort without raising headroom truncates the visible answer. If you point `draft` at a reasoning model it will now actually think; if you point it at a non-reasoning model the field is ignored.",
+    "models": {
+      "draft": "anthropic/claude-sonnet-5"
+    },
     "baseUrl": "https://openrouter.ai/api/v1"
   },
   "tasks": {
