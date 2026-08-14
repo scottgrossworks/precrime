@@ -118,7 +118,9 @@ this) — matches add weighted water; top glasses not recently touched → outre
 candidates, dossier carries the argument. Recency is a guard, never the key. Declined
 today → water keeps accumulating, the case gets stronger.
 **Basis:** direct: Scott's spec verbatim; the mining lane already proved the mechanics (155 sends/30d, $0).
-**Confidence:** 85% · **Complexity:** Medium · **Status:** Unexplored
+**Confidence:** 85% · **Complexity:** Medium · **Status:** **BUILT 2026-08-14, commit `00d9458`** —
+past-dated reasons expire (fixes the 0-new-reasons block), conversion-window drill rank
+(≤40d real bookings first). Semantic matching stays the MINE_REASON goose lane by design.
 
 ### 4. Inbox catcher via the INVOICER Chrome extension
 **Description:** The extension (WKG/INVOICER) already reads Gmail content and writes
@@ -126,7 +128,9 @@ leedz.sqlite. Add demand-shape detection: FB group notifications, Nextdoor diges
 Google Alert emails, Craigslist alerts, direct inquiries → extract → save as leed
 (`source: inbox`). The Santa Barbara bride email is this proposal working manually.
 **Basis:** direct: the notification email Scott received 2026-08-12; extension infrastructure exists.
-**Confidence:** 80% · **Complexity:** Medium · **Status:** Unexplored
+**Confidence:** 80% · **Complexity:** Medium · **Status:** **BUILT 2026-08-14, INVOICER commit
+`0a0e0bd`** — platform senders detected, poster-is-the-client extraction via the
+weak-identity machinery, `Booking.source='inbox'`. Reload the extension to activate.
 
 ### 5. School / PTA / permit source build-out
 **Description:** Currently ZERO school-calendar, PTA, or event-permit sources exist
@@ -135,7 +139,9 @@ out — the flagship "predicted demand" case (the prom passes the gate via scrap
 + drilled contact + predicted-evening time). Seed generator #1 with these categories;
 209 school clients already imported and waiting.
 **Basis:** direct: sources audit — the highest-signal published-calendar category is unmined.
-**Confidence:** 85% · **Complexity:** Medium · **Status:** Unexplored
+**Confidence:** 85% · **Complexity:** Medium · **Status:** **BUILT 2026-08-14, commit `356397b`** —
+Burbank USD / Glendale USD / LA City permit calendars registered through the gate
+(LAUSD 403s bots, refused); the #1 audit + VALUE_PROP-driven discovery grows the rest.
 
 ### 6. Bookers as a first-class client class
 **Description:** `Client.clientClass = host | booker`. A booker (agency, planner,
@@ -144,7 +150,9 @@ arbitrary. Same ontology, own template family ("keep me on your roster"), own ca
 (quarterly), competitor tie-break already protects them. Scrapeable, enqueueable,
 drillable with existing machinery.
 **Basis:** direct: Scott's spec; the crawler kept surfacing planner pages — the discoverable population.
-**Confidence:** 80% · **Complexity:** Medium · **Status:** Unexplored
+**Confidence:** 80% · **Complexity:** Medium · **Status:** **BUILT 2026-08-14, commit `356397b`** —
+`Client.clientClass` host|booker live in the shared schema (3,073 rows defaulted host),
+save-validated, booker roster-pitch template family, url-loop tags at capture.
 
 ### 8. Predicted fields are water (with provenance) + drills aimed at the unfillable slots
 **Description:** The prom case, made real — Scott's correction: *"we want a PREDICTIVE
@@ -160,7 +168,9 @@ DRILL_DOWN already takes `missing:[...]` — aim it at contact + location for re
 predicted events, instead of at conventions and "(untitled) — Paris". This is what
 makes #5's calendars convert.
 **Basis:** direct: Scott's prom correction 2026-08-12; DRILL_DOWN spawned on Collect-A-Con / Star Wars Celebration / Rescueverse-San-Francisco while zero private events got drilled.
-**Confidence:** 85% · **Complexity:** Medium · **Status:** Unexplored
+**Confidence:** 85% · **Complexity:** Medium · **Status:** **BUILT 2026-08-14, commit `00d9458`** —
+predicted-timing save channel (timing only, basis mandatory, provenance factlet + notes
+tag), judge weighs `(PREDICTED)` as probability, drill-down skill playbook. Tested.
 
 ### 7. PARKED — Honest containers: bookings mean real events
 **PARKED 2026-08-12.** Most invasive change in the set and not required by any other
