@@ -734,4 +734,6 @@ async function pipelineSave(id, clientId, patch, sessionId, judge, factletId) {
     return { pipelineSave };
 }
 
-module.exports = { createSaveHandler };
+// bannedTermHit/competitorHit reused by the source admission gate (sourceQueue.js) --
+// same VALUE_PROP-driven rules at both choke points, one definition.
+module.exports = { createSaveHandler, bannedTermHit, competitorHit };

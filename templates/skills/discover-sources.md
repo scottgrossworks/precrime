@@ -17,6 +17,11 @@ add_sources → complete. You never save clients/bookings. Only the tools advert
 ## Step 0 — Load task
 - `taskId = env.PRECRIME_TASK_ID`. Missing → complete `failed` `missing_task_id`, stop.
 - Read the **ASSIGNED TASK** JSON block in these instructions as `task` (do NOT call get_task). If `task.type` is not `DISCOVER_SOURCES` → complete `failed` `wrong_task_type`, stop.
+- **GOAL-DIRECTED mode:** if `task.input.channel` is set, the planner's adequacy audit
+  found that channel thin or barren — `task.input.goal` states the gap. Aim EVERY query
+  at that one channel. The goal names only the gap; WHAT to hunt (which niches, which
+  calendars, which groups) you derive from VALUE_PROP in Step 1, same as always.
+  No `task.input.channel` → normal all-channel sweep.
 
 ## Step 1 — Read VALUE_PROP (what to search for)
 `precrime__pipeline({action:"get_config"})` — returns the full VALUE_PROP profile (trade, geography, buyerRoles, audienceSegments, pitch). You have no shell tool; get_config is the only read you need.
@@ -33,6 +38,8 @@ social handles, directories.** Combine trade/buyer/geography from Step 1. Templa
 - **rss / blog (PRIORITIZE — feeds are chronically under-discovered; spend 2+ queries here when `data/sources/rss.md` is thin):** hunt ACTUAL feed URLs, not just pages. `<region> <buyer type> blog inurl:feed OR inurl:rss` · `<segment> events OR wedding OR party blog "/feed/"` · `<region> <trade> OR event entertainment blog rss` · `<buyer type> newsletter OR blog subscribe rss`. Most event/wedding/party blogs are WordPress and expose their feed at `<site>/feed/` — if a query surfaces a promising blog HOME page but no explicit feed link, register the blog URL with `/feed/` appended as an `rss` source (the scorer skips a feed that 404s, so a wrong guess is harmless).
 - **directory:** `<region> event vendor directory`  ·  `<region> <buyer type> association OR vendors list`
 - **reddit:** `site:reddit.com <region> events OR <buyer type>`
+- **fb:** `site:facebook.com groups <region> <buyer type> OR events` — public groups/pages
+  where buyers announce events and ask for vendors
 - **ig:** `site:instagram.com <region> <buyer type>`
 - **x:** `site:x.com <region> <buyer type> OR events`
 Pick the 3–5 that best fit the VALUE_PROP. Keep it bounded — this is a sweep, not a crawl.
@@ -52,7 +59,7 @@ URLs from results (and any feed/handle URLs surfaced). Skip login walls and obvi
 ## Step 4 — Classify channel + register (add_sources)
 Classify each URL to a channel by these rules (first match wins):
 - contains `/feed`, `/rss`, `feeds.`, or ends `.xml` → **rss**
-- `reddit.com` → **reddit**   ·   `instagram.com` → **ig**   ·   `x.com`/`twitter.com` → **x**   ·   `facebook.com` → **SKIP** (FB unsupported — do NOT register)
+- `reddit.com` → **reddit**   ·   `instagram.com` → **ig**   ·   `x.com`/`twitter.com` → **x**   ·   `facebook.com` → **fb** (pages/groups; the browser-driven fb lane scrapes them)
 - a vendor/association/listing/directory page → **directory**
 - a `/blog` or WordPress-style blog → **blog**
 - anything else (a normal site/page) → **website**
@@ -66,6 +73,9 @@ precrime__pipeline({ action:"add_sources", entries:[
 ]})
 ```
 Quote the returned `{ added, duplicates, invalid }` in your summary.
+The server enforces an ADMISSION GATE on every entry (live URL, in-area, buyer-side,
+not banned; rss must actually be a feed). Rejections come back in `invalid[]` with a
+reason — expected behavior, do NOT retry a rejected URL or argue with the gate.
 
 ## Step 5 — Complete
 Found sources:

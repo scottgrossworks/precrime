@@ -11,6 +11,9 @@
 
 const { createSuccessResponse, createErrorResponse } = require('./responses');
 const { logSessionEvent } = require('./sessionLog');
+const { bannedTermHit, competitorHit } = require('./saveClient');
+const { statesForZipPrefixes, detectTextStates } = require('./classification');
+const { VALUE_PROP } = require('./runtime');
 
 function createSourceQueue(deps) {
     const { sourceStore } = deps;
@@ -66,7 +69,11 @@ async function fetchUrlTextForProof(url) {
             }
         });
         const contentType = res.headers.get('content-type') || '';
-        const text = contentType.includes('text') || contentType.includes('html') || contentType.includes('json')
+        // 'xml' added 2026-08-14: RSS/Atom feeds serve application/rss+xml or
+        // application/atom+xml -- without it every real feed body was discarded
+        // and the feed-shape admission check below would reject all of them.
+        const text = contentType.includes('text') || contentType.includes('html')
+            || contentType.includes('json') || contentType.includes('xml')
             ? (await res.text()).slice(0, URL_VERIFY_TEXT_LIMIT)
             : '';
         return { ok: true, status: res.status, finalUrl: res.url || url, text };
@@ -100,7 +107,52 @@ async function verifyEvidenceUrl(url, options = {}) {
         return { ok: false, reason: `source_does_not_mention_claim_terms:${terms.slice(0, 5).join(',')}` };
     }
 
-    return { ok: true, status: fetched.status, finalUrl: fetched.finalUrl };
+    return { ok: true, status: fetched.status, finalUrl: fetched.finalUrl, text: fetched.text || '' };
+}
+
+// ============================================================================
+// SOURCE ADMISSION GATE (2026-08-14, build item #1).
+// The 158-URL pollution (out-of-state venues, seller galleries) entered through
+// add_sources: scrape workers register crawled links directly, bypassing the
+// discover-sources skill's prose rules. Fourth instance of "a rule only holds
+// in code" (banned terms, self-exclusion, competitor gate). Reuses the exact
+// gates from the save path -- VALUE_PROP-driven, zero hardcoded business terms:
+//   - banned-term / competitor(seller) match on identity text (url + label +
+//     category + fetched page <title>); buyer roles win ties, as at save time.
+//   - seller-list URL shapes: vendor directories list BEES, not honey.
+//   - out-of-area: CONFIDENT VERDICT ONLY -- reject when the identity text
+//     names states/metros and NONE fall inside the service area (derived from
+//     VALUE_PROP serviceZipPrefixes). Text silent on place = pass.
+// Returns a reason string, or null when the entry is admissible.
+// ============================================================================
+const SELLER_LIST_URL_SHAPES = [
+    /find[-_]?(a[-_]?)?vendors?/i, /vendor[-_]?director(y|ies)/i, /vendor[-_]?list/i,
+    /preferred[-_]?vendors?/i, /wedding[-_]?vendors?/i, /\/vendors?(\/|$)/i, /\/suppliers?(\/|$)/i
+];
+
+function admissionHit(entry, url, pageText) {
+    const title = pageText
+        ? ((pageText.match(/<title[^>]*>([\s\S]{0,300}?)<\/title>/i) || [])[1] || '')
+        : '';
+    const idText = [url, entry.label, entry.category, title].filter(Boolean).join(' ');
+    const banned = bannedTermHit(idText);
+    if (banned) return `banned_term:${banned}`;
+    const comp = competitorHit(idText);
+    if (comp) return `competitor_seller:${comp}`;
+    for (const re of SELLER_LIST_URL_SHAPES) {
+        if (re.test(url)) return 'seller_list_url';
+    }
+    const prefixes = (VALUE_PROP && VALUE_PROP.serviceZipPrefixes) || [];
+    if (prefixes.length) {
+        const allowed = statesForZipPrefixes(prefixes);
+        if (allowed.size) {
+            const named = detectTextStates(idText);
+            if (named.length && !named.some(s => allowed.has(s))) {
+                return `out_of_area:${named.join(',')}`;
+            }
+        }
+    }
+    return null;
 }
 
 
@@ -233,12 +285,31 @@ async function pipelineAddSources(id, entries) {
             results.invalid.push({ entry: e, reason: 'url normalized to empty' });
             continue;
         }
+        let pageText = '';
         if (URL_VERIFY_CHANNELS.has(e.channel)) {
             const verification = await verifyEvidenceUrl(url);
             if (!verification.ok) {
                 results.invalid.push({ entry: e, url, reason: `url_verification_failed:${verification.reason}` });
                 continue;
             }
+            pageText = verification.text || '';
+            // rss must actually BE a feed -- a blog home page registered as rss
+            // burns the scorer forever. Shape check only (recent-item dates vary
+            // too much to gate on; confident-verdict-only philosophy).
+            if (e.channel === 'rss' && !/<rss[\s>]|<feed[\s>]|<rdf:/i.test(pageText)) {
+                results.invalid.push({ entry: e, url, reason: 'not_a_feed' });
+                continue;
+            }
+        }
+        // ADMISSION GATE (2026-08-14): in-area + buyer-side + not-banned, enforced
+        // server-side for EVERY caller. discoveredFrom rides into the log so the
+        // polluting worker is identifiable.
+        const refusal = admissionHit(e, url, pageText);
+        if (refusal) {
+            results.invalid.push({ entry: e, url, reason: `admission_refused:${refusal}` });
+            console.error(`[MCP] add_sources REFUSED ${url} (${refusal})`
+                + (e.discoveredFrom ? ` discoveredFrom=${e.discoveredFrom}` : ''));
+            continue;
         }
         verified.push({
             url,

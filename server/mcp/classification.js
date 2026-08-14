@@ -374,4 +374,5 @@ function eventClassRank(booking) {
     return cls === 'private' ? 0 : (cls === 'container' ? 3 : 1);
 }
 
-module.exports = { classify, isGenericEmail, isOrgName, classifyEventClass, eventClassRank };
+module.exports = { classify, isGenericEmail, isOrgName, classifyEventClass, eventClassRank,
+    statesForZipPrefixes, detectTextStates };   // reused by the source admission gate (sourceQueue.js)

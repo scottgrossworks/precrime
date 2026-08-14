@@ -2885,9 +2885,59 @@ async function pipelinePlanTasksInner(id, args) {
         }
 
         // ---------- Stage 7: DISCOVER_SOURCES ----------
-        // Discovery is LAST because it creates more input. Only fires when the
-        // funnel is empty: no hot work, no judge work, no apply / enrich /
-        // scrape backlog, and no claimable Sources waiting.
+        // (2026-08-14, build item #1d) Discovery is queueable plumbing, not a
+        // config chore. Two triggers:
+        // (a) ADEQUACY AUDIT -- every pass, regardless of funnel busyness
+        //     (background discovery, Scott 2026-08-14): a channel that is thin
+        //     (few sources ready to scrape) or barren (nothing yielded in the
+        //     window) gets ONE goal-directed DISCOVER_SOURCES {channel, goal}.
+        //     The goal text names only the GAP; the worker derives WHAT to hunt
+        //     from VALUE_PROP at run time -- no business-specific source
+        //     categories in code. Worst (fewest-ready) channel first; one open
+        //     goal-directed task per channel; createTask keeps it budget-capped.
+        // (b) fallback: the original funnel-empty generic discovery, its
+        //     suppression rules unchanged.
+        // Both respect shouldPlanDiscovery (a user "factlets only" focus pauses
+        // discovery entirely -- that is a directive, not funnel busyness).
+        if (shouldPlanDiscovery) {
+            const AUDIT_MIN_READY = 3;      // fewer scrapeable sources than this = thin
+            const AUDIT_WINDOW_DAYS = 14;   // no clients from the channel in this window = barren
+            const health = sourceStore.channelHealth(AUDIT_WINDOW_DAYS);
+            const openDisc = await prisma.task.findMany({
+                where: { type: 'DISCOVER_SOURCES', status: { in: ['ready', 'claimed'] } },
+                select: { input: true }
+            });
+            const openChannels = new Set(openDisc.map(t => {
+                try { return JSON.parse(t.input || '{}').channel || null; } catch (_) { return null; }
+            }).filter(Boolean));
+            const gaps = [];
+            for (const [ch, h] of Object.entries(health)) {
+                if (openChannels.has(ch)) continue;
+                if (h.ready < AUDIT_MIN_READY) {
+                    gaps.push({ ch, why: `only ${h.ready} source(s) ready to scrape `
+                        + `(floor ${AUDIT_MIN_READY}; ${h.cooling} cooling, ${h.total} total)` });
+                } else if (h.foundInWindow === 0) {
+                    gaps.push({ ch, why: `${h.total} source(s) but 0 clients found in ${AUDIT_WINDOW_DAYS}d` });
+                }
+            }
+            if (gaps.length) {
+                gaps.sort((a, b) => health[a.ch].ready - health[b.ch].ready);
+                const g = gaps[0];
+                const row = await createTask('DISCOVER_SOURCES', {
+                    targetType: 'none',
+                    input: {
+                        channel: g.ch,
+                        goal: `Channel "${g.ch}" is inadequate: ${g.why}. Brainstorm from `
+                            + `VALUE_PROP and register NEW in-area, buyer-side, `
+                            + `demand-bearing ${g.ch} sources.`
+                    }
+                });
+                if (row) {
+                    logInfo(`discovery audit: channel "${g.ch}" -- ${g.why}; enqueued goal-directed DISCOVER_SOURCES`);
+                    suppressed.add('DISCOVER_SOURCES');   // audit task planned; skip the generic fallback
+                }
+            }
+        }
         if (!suppressed.has('DISCOVER_SOURCES') && shouldPlanDiscovery) {
             const ckDisc = await createBudget('DISCOVER_SOURCES');
             if (ckDisc.eff > 0) {

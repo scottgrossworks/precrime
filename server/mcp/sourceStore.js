@@ -120,9 +120,20 @@ function createSourceStore({ root }) {
     // PERSISTED SCRAPE RECENCY (2026-07-14): scrapedThisRun is per-process, so every
     // restart made readySources hand out the SAME first-N sources in file order --
     // restart-heavy use re-scraped the same 3 directories forever while fb/ig (late in
-    // file order) never surfaced. This sidecar maps dedupKey -> lastScrapedAt epoch ms;
+    // file order) never surfaced. This sidecar maps dedupKey -> scrape state;
     // readySources prefers never-scraped, then longest-ago. Markdown files stay the
     // single source of truth for WHAT the sources are; this file only records WHEN.
+    //
+    // YIELD-AWARE COOLDOWN (2026-08-14, Scott's rule): once discovered and processed,
+    // a source must NOT be re-scraped over and over re-finding the same clients.
+    // Sidecar values are now { at, found } (pre-2026-08-14 entries are bare epoch-ms
+    // numbers; stateOf() reads both). A source is only re-offered after its cooldown:
+    // fertile (yielded clients last scrape) comes back quickly -- fresh demand appears
+    // on live channels -- while barren waits out a long fallow period. When every
+    // source of a channel is cooling, the queue reads EMPTY and the planner's
+    // discovery audit hunts NEW sources instead of re-grinding old ones.
+    const FERTILE_COOLDOWN_MS = 2 * 24 * 60 * 60 * 1000;    // yielded -> re-sense in 2d
+    const BARREN_COOLDOWN_MS = 14 * 24 * 60 * 60 * 1000;    // yielded nothing -> 14d fallow
     const scrapeStatePath = path.resolve(root, 'data', '.source_scrape_state.json');
     let scrapeState = {};
     function loadScrapeState() {
@@ -131,6 +142,17 @@ function createSourceStore({ root }) {
     }
     function saveScrapeState() {
         try { fs.writeFileSync(scrapeStatePath, JSON.stringify(scrapeState)); } catch (_) {}
+    }
+    function stateOf(key) {
+        const v = scrapeState[key];
+        if (v == null) return { at: 0, found: 0 };
+        if (typeof v === 'number') return { at: v, found: 0 };   // legacy bare timestamp
+        return { at: v.at || 0, found: v.found || 0 };
+    }
+    function inCooldown(key, now) {
+        const s = stateOf(key);
+        if (!s.at) return false;
+        return (now - s.at) < (s.found > 0 ? FERTILE_COOLDOWN_MS : BARREN_COOLDOWN_MS);
     }
 
     function fullPath(channel) {
@@ -214,8 +236,10 @@ function createSourceStore({ root }) {
         if (channel && !VALID_CHANNELS.has(channel)) {
             return { status: 'INVALID_CHANNEL', channel };
         }
+        const now = Date.now();
         for (const entry of index.values()) {
             if (entry.scrapedThisRun || entry.claimed) continue;
+            if (inCooldown(dedupKey(entry.url), now)) continue;   // yield-aware fallow (2026-08-14)
             if (channel) {
                 if (entry.channel !== channel) continue;
             } else if (BROWSER_ONLY_CHANNELS.includes(entry.channel)) {
@@ -247,15 +271,17 @@ function createSourceStore({ root }) {
         // first (0), then longest-ago-scraped. This is what gives every source -- fb/ig
         // included -- a fair turn across restarts, instead of file-order-forever.
         const candidates = [];
+        const now = Date.now();
         for (const entry of index.values()) {
             if (entry.scrapedThisRun || entry.claimed) continue;
+            if (inCooldown(dedupKey(entry.url), now)) continue;   // yield-aware fallow (2026-08-14)
             if (only && !only.has(entry.channel)) continue;
             if (skipChan.has(entry.channel)) continue;
             if (exclude.has(dedupKey(entry.url))) continue;
             candidates.push(entry);
         }
         candidates.sort((a, b) =>
-            (scrapeState[dedupKey(a.url)] || 0) - (scrapeState[dedupKey(b.url)] || 0));
+            stateOf(dedupKey(a.url)).at - stateOf(dedupKey(b.url)).at);
         const picked = [];
         for (const entry of candidates) {
             if (picked.length >= limit) break;
@@ -277,7 +303,8 @@ function createSourceStore({ root }) {
         entry.claimed = false;
         entry.clientsFound = clientsFound;
         entry.lastError = failedReason;
-        scrapeState[dedupKey(url)] = Date.now();
+        // { at, found }: the yield drives the re-scrape cooldown (2026-08-14).
+        scrapeState[dedupKey(url)] = { at: Date.now(), found: clientsFound };
         saveScrapeState();
         return { status: 'MARKED', url: entry.url, clientsFound, failedReason };
     }
@@ -300,7 +327,34 @@ function createSourceStore({ root }) {
         return { byChannel, total, unscraped };
     }
 
-    return { load, addSources, nextSource, readySources, markSource, counts };
+    // Per-channel adequacy view for the planner's discovery audit (2026-08-14).
+    // ready = scrapeable RIGHT NOW (unclaimed, unscraped this run, off cooldown);
+    // cooling = benched by the yield cooldown; foundInWindow = clients this
+    // channel yielded in the last windowDays. The audit reads NUMBERS only --
+    // what to hunt for a thin channel is the discovery worker's VALUE_PROP
+    // decision at run time, never a category hardcoded here.
+    function channelHealth(windowDays = 14) {
+        const now = Date.now();
+        const windowStart = now - windowDays * 24 * 60 * 60 * 1000;
+        const health = {};
+        for (const channel of Object.keys(CHANNEL_FILES)) {
+            health[channel] = { total: 0, ready: 0, cooling: 0, foundInWindow: 0 };
+        }
+        for (const entry of index.values()) {
+            const h = health[entry.channel];
+            if (!h) continue;
+            h.total++;
+            const key = dedupKey(entry.url);
+            const s = stateOf(key);
+            if (s.at >= windowStart) h.foundInWindow += s.found;
+            if (entry.scrapedThisRun || entry.claimed) continue;
+            if (inCooldown(key, now)) { h.cooling++; continue; }
+            h.ready++;
+        }
+        return health;
+    }
+
+    return { load, addSources, nextSource, readySources, markSource, counts, channelHealth };
 }
 
 module.exports = {

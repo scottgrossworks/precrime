@@ -42,8 +42,9 @@
       "SHARE_BOOKING": 3,
       "DRAFT_OUTREACH": 5
     },
+    "_discover_note": "2026-08-14: sessionBudgets.DISCOVER_SOURCES is 3 (not 1) so the planner's per-channel adequacy audit can stock more than one thin channel per session. NEVER 0.",
     "sessionBudgets": {
-      "DISCOVER_SOURCES": 1,
+      "DISCOVER_SOURCES": 3,
       "SCRAPE_SOURCE": 25,
       "APPLY_FACTLET": 200,
       "ENRICH_CLIENT": 50,
