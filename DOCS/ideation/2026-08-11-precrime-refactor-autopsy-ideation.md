@@ -8,6 +8,31 @@ mode: repo-grounded
 
 # Ideation v2: PRECRIME Refactor — The Water-in-Glass Model
 
+## START HERE (cold session)
+
+Read in this order before touching code:
+1. `DOCS/Claude.md` — hard rules. Simplicity first, surgical changes, READ THE CODE
+   don't assume, no architectural overthinking, monolith LOC goes DOWN.
+2. `DOCS/FOUNDATION.md` — the demand-signal doctrine.
+3. `DOCS/HANDOFF_2026-08-10.md` — architecture, data state, standing rules, and the
+   log of what was already fixed. **Do not re-fix anything listed there.**
+4. This document — the work queue. The doctrine section governs; the BUILD ORDER
+   table sequences; each item names its own entry points.
+
+**Two trees, edit BOTH.** Source of truth / git repo: `WKG/PRECRIME`. Deployed and
+running: `WKG/TDS/precrime`. Workflow: edit in TDS → `node --check` + live smoke test
+→ hash-verify sync to PRECRIME (`diff -q`) → commit + push from PRECRIME. Also update
+the masters in `WKG/TDS/TMP/` when touching `precrime_config.json`, `VALUE_PROP.md`,
+or `data/sources/*.md` — `deploy.bat` restores from there and will silently revert you.
+
+**Shared DB:** `WKG/SCHEMA/data/leedz.sqlite` (Prisma via `leedz-db`). Running
+`node server/mcp/mcp_server.js` by hand resolves the WRONG DB — `precrime.bat` is what
+sets `DATABASE_URL`. Never write datetimes through raw SQL (mixed-type corruption).
+
+**Verify before you build:** every "X doesn't exist" claim below was true on
+2026-08-12. Re-check against the code — several v2 items shrank once the code was
+actually read (see #1).
+
 ## The doctrine (Scott, 2026-08-12 — this section governs everything below)
 
 **Every client is a glass, created empty. Every relevant fact is weighted water,**
@@ -157,6 +182,28 @@ enrichment selection needs a client-centric query.
   never wrong; the plumbing never ran on the right targets") and threw away 5 months of
   correct architecture over gaps that are plumbing bugs. The hot gate is not the
   problem; unfilled slots are. Do not re-propose.
+
+## Entry points (verified 2026-08-12 — re-check before editing)
+
+| Item | Files / symbols |
+|---|---|
+| **#1** gate | `server/mcp/sourceQueue.js` → `pipelineAddSources` (the choke point; wired at `mcp_server.js:306`) · `server/mcp/sourceStore.js` (channel files, `readySources`) · `skills/discover-sources.md` (delete the `facebook.com → SKIP` line) · `precrime_config.json` `tasks.limits/sessionBudgets.DISCOVER_SOURCES` · planner Stage 7 in `mcp_server.js` for the adequacy audit. Copy the enforcement pattern from `saveClient.js` `bannedTermHit` / `competitorHit`. |
+| **#2** demand-RSS | `rss/rss-scorer-mcp/rss_config.json` (keywords already derive from VALUE_PROP) · `data/sources/rss.md` · `server/mcp/chromeBridge.js` (:12306) for the Google-Alerts setup task |
+| **#3** selector | planner Stage 5 in `mcp_server.js:2632` (client selection query) · `server/mcp/factletMatch.js` `candidateClientIdsForFactlet` (the semantic matcher — this IS the engine) · `server/mcp/reasons/ReasonGenerator.js` + `ReasonPlanner.js` |
+| **#4** inbox | `WKG/INVOICER` extension (already reads Gmail, already writes `leedz.sqlite` via the local server) |
+| **#5** school/permit | no new code — discovery goals fed to #1's generator; 209 school clients already imported |
+| **#6** Bookers | `WKG/SCHEMA/schema.prisma` (`Client.clientClass`) then regenerate `leedz-db` · `server/mcp/saveClient.js` · `server/mcp/workers/DRAFT_PROMPT.json` + VALUE_PROP for the booker template family |
+| **#7** containers | `saveClient.js:26` `buildSeedBooking` (stop minting) · Stage 5 selection must go client-centric first |
+| **#8** predicted water | `server/mcp/classification.js:160` `classify()` (predicted ≠ missing) · `server/mcp/factlets.js:404` `judgeLeed` (weigh prediction + provenance) · Stage 4.5 `mcp_server.js:2460` (drill targeting) |
+
+## Done — do NOT re-fix (2026-08-10 → 08-12)
+Tavily budgets un-zeroed · mining rotates (`ReasonPlanner.REHUNT_HOURS`) · LAST_30_DAYS
+pipe deadlock (`ProceduralWorker.runCli` stdout discard + 240s kill) · reddit reserved
+scrape slot (Stage 6) · DRILL_CONTAINER container-only allow-list (Stage 4.6) ·
+competitor gate + 41 competitor clients purged · bounce → email-hunt drill (terminal
+rows never swept) · enrichment stops on barren snippet · datetime columns normalized ·
+draft role → `claude-sonnet-5` at `REASONING_EFFORT` high · sources purged twice
+(directory 177→19, website 161→57) + TMP masters synced.
 
 ## Standing constraints (violations = rework)
 No Thumbtack/GigSalad/TheBash/Bark — ever. No reply/outcome tracking. Drafting stays
