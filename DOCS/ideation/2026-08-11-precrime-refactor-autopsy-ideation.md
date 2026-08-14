@@ -1,6 +1,6 @@
 ---
 date: 2026-08-11
-updated: 2026-08-12 (v2 — corrected to Scott's water-in-glass model; v1 ideas superseded where marked)
+updated: 2026-08-12 (v2.1 — code-verified against discover-sources.md; build order fixed; #7 parked)
 topic: precrime-refactor-autopsy
 focus: why 5 months produced no results; refactor to FOUNDATION.md + the private-booking goal without losing what works
 mode: repo-grounded
@@ -35,17 +35,38 @@ pipe-deadlocked its whole life, sources self-polluted with out-of-state seller p
 completeness before anything could be called hot. The model was never wrong; the
 plumbing never ran on the right targets.
 
-## Build list (ranked)
+## BUILD ORDER
 
-### 1. Source admission gate + smart source generator
-**Description:** One code chokepoint through which EVERY source enters (crawler-found
-or LLM-proposed): in service area, buyer-side, demand-bearing — or refused. Paired
-with an LLM generator that brainstorms sources from VALUE_PROP + geography ("LA
-quinceañera FB groups", "SFV parent groups", school/PTA calendars, permit feeds) —
-names no human would think of. Machine proposes, machine vets, code decides. No manual
-approval (standing rule). Link-following alone is not discovery.
-**Basis:** direct: 158 out-of-state seller URLs self-appended in 48h, purged by hand twice.
-**Confidence:** 90% · **Complexity:** Low–Medium · **Status:** Unexplored
+Item numbers below are stable IDs, not sequence. Build in this order:
+
+| Increment | Items | Goal |
+|---|---|---|
+| **1 — make it run** | #1, #2 | In-area demand sources actually enter and get read |
+| **2 — make it smart** | #3, #8 | Right client, right day, defensible reason; predicted events reach the gate |
+| **3 — widen the net** | #5, #6, #4 | School/permit calendars, Bookers, inbox demand |
+| **parked** | #7 | See item |
+
+NOTHING IS INVERTED. The architecture and FOUNDATION doctrine stand. Every item below
+makes an existing component do the job it was designed for.
+
+## Build list
+
+### 1. Server-side source admission gate (+ un-break the FB channel)
+**Description:** SMALLER THAN v2 IMPLIED — code-verified 2026-08-12: the smart generator
+already exists. `skills/discover-sources.md` already reads VALUE_PROP, already makes
+geography MANDATORY in every query, already prioritizes hunting real RSS feed URLs, and
+already refuses other metros' pages. The pollution never came through it — scrape
+workers register crawled links directly, bypassing the skill's rules. So the work is:
+(a) enforce area + buyer-side + demand-bearing in the server's `add_sources` handler —
+same choke-point pattern as banned-terms / competitor / self-exclusion gates, the fourth
+instance of "a rule only holds in code"; (b) **delete the stale `facebook.com → SKIP
+(FB unsupported)` rule in the skill** — chromeScrape has driven FB since July, and that
+one line blocks the entire FB-group channel where the Santa Barbara bride lives;
+(c) raise DISCOVER_SOURCES budget off 1/session; (d) planner wake-up adequacy audit —
+channel thin or yieldless → auto-enqueue `DISCOVER_SOURCES {channel, goal}` (mandatory,
+per Scott: discovery is queueable plumbing, not a config chore).
+**Basis:** direct: 158 out-of-state seller URLs self-appended in 48h, purged by hand twice; discover-sources.md read in full 2026-08-12.
+**Confidence:** 90% · **Complexity:** Low · **Status:** Unexplored
 
 ### 2. Demand-RSS wiring: Reddit search feeds + Google Alerts into the existing scorer
 **Description:** The rss-scorer (55-min cron, VALUE_PROP keywords) exists but reads 6
@@ -93,7 +114,26 @@ drillable with existing machinery.
 **Basis:** direct: Scott's spec; the crawler kept surfacing planner pages — the discoverable population.
 **Confidence:** 80% · **Complexity:** Medium · **Status:** Unexplored
 
-### 7. Honest containers: bookings mean real events
+### 8. Predicted fields are water (with provenance) + drills aimed at the unfillable slots
+**Description:** The prom case, made real — Scott's correction: *"we want a PREDICTIVE
+system — some of the fields are predicted. The demand is predicted. The goal is to
+predict with high probability, with supporting evidence (factlets)."* Two halves.
+(a) **Predicted values count, tagged as predictions**: `startTime: "19:00"` +
+provenance factlet ("school dances run evenings") fills the slot; classify stops
+reporting it as missing; the judge weighs prediction + supporting factlets as
+probability, not as fact. HARD LINE: predictions may fill *timing and likelihood* only
+— location and contact are scraped or blank, NEVER synthesized (a prom may be at a
+banquet hall, not the school). (b) **Drills target what prediction cannot fill**:
+DRILL_DOWN already takes `missing:[...]` — aim it at contact + location for real
+predicted events, instead of at conventions and "(untitled) — Paris". This is what
+makes #5's calendars convert.
+**Basis:** direct: Scott's prom correction 2026-08-12; DRILL_DOWN spawned on Collect-A-Con / Star Wars Celebration / Rescueverse-San-Francisco while zero private events got drilled.
+**Confidence:** 85% · **Complexity:** Medium · **Status:** Unexplored
+
+### 7. PARKED — Honest containers: bookings mean real events
+**PARKED 2026-08-12.** Most invasive change in the set and not required by any other
+item: the fake rows make reports lie, they do not stop the engine. Revisit after
+increments 1–3 are running. Prereq inventory already done (below) so it can start cold.
 **Description:** Stop minting "(seed)" stubs; work-tickets live in the task layer;
 recall/rebooking attention keys off client fields + semantic selection (#3), not fake
 bookings. Purge the 1,478 stubs + synthetic-date rows. Prereq check confirmed:
@@ -112,6 +152,11 @@ enrichment selection needs a client-centric query.
 - ~~Hunt referrers (as strategy pivot)~~ — became #6, a taxonomy feature, not a pivot.
 - ~~Recall wheel (bare date column)~~ — subsumed into #3; selection must be semantic,
   not recency arithmetic alone.
+- ~~"The architecture is inverted / stop optimizing for completeness"~~ — PROPOSED AND
+  STRICKEN 2026-08-12. It contradicted this document's own finding ("the model was
+  never wrong; the plumbing never ran on the right targets") and threw away 5 months of
+  correct architecture over gaps that are plumbing bugs. The hot gate is not the
+  problem; unfilled slots are. Do not re-propose.
 
 ## Standing constraints (violations = rework)
 No Thumbtack/GigSalad/TheBash/Bark — ever. No reply/outcome tracking. Drafting stays
