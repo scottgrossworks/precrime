@@ -405,7 +405,11 @@ async function judgeLeed(vp, dossier, booking, mode, cfg) {
     if (!cfg || !cfg.llmApiKey) return { state: 'brewing', reason: 'no_llm_key' };
     const modeGuidance = (PROMPTS.judgeMode && (PROMPTS.judgeMode[mode] || PROMPTS.judgeMode.outreach)) || '';
     const isoDate = booking.startDate ? new Date(booking.startDate).toISOString().slice(0, 10) : '';
-    const bookingLine = `title ${booking.title || ''} | date ${isoDate} | location ${booking.location || ''} | trade ${booking.trade || ''} | notes ${String(booking.notes || '').slice(0, 500)}`;
+    // startTime carries its prediction marker (2026-08-14, build item #8): a
+    // [predicted:startTime] tag in notes means the time is a PROBABILITY backed by a
+    // provenance factlet, not a scraped fact -- the prompt tells the judge how to weigh it.
+    const stPredicted = String(booking.notes || '').includes('[predicted:startTime]');
+    const bookingLine = `title ${booking.title || ''} | date ${isoDate} | startTime ${booking.startTime || ''}${stPredicted ? ' (PREDICTED)' : ''} | location ${booking.location || ''} | trade ${booking.trade || ''} | notes ${String(booking.notes || '').slice(0, 500)}`;
     // TOKEN DIET: this is the highest-volume LLM call (per hot-eligible booking, judge
     // budget 400/session). Send ONLY the fit-relevant VP fields, compact JSON (the old
     // full pretty-printed VP wasted ~half the prompt on indentation + signature /

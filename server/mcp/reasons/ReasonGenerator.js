@@ -93,6 +93,25 @@ async function maybeGenerateReasons(staleCutoff, logInfo) {
         if (newest && (Date.now() - new Date(newest.createdAt).getTime()) < COOLDOWN_HOURS * 3600000) {
             return 0;
         }
+        // PAST-DATED REASONS ARE DEAD WATER (2026-08-14, build item #3). A seasonal
+        // reason carries its literal date ("Halloween is 2026-10-31"); once every
+        // date in it has passed, the reason can never justify TODAY's outreach --
+        // but it sat in the live window for 60 days blocking its own successor via
+        // the similarity dedup below (observed: 19 stale reasons, 0 new ones ever
+        // created). Same rule as fedfd74: past-event factlets are DELETED, not
+        // zero-scored. Dateless reasons (trajectory/referral) age out normally.
+        const todayIso = new Date().toISOString().slice(0, 10);
+        const expired = (await prisma.factlet.findMany({
+            where: { source: { startsWith: REASON_SOURCE_PREFIX } },
+            select: { id: true, content: true }
+        })).filter(f => {
+            const dates = String(f.content || '').match(/\b20\d{2}-\d{2}-\d{2}\b/g);
+            return dates && dates.length && dates.every(d => d < todayIso);
+        });
+        if (expired.length) {
+            await prisma.factlet.deleteMany({ where: { id: { in: expired.map(f => f.id) } } });
+            log(`CLIENT MINING: ${expired.length} past-dated reason(s) expired and deleted -- fresh seasonal reasons can now generate.`);
+        }
         const raw = await llmComplete(buildPrompt(), RUNTIME_CONFIG, 900, 'reason');
         const proposed = parseReasons(raw);
         if (!proposed.length) {

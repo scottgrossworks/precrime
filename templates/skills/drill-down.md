@@ -67,6 +67,12 @@ Work only the codes in `missing`. Per code:
 - **`client_email_generic` / `client_email`** (need a direct, non-role address — see the PRIME DIRECTIVE above; this is the code you work FIRST and hardest): search the org's official site → its `contact` / `about` / `team` / `staff` page (`tavily__tavily_extract`) → LinkedIn / socials for the named decision-maker (events director, booking manager, coordinator). Goal: a real personal/role address like `jane@company.com`, NOT `info@`/`events@`.
 - **`client_name` / `client_name_not_person`** (need a real PERSON, not an org/team): find the named decision-maker on the org's staff/about page or LinkedIn; capture their name (and email if it appears).
 - **`start_date` / `start_time` / `start_date_not_future_enough`** (need the event date): find the event's OWN listing/registration page and copy the **verbatim** date/time text. Do not invent dates.
+  **PREDICTED TIME (timing ONLY):** when the DATE is scraped but the page publishes no start
+  time, and the event type has an obvious conventional time (school dance → evening, gala →
+  evening, kids' party → afternoon), you may save `predicted:{ startTime:"19:00", basis:"<one
+  line of evidence, e.g. school dances run evenings>" }` inside that booking's patch entry.
+  The server tags it as a prediction and records the basis as provenance. HARD LINE: timing
+  only — location, zip, contact, and dates are scraped or left blank, NEVER predicted.
 - **`location_with_zip`** (need venue + zip): find the venue on the event page or the venue's own site; capture the address incl. 5-digit zip (or the city to geocode).
 - **`title`**: capture the event/opportunity name from the page.
 - **`booking`** (CLIENT target only — there is no event yet): research the org (its site, events/calendar page, or an event listing/registration page) for ONE UPCOMING public event it is hosting or attending that fits the trade. Capture the event's **verbatim** date/time text, venue + 5-digit zip, and title. Pair it with the contact from `client_email` above. No qualifying FUTURE event found → leave it (do NOT invent one); saving just the contact is still progress.

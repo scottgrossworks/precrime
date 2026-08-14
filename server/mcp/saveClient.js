@@ -571,6 +571,52 @@ async function pipelineSave(id, clientId, patch, sessionId, judge, factletId) {
                     if (b[f] !== undefined) bookingData[f] = b[f];
                 }
 
+                // PREDICTED TIMING CHANNEL (2026-08-14, build item #8). Scott's spec:
+                // "we want a PREDICTIVE system -- some of the fields are predicted...
+                // with supporting evidence (factlets)." A worker may propose
+                //   predicted: { startTime: "19:00", basis: "<one line of evidence>" }
+                // HARD LINE: predictions may fill TIMING ONLY. Location and contact
+                // are scraped or blank, NEVER synthesized (a prom may be at a banquet
+                // hall, not the school) -- any other key is refused loudly. A
+                // prediction never overwrites a scraped value (patch or DB). Each
+                // accepted prediction leaves provenance: a [predicted:<field>] tag in
+                // notes (the judge reads it as probability, not fact) + a
+                // 'prediction:<field>' factlet carrying the basis.
+                if (b.predicted && typeof b.predicted === 'object') {
+                    const PREDICTABLE = new Set(['startTime', 'endTime']);
+                    const basis = String(b.predicted.basis || '').trim();
+                    // Existing row's values, so an update never clobbers scraped data.
+                    const existingRow = b.id
+                        ? await tx.booking.findUnique({ where: { id: b.id },
+                            select: { startTime: true, endTime: true, title: true, notes: true } })
+                        : null;
+                    for (const [k, v] of Object.entries(b.predicted)) {
+                        if (k === 'basis') continue;
+                        if (!PREDICTABLE.has(k)) {
+                            console.error(`[save] PREDICTION REFUSED "${k}" -- predictions fill timing`
+                                + ` and likelihood ONLY; location and contact are scraped or blank, never synthesized.`);
+                            continue;
+                        }
+                        const val = String(v || '').trim();
+                        if (!val || !basis) {
+                            if (val) console.error(`[save] PREDICTION REFUSED "${k}" -- no basis given; a prediction without evidence is a fabrication.`);
+                            continue;
+                        }
+                        if (bookingData[k] !== undefined || (existingRow && existingRow[k])) continue;   // scraped wins
+                        bookingData[k] = val;
+                        const tag = `[predicted:${k}]`;
+                        const baseNotes = bookingData.notes !== undefined
+                            ? bookingData.notes : ((existingRow && existingRow.notes) || '');
+                        if (!String(baseNotes || '').includes(tag)) {
+                            bookingData.notes = `${baseNotes ? baseNotes + ' ' : ''}${tag}`;
+                        }
+                        await tx.factlet.create({ data: {
+                            content: `PREDICTED ${k}=${val} for "${bookingData.title || (existingRow && existingRow.title) || '(untitled)'}": ${basis}`,
+                            source: `prediction:${k}`
+                        } });
+                    }
+                }
+
                 // SINGLE-TRADE BUSINESS: a booking is an opportunity to sell OUR service, so its
                 // trade is ALWAYS the VALUE_PROP trade (e.g. caricatures) -- never the vendor's own
                 // business at the event. Container/drill workers kept writing the event-vendor trade

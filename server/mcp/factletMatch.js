@@ -201,10 +201,16 @@ async function computeNearHotBookings() {
             eventClass: classification.classifyEventClass(b)
         });
     }
-    // Class first (private beats container-derived no matter what), then closeness
-    // (fewest missing), then urgency (soonest event). DRILL_DOWN budget drains this
-    // list top-down, so the ordering IS the spend priority.
-    ranked.sort((a, b) => (a.classRank - b.classRank) || (a.missingCount - b.missingCount) || (a.daysToEvent - b.daysToEvent));
+    // Class first (private beats container-derived no matter what), then the
+    // CONVERSION WINDOW (2026-08-14, build item #3a: a real booking inside ~40
+    // days is TODAY's work -- buyers book 3-14 weeks out, so an event past the
+    // window can wait; one inside it cannot), then closeness (fewest missing),
+    // then urgency (soonest event). DRILL_DOWN budget drains this list top-down,
+    // so the ordering IS the spend priority.
+    const CONVERSION_WINDOW_DAYS = 40;
+    const inWindow = (r) => r.daysToEvent <= CONVERSION_WINDOW_DAYS ? 0 : 1;
+    ranked.sort((a, b) => (a.classRank - b.classRank) || (inWindow(a) - inWindow(b))
+        || (a.missingCount - b.missingCount) || (a.daysToEvent - b.daysToEvent));
     return ranked;
 }
 
