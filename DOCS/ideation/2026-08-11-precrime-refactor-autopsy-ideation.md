@@ -104,7 +104,10 @@ vendor blogs — industry content, zero demand. Swap in demand feeds: Reddit sea
 Alerts delivered as RSS (free). Craigslist has no public RSS — saved-search email
 alerts route to the inbox catcher (#4) instead.
 **Basis:** direct: rss_config.json audit; the SB-bride class of post exists and announces itself.
-**Confidence:** 85% · **Complexity:** Low · **Status:** Unexplored
+**Confidence:** 85% · **Complexity:** Low · **Status:** **BUILT 2026-08-14** — 6 vendor blogs
+out, 6 reddit demand search feeds in (via the #1 gate); scorer got a descriptive UA + 2s
+inter-feed gap (reddit 429s defaults). OPEN: Google Alerts RSS needs Scott's Google
+account (create alerts → deliver-to RSS → register via add_sources). Details HANDOFF §4e.
 
 ### 3. Daily sweep + semantic "why this client, why now" selector
 **Description:** Every morning: (a) real bookings with `startDate − today ≤ ~40d`, not

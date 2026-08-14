@@ -28,7 +28,9 @@ const __dirname = dirname(__filename);
 
 // Load configuration (scoring params, keywords, blacklist)
 const CONFIG = JSON.parse(readFileSync(join(__dirname, 'rss_config.json'), 'utf8'));
-const parser = new Parser();
+// Descriptive UA (2026-08-14, build item #2): reddit search feeds throttle the
+// default 'rss-parser' UA hard (429). Reddit's own guidance: unique descriptive UA.
+const parser = new Parser({ headers: { 'User-Agent': 'precrime-rss-scorer/1.0 (demand-sensing RSS reader)' } });
 
 // Load feeds from the skill's human-editable source list.
 // Single source of truth — never duplicate feed lists into JSON.
@@ -235,6 +237,9 @@ async function getTopArticles(limit = 6, feedUrlOverride = null) {
     const feedConfig = feedsToProcess[i];
     try {
       console.error(`[${i+1}/${totalFeeds}] ${feedConfig.name}...`);
+      // 2s gap between feeds (2026-08-14): several feeds now live on the same
+      // host (reddit search feeds); back-to-back fetches trip its rate limit.
+      if (i > 0) await new Promise(r => setTimeout(r, 2000));
       const feed = await fetchFeed(feedConfig);
       if (!feed) { diag.feedsFailed++; continue; }
       diag.feedsFetched++;
