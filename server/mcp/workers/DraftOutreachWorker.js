@@ -90,12 +90,18 @@ async function run(task, deps) {
     // Anniversary re-book (Stage 1, 2026-08-09): a PAST booking means this is a
     // re-hire pitch -- reference the history, target this year's occasion.
     const isRehire = booking.startDate && new Date(booking.startDate) < new Date();
+    // Booker template family (2026-08-14, build item #6): clientClass='booker'
+    // switches the rewrite mandate to the roster pitch. Same skeleton, same
+    // seller facts, different ask -- see DRAFT_PROMPT.bookerRule.
+    const isBooker = client.clientClass === 'booker';
     const prompt = fillPrompt(DRAFT_PROMPT.lines, {
         trade:       (VALUE_PROP && VALUE_PROP.trade) || 'events',
         rehireLine:  isRehire ? fillPrompt(DRAFT_PROMPT.rehireRule, { pastTitle: booking.title || 'their event', pastDate: isoDate }) : '',
+        bookerLine:  isBooker ? DRAFT_PROMPT.bookerRule : '',
         sampleEmail: tpl,
         leadData:    JSON.stringify({
             contactName: client.name, company: client.company, email: client.email,
+            clientClass: client.clientClass || 'host',
             event: booking.title, date: isoDate, location: booking.location,
             dossierTail: String(client.dossier || '').slice(-1200)
         })

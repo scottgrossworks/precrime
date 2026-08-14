@@ -482,6 +482,20 @@ async function pipelineSave(id, clientId, patch, sessionId, judge, factletId) {
                 clientData[field] = patch[field];
             }
         }
+
+        // CLIENT CLASS (2026-08-14, build item #6): 'host' (default) | 'booker'.
+        // A booker (agency / planner / venue coordinator) IS a client -- they pay,
+        // they're the contact, the job site is arbitrary. Bookers get their own
+        // outreach template family (DRAFT_PROMPT bookerRule). Anything else is
+        // refused loudly -- the class drives template choice, so a junk value
+        // would silently mis-pitch.
+        if (patch.clientClass !== undefined) {
+            if (patch.clientClass === 'host' || patch.clientClass === 'booker') {
+                clientData.clientClass = patch.clientClass;
+            } else {
+                console.error(`[save] ignored clientClass='${patch.clientClass}' -- must be 'host' or 'booker'.`);
+            }
+        }
         // TYPE NORMALIZATION (2026-07-16): every clientField column is a String in
         // Prisma, but workers pass targetUrls as a real array ([{url,type,label}] --
         // the documented shape) and weak models occasionally pass objects for other

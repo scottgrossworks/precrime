@@ -56,6 +56,10 @@ From content, extract only VALUE_PROP-relevant:
   is NOT a client; skip it entirely (no client, no enrichment, no booking). Exception:
   event planners, event agencies, and venues ARE buyers (they hire entertainment).
   On a mixed vendor-directory page, extract ONLY the planner/agency/venue entries.
+  **BOOKER TAG:** when the client IS one of those exceptions (agency / event planner /
+  venue coordinator — they book entertainment FOR CLIENTS, the job site is arbitrary),
+  include `clientClass:"booker"` in the save patch. Party hosts and one-event orgs stay
+  the default `"host"`. Bookers get roster-pitch outreach instead of single-event pitch.
 - Factlets: reusable evidence (event date, buying occasion, venue/budget/market/demand signal).
   Rules: exactly 2-3 sentences — what happened (numbers/dates/names), why it matters to the
   target audience, optional urgency. Facts only, never mention the product, one factlet per

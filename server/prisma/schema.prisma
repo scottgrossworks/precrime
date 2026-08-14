@@ -5,14 +5,15 @@
 // Edit the canonical file and re-copy. See SCHEMA\PLAN.md (unification).
 // =========================================================================
 
+
 // ============================================================================
-// CANONICAL SCHEMA â€” single source of truth for the shared Leedz SQLite DB.
+// CANONICAL SCHEMA — single source of truth for the shared Leedz SQLite DB.
 //
 // Location: C:\Users\Scott\Desktop\WKG\SCHEMA\schema.prisma
 //
 // This ONE schema is used by BOTH systems:
-//   - PRECRIME  (C:\Users\Scott\Desktop\WKG\PRECRIME\server)  â€” lead-gen pipeline
-//   - INVOICER  (C:\Users\Scott\Desktop\WKG\INVOICER\server)  â€” Gmail chrome-extension local server
+//   - PRECRIME  (C:\Users\Scott\Desktop\WKG\PRECRIME\server)  — lead-gen pipeline
+//   - INVOICER  (C:\Users\Scott\Desktop\WKG\INVOICER\server)  — Gmail chrome-extension local server
 // and by the MCP transport that lets Claude/an orchestrator explore the DB.
 //
 // RULES:
@@ -20,7 +21,7 @@
 //      generate steps point HERE (see PLAN.md Phase 4/5). If a copy step is
 //      used for packaging, the copy is generated FROM this file, never edited.
 //   2. Both processes open the SAME physical DB file in WAL mode
-//      (PRAGMA journal_mode=WAL; PRAGMA busy_timeout=5000) â€” set by the
+//      (PRAGMA journal_mode=WAL; PRAGMA busy_timeout=5000) — set by the
 //      shared leedz-db core module at connect.
 //   3. Superset principle: PRECRIME-only columns are nullable and simply
 //      ignored by INVOICER; PRECRIME-only models (Factlet, Session,
@@ -46,15 +47,16 @@ model Client {
   website        String?
   clientNotes    String?
   segment        String?   // audience segment: defined per deployment (PRECRIME)
-  dossier        String?   // accumulated intelligence â€” timestamped prose (PRECRIME)
+  clientClass    String    @default("host") // "host" | "booker" (PRECRIME 2026-08-14): a booker (agency / planner / venue coordinator) IS a client — they pay, they're the contact, the job site is arbitrary. Own outreach template family + cadence; competitor tie-break protects them at save.
+  dossier        String?   // accumulated intelligence — timestamped prose (PRECRIME)
   targetUrls     String?   // JSON: [{url, type, label}] (PRECRIME)
   draft          String?   // current best outreach draft (PRECRIME)
   draftStatus    String?   // "brewing" | "ready" | "sent" (PRECRIME)
   sentAt         DateTime? // when draft was actually sent via Gmail (PRECRIME)
-  warmthScore    Float?    // DEPRECATED â€” use dossierScore. Kept for backwards compat.
-  dossierScore   Int?      // continuous, unbounded â€” computed by score_client (PRECRIME)
+  warmthScore    Float?    // DEPRECATED — use dossierScore. Kept for backwards compat.
+  dossierScore   Int?      // continuous, unbounded — computed by score_client (PRECRIME)
   contactGate    Boolean   @default(false) // binary: has real named contact + direct email (PRECRIME)
-  intelScore     Int?      // D2+D3 â€” set by enrichment agent after scraping (PRECRIME)
+  intelScore     Int?      // D2+D3 — set by enrichment agent after scraping (PRECRIME)
   lastEnriched   DateTime?
   lastQueueCheck DateTime? // DB cursor + factlet watermark (PRECRIME)
   source         String?   // how this client entered the DB ("gmail_extension" for INVOICER saves)
@@ -86,7 +88,7 @@ model Booking {
   //   cold      dead / out-of-area / junk. Set by Judge or worker demotion.
   //   brewing   default. In the funnel; enrichment/drill in progress.
   //   hot       leed ready to act on. Set ONLY by the Judge
-  //             (computeBookingTargetScore) â€” workers may only demote to
+  //             (computeBookingTargetScore) — workers may only demote to
   //             cold/brewing. See PRECRIME DOCS/CLASSIFICATION.md.
   //   contacted outreach went out to the client (extension respond/outreach,
   //             or PRECRIME email-share path). No longer presented as hot.
@@ -97,7 +99,7 @@ model Booking {
   //             must skip it (same treatment as draftStatus="sent" clients).
   //
   //   expired   past-dated leed. Set by PRECRIME's expirePastBookings sweep,
-  //             which only expires cold/brewing/hot â€” a booked past gig stays
+  //             which only expires cold/brewing/hot — a booked past gig stays
   //             `booked` (it is history, not a dead leed).
   //
   //   The `shared` boolean still tracks acted-on (marketplace/email share);
@@ -108,8 +110,8 @@ model Booking {
   status           String    @default("brewing")
   source           String?
   sourceUrl        String?   // (PRECRIME)
-  trade            String?   // (PRECRIME â€” always forced to VALUE_PROP trade on save)
-  zip              String?   // (PRECRIME â€” service-area gate)
+  trade            String?   // (PRECRIME — always forced to VALUE_PROP trade on save)
+  zip              String?   // (PRECRIME — service-area gate)
   shared           Boolean   @default(false)
   sharedTo         String?   // "leedz_api" | "email_share" | "email_user"
   sharedAt         BigInt?
@@ -127,9 +129,9 @@ model Booking {
 }
 
 // Durable Square OAuth integration state. Singleton row enforced by the
-// application (fixed sentinel id "default" â€” see INVOICER Prisma_Sqlite_DB
+// application (fixed sentinel id "default" — see INVOICER Prisma_Sqlite_DB
 // SQUARE_CONNECTION_ID). Owned by INVOICER; PRECRIME never reads or writes it.
-// Business identity is NOT stored anywhere in this DB â€” it loads at runtime
+// Business identity is NOT stored anywhere in this DB — it loads at runtime
 // from each project's DOCS/VALUE_PROP.md.
 model SquareConnection {
   id           String   @id @default(cuid())
@@ -156,7 +158,7 @@ model Factlet {
   createdAt DateTime @default(now())
 }
 
-// SESSION + SESSIONEVENT â€” workflow accountability layer. The agent calls
+// SESSION + SESSIONEVENT — workflow accountability layer. The agent calls
 // pipeline.start_session, gets a server-issued id it cannot forge; the server
 // logs each save success/failure as a SessionEvent and report_session
 // aggregates the append-only log server-side. See PRECRIME DOCS/CLAUDE.md.
@@ -183,7 +185,7 @@ model SessionEvent {
   @@index([action])
 }
 
-// TASK â€” the unit of work for the Planner/Worker/Judge architecture.
+// TASK — the unit of work for the Planner/Worker/Judge architecture.
 // Lifecycle: ready -> claimed -> done|failed|cancelled. Stale claimed Tasks
 // are reclaimable. See PRECRIME DOCS/WHAT_I_LEARNED.md.
 model Task {
@@ -208,7 +210,7 @@ model Task {
   @@index([targetType, targetId])
 }
 
-// NO Config MODEL â€” by design, in both systems. Runtime config comes from
+// NO Config MODEL — by design, in both systems. Runtime config comes from
 // VALUE_PROP.md + per-project config JSON; secrets from LLM_KEY.json /
 // leedz_config.json; connection settings from server_config.json / Chrome
 // storage. Do not add a Config table back.

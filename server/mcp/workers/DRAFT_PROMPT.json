@@ -12,8 +12,10 @@
     "FIRST decide the gate: is this a plausible buyer for the product at this event (product-market fit, contact looks like a decision-maker)? If NOT, reply with exactly: SKIP: <short reason>",
     "Otherwise reply with ONLY the rewritten email body text, nothing else.",
     "{rehireLine}",
+    "{bookerLine}",
     "SAMPLE EMAIL: \"\"\"{sampleEmail}\"\"\"",
     "LEAD DATA: {leadData}"
   ],
-  "rehireRule": "RE-HIRE: they already hired this seller for \"{pastTitle}\" on {pastDate}. Do NOT pitch that past date as upcoming. Pitch the SAME occasion for THIS year, referencing the history naturally (e.g. \"after drawing at your {pastTitle}...\"). The gate is automatically YES for a re-hire."
+  "rehireRule": "RE-HIRE: they already hired this seller for \"{pastTitle}\" on {pastDate}. Do NOT pitch that past date as upcoming. Pitch the SAME occasion for THIS year, referencing the history naturally (e.g. \"after drawing at your {pastTitle}...\"). The gate is automatically YES for a re-hire.",
+  "bookerRule": "BOOKER: this recipient is a BOOKER (agency / planner / venue coordinator who books entertainment FOR CLIENTS), not the party host. Keep the same skeleton and every seller fact, but retarget the letter as a ROSTER pitch: the opening question asks about the events they plan for clients, and the imperative close asks to be kept on their vendor roster for upcoming client events. Never pitch a single event date unless LEAD DATA carries one. The gate is YES when they plausibly book this trade for clients."
 }
