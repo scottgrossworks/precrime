@@ -91,7 +91,11 @@ one line blocks the entire FB-group channel where the Santa Barbara bride lives;
 channel thin or yieldless → auto-enqueue `DISCOVER_SOURCES {channel, goal}` (mandatory,
 per Scott: discovery is queueable plumbing, not a config chore).
 **Basis:** direct: 158 out-of-state seller URLs self-appended in 48h, purged by hand twice; discover-sources.md read in full 2026-08-12.
-**Confidence:** 90% · **Complexity:** Low · **Status:** Unexplored
+**Confidence:** 90% · **Complexity:** Low · **Status:** **BUILT 2026-08-14, commit `fe9bc06`** —
+all four sub-parts shipped, plus two Scott-directed additions: yield-aware re-scrape
+cooldown (a processed source is never re-ground; fertile 2d / barren 14d fallow) and the
+audit's goal text names only the GAP (worker derives WHAT to hunt from VALUE_PROP; no
+hardcoded source categories). Details in HANDOFF §4e.
 
 ### 2. Demand-RSS wiring: Reddit search feeds + Google Alerts into the existing scorer
 **Description:** The rss-scorer (55-min cron, VALUE_PROP keywords) exists but reads 6
