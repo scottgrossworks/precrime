@@ -80,7 +80,13 @@ Work only the codes in `missing`. Per code:
 **SITE-FIRST (free before billed):** if the org/event's official site is already known
 (from the booking, a prior result, or an obvious domain), `precrime__pipeline({ action:"browse", url })`
 its likely subpages FIRST — `/schedule`, `/hours`, `/tickets`, `/contact`, `/about` — those pages
-publish the exact dates/times/venues/emails you are hunting and cost ZERO credits. Spend a
+publish the exact dates/times/venues/emails you are hunting and cost ZERO credits.
+**INBOX LEADS (`booking.source === "inbox"`):** the booking's `sourceUrl` IS the social post
+that announced the demand (a Facebook group post, Nextdoor post, or Craigslist listing).
+`browse` it FIRST — it renders through the user's own logged-in Chrome, so member-only group
+posts open fine. The full post + comments carry the occasion, date, venue, and often the
+poster's replies; the truncated notification email carried almost nothing. Extract from the
+rendered post exactly as from any page: verbatim only, never invent. Spend a
 `tavily_search` only on facts the site itself does not answer. Never re-search a fact
 (hours, start time, venue) three different ways — one search, then go read the site.
 
