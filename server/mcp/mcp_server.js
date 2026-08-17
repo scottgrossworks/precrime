@@ -2555,7 +2555,13 @@ async function pipelinePlanTasksInner(id, args) {
                 const bareClients = await prisma.client.findMany({
                     where: {
                         contactGate: false,
-                        draftStatus: { not: 'sent' },
+                        // NULL-SAFE (2026-08-17, found by the Ava Zanzie inbox test):
+                        // { not: 'sent' } compiles to SQL NOT(draftStatus='sent'),
+                        // which EXCLUDES NULL rows -- and every extension-saved
+                        // client (the whole inbox lane) has draftStatus NULL, so
+                        // none of them could ever earn a drill. NULL = never
+                        // drafted = eligible.
+                        OR: [{ draftStatus: null }, { draftStatus: { not: 'sent' } }],
                         bookings: { none: { startDate: { gt: new Date() } } }
                     },
                     orderBy: { createdAt: 'desc' },
