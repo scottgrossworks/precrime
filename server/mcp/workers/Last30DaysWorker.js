@@ -41,10 +41,18 @@ class Last30DaysWorker extends ProceduralWorker {
             return { status: 'failed', error: e.message, summary: `last-30-days "${topic}": CLI failed` };
         }
 
-        // --- read the freshest *-raw.json this run produced ---
+        // --- read the freshest raw file this run produced ---
         let data;
         try {
-            data = JSON.parse(fs.readFileSync(this._newestRawFile(startedAt), 'utf8'));
+            const rawPath = this._newestRawFile(startedAt);
+            data = JSON.parse(fs.readFileSync(rawPath, 'utf8'));
+            // CONSUMED = DELETED (2026-08-17). The raw file is a one-shot CLI->worker
+            // handoff; nothing ever reads it again once ingested below. Leaving it
+            // also made the NEXT run date-stamp its output (the CLI renames when the
+            // undated name exists) -- which the old endsWith('-raw.json') filter
+            // could not find, so every topic re-run failed "no output file" while
+            // ~65MB of dead dumps piled up in data/.
+            try { fs.unlinkSync(rawPath); } catch (_) {}
         } catch (e) {
             return { status: 'failed', error: `read_output: ${e.message}`, summary: `last-30-days "${topic}": no output file` };
         }
@@ -101,11 +109,14 @@ class Last30DaysWorker extends ProceduralWorker {
         return { status: 'done', output: { clientIds, bookingIds, kept: keep.length, total: all.length, summary }, summary };
     }
 
-    // Newest *-raw.json in data/ written at/after `since` (LAST_30_DAYS is serialized, so the
+    // Newest raw output in data/ written at/after `since` (LAST_30_DAYS is serialized, so the
     // freshest file is ours). Throws if none is fresh -- i.e. the CLI wrote nothing this run.
+    // Matches BOTH <slug>-raw.json AND the CLI's date-stamped <slug>-raw-YYYY-MM-DD.json
+    // (written whenever the undated name already exists -- the old endsWith('-raw.json')
+    // missed those, failing every topic re-run).
     _newestRawFile(since) {
         const files = fs.readdirSync(DATA_DIR)
-            .filter(f => f.endsWith('-raw.json'))
+            .filter(f => /-raw(-\d{4}-\d{2}-\d{2})?\.json$/.test(f))
             .map(f => { const p = path.join(DATA_DIR, f); return { p, m: fs.statSync(p).mtimeMs }; })
             .filter(x => x.m >= since - 1000)
             .sort((a, b) => b.m - a.m);
