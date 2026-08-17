@@ -14,7 +14,7 @@
 
 **Socials:** IG/TikTok: @thatdrawingshow; YouTube: https://www.youtube.com/@thatdrawingshow
 
-**Geography:** Los Angeles County and surrounding areas ONLY — Los Angeles Metro Area, San Fernando Valley, Downtown LA, Hollywood, Mid-City, Westside, coastal LA, South LA, East LA, Irvine, Anaheim, Santa Ana, Huntington Beach, Orange, Burbank, Calabasas, Glendale, and nearby Southern California event markets. **NOT San Diego, NOT Orange County south of Irvine, NOT Riverside County, NOT San Bernardino County.**
+**Geography:** Los Angeles County, Santa Barbara, and surrounding areas ONLY — Los Angeles Metro Area, San Fernando Valley, Downtown LA, Hollywood, Mid-City, Westside, coastal LA, South LA, East LA, Irvine, Anaheim, Santa Ana, Huntington Beach, Orange, Burbank, Calabasas, Glendale, Santa Barbara / Montecito / Goleta, and nearby Southern California event markets. **NOT San Diego, NOT Orange County south of Irvine, NOT Riverside County, NOT San Bernardino County, NOT Ventura.**
 
 **Rate:** Rates start at $175/hr for live caricature art. No deposit required for caricature bookings. All forms of paper and electronic payment accepted. Payment due at completion of service.
 
@@ -255,9 +255,9 @@ One term per bullet. Keep terms specific — every save is substring-matched aga
 
 ## SERVICE AREA DETAILS
 
-**LA County and surrounding areas ONLY. San Diego County is explicitly excluded — no exceptions.**
+**LA County, Santa Barbara, and surrounding areas ONLY. San Diego County is explicitly excluded — no exceptions.**
 
-**Zip prefixes (machine-enforced):** 900xx 901xx 902xx 903xx 904xx 905xx 906xx 907xx 908xx 910xx 911xx 912xx 913xx 914xx 915xx 916xx 917xx 918xx 926xx 927xx 928xx — a booking whose zip starts outside these prefixes is OUT OF THE SERVICE AREA and is refused at save and forced cold at judge. (Excluded on purpose: San Bernardino 909, San Diego 919 thru 921, Riverside/desert 922 thru 925, Ventura and north 930 and up. Never write an excluded prefix in the NNNxx form — every NNNxx in this section is parsed as ALLOWED.)
+**Zip prefixes (machine-enforced):** 900xx 901xx 902xx 903xx 904xx 905xx 906xx 907xx 908xx 910xx 911xx 912xx 913xx 914xx 915xx 916xx 917xx 918xx 926xx 927xx 928xx 931xx — a booking whose zip starts outside these prefixes is OUT OF THE SERVICE AREA and is refused at save and forced cold at judge. (Excluded on purpose: San Bernardino 909, San Diego 919 thru 921, Riverside/desert 922 thru 925, Ventura 930, and 932 north thru the rest of the state. Never write an excluded prefix in the NNNxx form — every NNNxx in this section is parsed as ALLOWED.)
 
 - Los Angeles Metro Area
 - San Fernando Valley
@@ -276,6 +276,7 @@ One term per bullet. Keep terms specific — every save is substring-matched aga
 - Encino, Sherman Oaks, Tarzana
 - North Hollywood, Studio City, Toluca Lake, Valley Village
 - Burbank, Calabasas, Glendale
+- Santa Barbara (added 2026-08-17): 93101, 93103, 93105, 93108, 93109, 93110, 93111, 93117 — incl. Montecito, Goleta, Santa Ynez wine country wedding venues. (Carpinteria shares Ventura's excluded prefix — flag if that matters.)
 
 ---
 
@@ -344,20 +345,17 @@ YouTube: https://www.youtube.com/@thatdrawingshow
 310 980 1421
 
 
+
 ### Sample Email
 
-Hi Amanda,
+Dear Esperanza,
 
-Have you considered live caricatures for Volvo's exhibit at the LA Auto Show this November? 
+It looks like your daughter is turning 2 this October, and it's been almost a year since I had the pleasure of drawing for your family and friends.  Are you planning another party this year?  For Halloween or the holidays?  I'd be delighted to draw for you again!  Email me pics and I can create a color commission and deliver it framed and ready to hang.
 
-That Drawing Show caricatures make everyone feel like a star, for about 4 minutes each, and create a personalized, frameable takeaway for the home or office.  12-15 faces per hour.  I'm a longtime Warner Bros. / DC Comics artist, able to draw anything from classic portraits to fun cartoons, work from photos, even pets!  My drawings come on sturdy card stock in a clear plastic sleeve.  I bring everything I need and accept all forms of payment at the end, and I can graphic design the paper with your company info for a branded take-home that guests will frame and keep in their homes and offices. 
-
-Rates start at $175/hr. No deposit required.
-
-Watch me draw for the Ontario Tower Buzzers!
+Since we were together I became team cartoonist for the Ontario Tower Buzzers:
 https://www.youtube.com/shorts/LNjWv8o0glU
 
-Let's make Volvo the must-visit booth at the LA Auto Show,
+Let's add another caricature party to the calendar this Fall!
 
 Scott Gross
 Drawing Show with Scott Gross
@@ -365,9 +363,6 @@ http://scottgross.works/drawingshow
 IG/TikTok: @thatdrawingshow
 YouTube: https://www.youtube.com/@thatdrawingshow
 310 980 1421
-
-
-
 
 
 
