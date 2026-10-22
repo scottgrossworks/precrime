@@ -40,8 +40,8 @@ The launcher injects `objective=<value>` into the trigger prompt (and may set `P
 
 | User message contains | Action |
 |---|---|
-| `headless` | Read `__PROJECT_ROOT__/skills/init-wizard.md` with `mode=headless` and the detected objective. Wizard hands off to `__PROJECT_ROOT__/skills/headless_flow.md`. |
-| any of: `run`, `start`, `go`, `precrime`, `workflow`, `interactive`, `wizard` (and not `headless`) | Read `__PROJECT_ROOT__/skills/init-wizard.md` with `mode=interactive` and the detected objective (defaults to `hybrid`). |
+| `headless` | Read `C:\Users\Scott\Desktop\WKG\TDS\precrime/skills/init-wizard.md` with `mode=headless` and the detected objective. Wizard hands off to `C:\Users\Scott\Desktop\WKG\TDS\precrime/skills/headless_flow.md`. |
+| any of: `run`, `start`, `go`, `precrime`, `workflow`, `interactive`, `wizard` (and not `headless`) | Read `C:\Users\Scott\Desktop\WKG\TDS\precrime/skills/init-wizard.md` with `mode=interactive` and the detected objective (defaults to `hybrid`). |
 | Status / config questions ("status", "how many hot leedz", "show me the config") | Call `precrime__pipeline({ action:"status" })` and output the `report` field **verbatim** — it is pre-formatted (HOT/BREWING/COLD + latest bookings + factlet/client lines). Do NOT re-summarize the JSON into prose. Add specific config fields only if the user explicitly asked about config. Do not launch anything. |
 | None of the above | Normal conversation. Do not launch. |
 
@@ -54,6 +54,8 @@ call — that arms the Node conductor, which does everything else. Then reply ex
 `Queue seeded — conductor running; ask for status anytime.` NEVER respond to a workflow request
 with `claim_task`, a bare status report, or a question. (Zero hot leedz + an empty task queue is
 not an error — it means the workflow has not been armed; arm it.)
+
+**OUTREACH (interactive, ALWAYS):** "draft", "email", or "outreach" for any booking or client = ONE call per booking: `precrime__pipeline({ action:"enqueue", type:"DRAFT_OUTREACH", bookingId:<id> })`. You COMPOSE NOTHING: never call `gmail__gmail_send` to a client, never call `get_config` for the sample email or signature, never write email text. The draft worker rewrites the Sample Email from the dossier and puts it in Gmail Drafts. `gmail__gmail_send` REFUSES every PreCrime client address. Report one line per booking: `Outreach draft queued: <client> / <event>`.
 
 **USER STEERING (interactive mode exists for this — never refuse):** when the user gives a
 direction like "process the unprocessed factlets now", "only factlets", "run down the backlog,
@@ -97,12 +99,12 @@ The skill file is the source of truth for that skill, not your prior knowledge.
 
 - **Planner** = server-side code inside `precrime__pipeline`. The `plan_tasks` action enqueues `Task` rows by type and per-type limits set in `precrime_config.json`.
 - **Worker** = LLM skill that executes exactly one claimed `Task` and stops:
-  - `SCRAPE_SOURCE` -> `__PROJECT_ROOT__/skills/url-loop.md`
-  - `ENRICH_CLIENT` -> `__PROJECT_ROOT__/skills/enrichment-agent.md`
-  - `DRILL_DOWN` -> `__PROJECT_ROOT__/skills/drill-down.md` (close a near-hot booking: find its specific missing fields; research-only, never contacts anyone)
-  - `SHOW_HOT_LEEDZ` -> `__PROJECT_ROOT__/skills/show-hot-leedz.md`
+  - `SCRAPE_SOURCE` -> `C:\Users\Scott\Desktop\WKG\TDS\precrime/skills/url-loop.md`
+  - `ENRICH_CLIENT` -> `C:\Users\Scott\Desktop\WKG\TDS\precrime/skills/enrichment-agent.md`
+  - `DRILL_DOWN` -> `C:\Users\Scott\Desktop\WKG\TDS\precrime/skills/drill-down.md` (close a near-hot booking: find its specific missing fields; research-only, never contacts anyone)
+  - `SHOW_HOT_LEEDZ` -> `C:\Users\Scott\Desktop\WKG\TDS\precrime/skills/show-hot-leedz.md`
 - **Server-handled types**: `SHARE_BOOKING`, `JUDGE_AFFECTED`, `DISCOVER_SOURCES`, `APPLY_FACTLET` (in-process since 2026-07-19: one LLM call applies a factlet to a BATCH of clients — no goose worker). The orchestrator (`headless_flow.md`) calls `share_booking` / `judge_affected` / `tavily_search`+`add_sources` and completes the Task itself -- no worker skill exists for these.
-- **Outreach Task**: `DRAFT_OUTREACH` -> dispatched through `__PROJECT_ROOT__/skills/outreach-drafter.md`. The Planner only schedules `DRAFT_OUTREACH` when objective is `outreach` or `hybrid`. The drafter composes via Gmail and (in headless) saves a Gmail draft rather than auto-sending unless explicitly told otherwise.
+- **Outreach Task**: `DRAFT_OUTREACH` -> dispatched through `C:\Users\Scott\Desktop\WKG\TDS\precrime/skills/outreach-drafter.md`. The Planner only schedules `DRAFT_OUTREACH` when objective is `outreach` or `hybrid`. The drafter composes via Gmail and (in headless) saves a Gmail draft rather than auto-sending unless explicitly told otherwise.
 - **Judge** = `precrime__pipeline({ action:"judge_affected" })`. The only sanctioned scoring caller in the new architecture. Workers always pass `judge:false` to `pipeline.save`.
 - **Presenter** = `show-hot-leedz.md` (interactive) -- reads judged state, routes user-approved shares through `share_booking`.
 - **Session** = passive audit container. `Task.sessionId` links Tasks; `report_session` / `audit_session` summarize outcomes from SQLite. The orchestrator NEVER opens one -- `start_session` is disabled and the conductor owns dispatch. For a run summary, use `action="status"`.
@@ -156,7 +158,7 @@ Call these names verbatim. Do not invent variants. Do not call `precrime_mcp__*`
 
 ## Key paths
 
-- Product identity: `__PROJECT_ROOT__/DOCS/VALUE_PROP.md`
-- Runtime config: `__PROJECT_ROOT__/precrime_config.json` (apiKeys, llm, tasks.limits, tasks.sessionBudgets, tasks.workflowStrategy, recycler, paths)
-- Skills: `__PROJECT_ROOT__/skills/`
-- Logs: `__PROJECT_ROOT__/logs/ROUNDUP.md`
+- Product identity: `C:\Users\Scott\Desktop\WKG\TDS\precrime/DOCS/VALUE_PROP.md`
+- Runtime config: `C:\Users\Scott\Desktop\WKG\TDS\precrime/precrime_config.json` (apiKeys, llm, tasks.limits, tasks.sessionBudgets, tasks.workflowStrategy, recycler, paths)
+- Skills: `C:\Users\Scott\Desktop\WKG\TDS\precrime/skills/`
+- Logs: `C:\Users\Scott\Desktop\WKG\TDS\precrime/logs/ROUNDUP.md`

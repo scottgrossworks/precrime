@@ -1,4 +1,4 @@
-# Pre-Crime — Conceptual Foundation
+# Pre-Crime -- Conceptual Foundation
 
 Pre-Crime is a recursive intelligence-gathering system. It discovers people and organizations who are likely to buy what you sell, learns about them, and produces actionable sales opportunities.
 
@@ -6,16 +6,16 @@ Pre-Crime is a recursive intelligence-gathering system. It discovers people and 
 
 Every object in the system is moving toward one of two end states:
 
-1. **Leed shared to marketplace** — a booking that passes share-ready gates (hot status, verified contact, zip, description), posted via the Leedz API.
-2. **Outreach email sent** — a draft composed from a rich dossier, approved by the user, delivered via Gmail.
+1. **Leed shared to marketplace** -- a booking that passes `DOCS/SCORING.json` `leed_ready` gates, posted via the Leedz API.
+2. **Outreach email sent** -- a draft composed from a rich dossier, approved by the user, delivered via Gmail.
 
-Everything else is **brewing**. A client at score 0 is brewing. A factlet not yet linked is brewing. A booking missing a zip code is brewing. A source not yet scraped is brewing. The system's job is to move every object from brewing toward an end state. A low score is not a problem to report — it is the fuel that keeps the pipeline running.
+Everything else is **brewing**. A client at score 0 is brewing. A factlet not yet linked is brewing. A booking missing a zip code is brewing. A source not yet scraped is brewing. The system's job is to move every object from brewing toward an end state. A low score is not a problem to report -- it is the fuel that keeps the pipeline running.
 
 ## The Core: Demand Signal
 
 A woman's hair catches fire at her desk. We email her a bucket of water at that moment, we make the sale. Five minutes early, next day, or the coworker next to her with fine hair: no sale. Cold outreach without a demand signal is selling buckets to people whose hair is not on fire. PRECRIME's job is to predict combustion, or detect it the instant it happens, and arrive with VALUE_PROP framed as the bucket.
 
-A booking is **share-ready** only when a demand signal is present. Demand signal is assessed by the LLM Judge and stored as `Booking.status = hot`. The verdict persists — it is not recomputed on every enrichment. Call `judge_affected` (or let the conductor schedule a `JUDGE_AFFECTED` task) to re-evaluate. Two sources: **explicit** (source literally states the need: "looking for X", RFP, inbound inquiry) or **inferred** (factlets stack into an argument the agent can state out loud). Without one, a complete booking is **outreach-ready**, not share-ready.
+A booking is `leed_ready` only when a demand signal is present. Demand signal is never stored (fires start and go out); it is recomputed at enrichment from current evidence. Two sources: **explicit** (source literally states the need: "looking for X", RFP, inbound inquiry) or **inferred** (factlets stack into an argument the agent can state out loud). Without one, a complete booking is `outreach_ready`, not `leed_ready`.
 
 Inferred archetype (the Prom Pattern). Five slots, all required: (1) named decision-maker for VALUE_PROP's category, (2) concrete event with a date inside the conversion window, (3) public precedent of buying this category before, (4) pattern of publicly crediting vendors, (5) thematic fit for this specific instance. Canonical case: activity director, prom in 60 days, past gallery shows caricature booth, school posts thank-yous to prior vendors, this year's theme matches the pitch. Transpose the nouns for other verticals (corporate planner + holiday party, brewery + tap takeover, etc.). Fewer than 5/5 slots filled = `outreach_ready`. Empty slots are the next enrichment target.
 
@@ -23,7 +23,7 @@ Inferred archetype (the Prom Pattern). Five slots, all required: (1) named decis
 
 The process is recursive: every step can discover inputs for itself or any other step. Scraping a directory finds clients AND links to more directories. Processing an RSS article finds intel AND links to new RSS feeds. Enriching a client finds booking signals AND references to other potential clients. When you discover new inputs, add them to the queue and keep going.
 
-**Sources vs Clients.** A convention organizer, a venue, a vendor directory, an event calendar — these are SOURCES, not Clients. Their value is the list of buyers they reveal: a convention's exhibitor list, a venue's preferred-vendor page, a calendar's event organizers. Scrape the source, harvest the exhibitors/organizers/planners, THOSE become Clients (a brand exhibiting at a convention is a real buyer for booth-enhancement VALUE_PROP). Then enrich those clients until a demand signal appears. The recursive loop is: source → clients → enrich → demand signal → end state. Keep digging. Zero saves from one URL is not a failure; it is a signal to discover more sources.
+**Sources vs Clients.** A convention organizer, a venue, a vendor directory, an event calendar -- these are SOURCES, not Clients. Their value is the list of buyers they reveal: a convention's exhibitor list, a venue's preferred-vendor page, a calendar's event organizers. Scrape the source, harvest the exhibitors/organizers/planners, THOSE become Clients (a brand exhibiting at a convention is a real buyer for booth-enhancement VALUE_PROP). Then enrich those clients until a demand signal appears. The recursive loop is: source -> clients -> enrich -> demand signal -> end state. Keep digging. Zero saves from one URL is not a failure; it is a signal to discover more sources.
 
 ```
 PRECRIME(sources, clients):
@@ -45,37 +45,40 @@ PRECRIME(sources, clients):
       if score is low -> keep going. Low score = more enrichment needed, not a stop.
 
   PRESENT():                           <- the ONLY place the user is consulted
-    show results that reached an end state — ready bookings, ready drafts
+    show results that reached an end state -- ready bookings, ready drafts
     user decides what to share or send
 ```
 
 Every skill file is an implementation of one of these functions.
 
-## Function-to-Tool Mapping
+## Function-to-Tool Mapping (Planner / Worker / Judge / Presenter)
 
 | Function | Tool Call |
 |----------|----------|
-| Read config / stats | `precrime__pipeline({ action: "status" })` |
-| Save / update client | `precrime__pipeline({ action: "save", id?, patch })` |
-| Get next client | `precrime__pipeline({ action: "next", criteria })` |
-| Search clients | `precrime__find({ action: "clients", filters, summary: true })` |
-| Search bookings | `precrime__find({ action: "bookings", filters })` |
-| Search factlets | `precrime__find({ action: "factlets", filters })` |
-| Get trade list | `precrime__trades()` |
-| Fetch RSS articles | `precrime-rss__get_top_articles({ limit })` |
-| Web search (headless) | `tavily__tavily_search({ query })` |
-| Delete record | `precrime__pipeline({ action: "delete", target, id })` |
-| Re-score bookings | `precrime__pipeline({ action: "rescore", scope })` |
-| Start workflow session | `precrime__pipeline({ action: "start_session", workflow })` |
-| Close session + report | `precrime__pipeline({ action: "report_session", session_id })` |
-| Audit session (no close) | `precrime__pipeline({ action: "audit_session" })` |
-| Scrape URL (headless) | `tavily__tavily_extract({ url })` |
-| Send email | `gmail__gmail_send({ to, subject, body })` |
-| Post marketplace leed | `precrime__pipeline({ action: "share_booking", bookingId, mode })` -- the server builds the payload and computes `st`/`et`; external Leedz tools are not exposed to the agent |
+| Read config / stats             | `precrime__pipeline({ action: "status" })` |
+| Set config field                | `precrime__pipeline({ action: "configure", patch })` |
+| Planner: enqueue Task batch     | `precrime__pipeline({ action: "plan_tasks", mode: "workflow" \| "headless" \| "hot_only" })` |
+| Worker: claim one Task          | `precrime__pipeline({ action: "claim_task", role, types? })` |
+| Worker: complete one Task       | `precrime__pipeline({ action: "complete_task", taskId, status, output, error? })` |
+| Save / update record (worker)   | `precrime__pipeline({ action: "save", id?, judge: false, patch })` |
+| Judge: rescore affected records | `precrime__pipeline({ action: "judge_affected", clientIds?, bookingIds? })` |
+| Presenter: build / post leed    | `precrime__pipeline({ action: "share_booking", bookingId, mode: "draft" \| "post" })` (server derives IANA timezone from `Booking.zip`; do not pass `timezone`) |
+| Structured date validator       | `precrime__pipeline({ action: "resolve_dates", start, end, timezone, ... })` |
+| Recycler: stale Factlets / old Tasks | `precrime__pipeline({ action: "recycler", dryRun? })` |
+| List Tasks (audit / debug)      | `precrime__pipeline({ action: "tasks", status?, type?, sessionId? })` |
+| Source seed + queue growth      | `precrime__pipeline({ action: "import_sources" })` / `add_sources` |
+| Search clients                  | `precrime__find({ action: "clients", filters, summary: true })` |
+| Search bookings                 | `precrime__find({ action: "bookings", filters })` |
+| Search factlets                 | `precrime__find({ action: "factlets", filters })` |
+| Get trade list                  | `precrime__trades()` |
+| Fetch RSS articles              | `precrime_rss__get_top_articles({ limit })` |
+| Web search / extract            | `tavily__tavily_search({ query })` / `tavily__tavily_extract({ url })` |
+| Send email                      | `gmail__gmail_send({ to, subject, body })` |
+| Post marketplace leed           | `share_booking(mode:"post")` is the only sanctioned path. External Leedz tools are not exposed to the agent. |
 
-Judging runs via explicit `JUDGE_AFFECTED` tasks dispatched by the conductor, or by calling `pipeline.judge_affected` directly. It does not run on every save.
-See `DOCS/SCORING.json` for tuning knobs (factlet thresholds, generic email prefixes, etc.).
-See `DOCS/SUMMARY.md` for session accountability (start_session / report_session / audit_session).
+Workers always pass `judge: false` on `pipeline.save`. The Planner converts a completed Task's `output.clientIds` / `output.bookingIds` into a `JUDGE_AFFECTED` Task; the Judge then runs canonical scoring (`computeBookingTargetScore` over `DOCS/SCORING.json`) and writes the resulting `Booking.status`. There is no separate "rescore" call in this architecture.
+
+See `DOCS/SCORING.json` for the algorithm and gates.
 
 ## Invariants
 
@@ -87,3 +90,73 @@ See `DOCS/SUMMARY.md` for session accountability (start_session / report_session
 6. **VALUE_PROP is truth.** All relevance decisions flow from `DOCS/VALUE_PROP.md`. If it's incomplete, stop and fix it before proceeding.
 7. **No invented facts.** Thin data produces thin output. Never fabricate intel, scores, or contacts.
 8. **Client = person.** Every client record must have a real human name. No placeholder names.
+
+## Orchestrator Procedure (Planner-driven)
+
+The conceptual `PRECRIME(sources, clients)` pseudocode above is implemented as a server-side **Planner** that enqueues `Task` rows and a thin client-side **orchestrator** that drains them. The LLM is no longer responsible for global control flow.
+
+The orchestrator is `skills/headless_flow.md` in headless mode, or `skills/init-wizard.md` -> `RUN_WORKFLOW` / `SHOW_HOT_LEEDZ` route in interactive mode. Both follow the same dispatch shape:
+
+1. **Plan.** `precrime__pipeline({ action: "plan_tasks", mode })`. Server enqueues `Task` rows up to per-type limits from `precrime_config.json` (`tasks.limits`) and per-run budgets (`tasks.sessionBudgets`). If live unprocessed Factlets reach `tasks.workflowStrategy.factletBacklogDiscoveryPause`, planning pauses new discovery and drains APPLY_FACTLET / JUDGE_AFFECTED first. In `mode:"headless"`, workflow Tasks and Judge run before `SHARE_BOOKING` so a cold restart refreshes stale ready rows before posting. `SHOW_HOT_LEEDZ` comes first in `mode:"hot_only"`.
+2. **Drain.** Loop: `precrime__pipeline({ action: "claim_task", role })` -> dispatch by `task.type` -> `precrime__pipeline({ action: "complete_task", taskId, status, output })`.
+3. **Replan.** When `claim_task` returns `NO_TASK`, call `plan_tasks` again. The Planner converts completed worker Tasks into `JUDGE_AFFECTED` Tasks via `extractAffectedIds(output)`, schedules `APPLY_FACTLET` Tasks for live unassimilated Factlets, and re-enqueues stale `ENRICH_CLIENT` candidates.
+4. **Exit.** When `plan_tasks` creates `0` Tasks in every type AND `claim_task` returns `NO_TASK`, the queue is permanently empty for this run.
+
+### Dispatch table
+
+| `task.type`        | Handler |
+|--------------------|---------|
+| `SCRAPE_SOURCE`    | `skills/url-loop.md` (worker self-claims in interactive; orchestrator pre-claims in headless and hands off at Step 2). |
+| `ENRICH_CLIENT`    | `skills/enrichment-agent.md` (same handoff convention). |
+| `APPLY_FACTLET`    | `skills/apply-factlet.md`. |
+| `SHOW_HOT_LEEDZ`   | `skills/show-hot-leedz.md` (interactive only; cancelled in headless). |
+| `SHARE_BOOKING`    | Orchestrator calls `share_booking(mode:"post")` and completes the Task. Never external Leedz tools. Scheduled only when objective is `marketplace` or `hybrid`. |
+| `DRAFT_OUTREACH`   | `skills/outreach-drafter.md`. Composes the email, saves the draft (`draftStatus:"ready"`), completes. Scheduled only when objective is `outreach` or `hybrid`. Headless persists drafts (no auto-send). |
+| `JUDGE_AFFECTED`   | Orchestrator calls `judge_affected(clientIds, bookingIds)` from `task.input` and completes. |
+| `DISCOVER_SOURCES` | Orchestrator runs one bounded `tavily_search` keyed by `defaultTrade` + geography, feeds results to `add_sources`, completes. |
+
+### Mode vs Objective
+
+Two orthogonal axes drive every run:
+
+- **Mode** (`headless` | `interactive`) -- how the agent is driven. Headless is non-interactive; interactive allows menus and per-leed approval.
+- **Objective** (`marketplace` | `outreach` | `hybrid`) -- the end state Tasks aim at. Marketplace schedules `SHARE_BOOKING`; outreach schedules `DRAFT_OUTREACH`; hybrid does both.
+
+Defaults: headless => marketplace; interactive => hybrid. Launchers (`precrime.bat`, `goose.bat`) accept `--marketplace` / `--outreach` / `--hybrid` and pass `objective=<value>` into the startup prompt. The Planner echoes the resolved objective in every `plan_tasks` response. **Headless + outreach (or hybrid)** requires the Gmail MCP; init-wizard fails fast with `OUTREACH_REQUIRES_GMAIL` if `gmail__gmail_send` is not registered.
+
+### Recursion arms (Task-based)
+
+The system still recurses on three planes; the implementation is now expressed in Task transitions rather than agent loops:
+
+- **Source recursion.** A `SCRAPE_SOURCE` worker may save new source URLs via `add_sources`. The next `plan_tasks` pass enqueues fresh `SCRAPE_SOURCE` Tasks for them.
+- **Client recursion.** A `SCRAPE_SOURCE` or `ENRICH_CLIENT` worker may create thin Clients via `pipeline.save({ judge:false })`. The next `plan_tasks` pass picks them up as `ENRICH_CLIENT` candidates.
+- **Booking recursion.** Every completed worker Task with affected `clientIds` / `bookingIds` becomes a `JUDGE_AFFECTED` Task on the next planner pass. Judge re-evaluates `Booking.status` via `computeBookingTargetScore` against `DOCS/SCORING.json` -- a newly-assimilated Factlet on the client dossier can promote a previously-brewing Booking to `leed_ready`.
+
+### Termination
+
+The orchestrator terminates ONLY when, in the same iteration:
+1. `claim_task` returns `NO_TASK` for every type, AND
+2. The subsequent `plan_tasks` call enqueues `0` new ready Tasks in every type.
+
+Until both conditions hold, the orchestrator stays in Step 2 -> Step 3. Empty page extracts, dedup hits, and low scores are NOT termination signals -- they are normal worker output.
+
+The Recycler (`pipeline.recycler`) runs at startup to delete stale Factlets, purge old finished Tasks, and re-queue timed-out claimed Tasks per `precrime_config.json` (`recycler.factletStaleDays`, `taskRetentionDays`, `claimTimeoutMinutes`).
+
+### What is server-enforced vs agent-judged
+
+| Concern | Owner | How |
+|---|---|---|
+| Per-type Task limits          | Server (Planner) | `plan_tasks` reads `precrime_config.json` `tasks.limits`. |
+| Factlet/discovery bias        | Server (Planner) | `plan_tasks` reads `precrime_config.json` `tasks.workflowStrategy.factletBacklogDiscoveryPause`. |
+| Atomic Task claim             | Server | `claim_task` flips `ready` -> `claimed` in one transaction. |
+| Reclaim stuck claims          | Server | `plan_tasks` and `recycler` requeue Tasks past `claimTimeoutMinutes`. |
+| Empty patch rejection         | Server | `pipeline.save` returns -32602. |
+| Dedup by company              | Server | `pipeline.save` merges by company name. |
+| Scoring + status promotion    | Server (Judge) | `judge_affected` -> `computeBookingTargetScore` -> `Booking.status`. |
+| `share_booking` date math     | Server | `resolve_dates` from structured Booking fields + IANA timezone derived from `Booking.zip`. Rejects LLM-supplied `st`/`et`. |
+| Worker control flow           | Agent  | follow the one-Task skill file top-to-bottom. |
+| Relevance / classification    | Agent  | judgment per `skills/shared/*` rules. |
+| Dispatch on Task type         | Agent  | one switch on `task.type` in the orchestrator. |
+| Termination decision          | Agent  | the two conditions above. |
+
+The agent's intelligence is spent on judgment within a single Task (is this contact a competitor? is this factlet a buying signal? is this dossier rich enough?). The control flow is a state machine -- not improvisation.

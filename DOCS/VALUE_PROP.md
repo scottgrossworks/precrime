@@ -2,7 +2,7 @@
 
 **Trade:** caricatures
 
-**Product Name:** That Drawing Show with Scott Gross
+**Product Name:** Drawing Show with Scott Gross
 
 **Seller:** Scott Gross, Drawing Show with Scott Gross
 
@@ -17,6 +17,21 @@
 **Geography:** Los Angeles County, Santa Barbara, and surrounding areas ONLY — Los Angeles Metro Area, San Fernando Valley, Downtown LA, Hollywood, Mid-City, Westside, coastal LA, South LA, East LA, Irvine, Anaheim, Santa Ana, Huntington Beach, Orange, Burbank, Calabasas, Glendale, Santa Barbara / Montecito / Goleta, and nearby Southern California event markets. **NOT San Diego, NOT Orange County south of Irvine, NOT Riverside County, NOT San Bernardino County, NOT Ventura.**
 
 **Rate:** Rates start at $175/hr for live caricature art. No deposit required for caricature bookings. All forms of paper and electronic payment accepted. Payment due at completion of service.
+
+---
+
+## BOOKING WINDOW
+
+**Earliest booking date:** 2026-11-01
+
+(Machine-enforced: a booking dated before this ISO date is forced COLD at judge, never listed as outreach-ready, and refused for DRAFT_OUTREACH. Change the date here to move the window.)
+
+**ABSOLUTE RULE — ONLY bookings dated November 1, 2026 or later are wanted: November 2026, December 2026, and any date in 2027.**
+
+- Any booking dated **October 31, 2026 or earlier** is DEAD on arrival: do NOT save it, do NOT score it hot or brewing, do NOT draft outreach for it. If one already exists, DISMISS it.
+- This applies to every event type, every client, every source — no exceptions, including private events.
+- A recurring/annual event whose last known date is October 2026 or earlier is only relevant if a NEXT occurrence dated November 2026 or later is found; save that future date, never the past one.
+- A booking with NO known date may be saved only if the evidence points to November 2026 or later; never assume an undated event is in the window.
 
 ---
 
@@ -350,12 +365,12 @@ YouTube: https://www.youtube.com/@thatdrawingshow
 
 Dear Esperanza,
 
-It looks like your daughter is turning 2 this October, and it's been almost a year since I had the pleasure of drawing for your family and friends.  Are you planning another party this year?  For Halloween or the holidays?  I'd be delighted to draw for you again!  Email me pics and I can create a color commission and deliver it framed and ready to hang.
+It's been a year since I drew at your baby shower, and little Esperanza must be turning one soon.  Are you planning another party this year?  I'd be delighted to draw for your family and friends again, for her birthday party or a summer get-together?  Or email me pics and I can create a color commission and deliver it framed and ready to hang.
 
-Since we were together I became team cartoonist for the Ontario Tower Buzzers:
+This year I became team cartoonist for the Ontario Tower Buzzers:
 https://www.youtube.com/shorts/LNjWv8o0glU
 
-Let's add another caricature party to the calendar this Fall!
+Let's add another caricature party to the calendar this Spring!
 
 Scott Gross
 Drawing Show with Scott Gross
