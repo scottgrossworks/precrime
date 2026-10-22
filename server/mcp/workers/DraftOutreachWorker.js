@@ -89,14 +89,58 @@ async function run(task, deps) {
     const isoDate = booking.startDate ? new Date(booking.startDate).toISOString().slice(0, 10) : '';
     // Anniversary re-book (Stage 1, 2026-08-09): a PAST booking means this is a
     // re-hire pitch -- reference the history, target this year's occasion.
-    const isRehire = booking.startDate && new Date(booking.startDate) < new Date();
+    // TEMPLATE FAMILY IS CHOSEN FROM WHAT WE ACTUALLY KNOW (2026-10-22).
+    //
+    // A re-hire letter says "after drawing at your X" -- so there must BE an X. When
+    // there isn't, the model does not decline, it invents: Karen Altman, whose entire
+    // history is one $7.00 tip in 2023, got a letter about her baby shower and her
+    // daughter "Esperanza" turning one. No baby shower. No Esperanza. Fabricated
+    // memories aimed at a real customer's real inbox.
+    //
+    // A tip is still a GOOD lead -- they stood there and watched the work, and we have
+    // their email. They just have no event of their own to reference yet. So they get
+    // the SEASONAL pitch instead: what's coming up this time of year, no invented past.
+    // Money decides which, because a tip is a transaction and a gig is a job. $26 is
+    // one dollar over the tip ceiling in VALUE_PROP ## PRICING ("$1-25 -> tip",
+    // mirrored by SquareSyncWorker BANDS).
+    // The prior job is a DIFFERENT ROW than the one being drafted. A re-engagement
+    // booking is forward-dated by design (SquareSyncWorker forwardDate()), so the old
+    // test "this booking's date is in the past" was false for every re-engagement row
+    // and sent even a $1,250 repeat customer down the seasonal path. Look up the real
+    // past job and pitch THAT.
+    const priorJobs = await prisma.booking.findMany({
+        where: { clientId, totalAmount: { gt: 0 }, startDate: { lt: new Date() } },
+        orderBy: { startDate: 'desc' },
+        select: { title: true, startDate: true, totalAmount: true }
+    });
+    const lifetime = priorJobs.reduce((n, b) => n + Number(b.totalAmount || 0), 0);
+    const lastJob = priorJobs.find(b => Number(b.totalAmount || 0) >= 26) || priorJobs[0] || null;
+    const hasRealPriorJob = lifetime >= 26 && !!lastJob;
+    const isRehire = hasRealPriorJob;
+    // Seasonal windows keyed off the booking's target month -- the occasions a buyer
+    // in that part of the year is actually planning for. Generic to any event trade.
+    const SEASONS = [
+        { months: [1, 2],   name: 'late winter',   occasions: "Valentine's Day, Presidents Day weekend, Mardi Gras, Purim" },
+        { months: [3, 4],   name: 'spring',        occasions: 'Easter and Passover, spring break parties, proms, Cinco de Mayo' },
+        { months: [5, 6],   name: 'late spring',   occasions: "Mother's Day, graduations, Father's Day, end-of-school and summer kickoff parties" },
+        { months: [7, 8],   name: 'summer',        occasions: '4th of July, summer backyard parties, reunions, back-to-school events' },
+        { months: [9, 10],  name: 'fall',          occasions: 'Halloween, fall festivals and carnivals, Rosh Hashanah and Yom Kippur, Oktoberfest' },
+        { months: [11, 12], name: 'the holidays',  occasions: "Friendsgiving and Thanksgiving, Hanukkah, Christmas and holiday parties, New Year's Eve" }
+    ];
+    const targetMonth = (booking.startDate ? new Date(booking.startDate) : new Date()).getUTCMonth() + 1;
+    const season = SEASONS.find(s => s.months.includes(targetMonth)) || SEASONS[0];
+    const isSeasonal = !isRehire && !booking.sourceUrl;   // no real prior job AND no scraped event of their own
     // Booker template family (2026-08-14, build item #6): clientClass='booker'
     // switches the rewrite mandate to the roster pitch. Same skeleton, same
     // seller facts, different ask -- see DRAFT_PROMPT.bookerRule.
     const isBooker = client.clientClass === 'booker';
     const prompt = fillPrompt(DRAFT_PROMPT.lines, {
         trade:       (VALUE_PROP && VALUE_PROP.trade) || 'events',
-        rehireLine:  isRehire ? fillPrompt(DRAFT_PROMPT.rehireRule, { pastTitle: booking.title || 'their event', pastDate: isoDate }) : '',
+        rehireLine:  isRehire ? fillPrompt(DRAFT_PROMPT.rehireRule, {
+                         pastTitle: (lastJob && lastJob.title) || 'their event',
+                         pastDate:  (lastJob && lastJob.startDate) ? new Date(lastJob.startDate).toISOString().slice(0, 10) : '' })
+                   : isSeasonal ? fillPrompt(DRAFT_PROMPT.seasonalRule, { season: season.name, seasonOccasions: season.occasions })
+                   : '',
         bookerLine:  isBooker ? DRAFT_PROMPT.bookerRule : '',
         sampleEmail: tpl,
         leadData:    JSON.stringify({
