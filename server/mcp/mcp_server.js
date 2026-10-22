@@ -680,8 +680,8 @@ async function pipelineStatus(id, args) {
     // recent wins. Bookings-the-table is the prospect pipeline; bookings-the-
     // report-section means gigs WON, so filter to won).
     const latestBookings = await prisma.booking.findMany({
-        where: { status: 'booked' },
-        orderBy: { createdAt: 'desc' },
+        where: { status: 'booked', startDate: { not: null } },   // newest GIG DATE -- createdAt is import order (Square backfill)
+        orderBy: { startDate: 'desc' },
         take: 3,
         select: {
             title: true, location: true, startDate: true, status: true, createdAt: true,
@@ -700,7 +700,7 @@ async function pipelineStatus(id, args) {
     const outreachWhere = {
         status: { in: ['hot', 'brewing'] },
         shared: false,
-        startDate: { gte: new Date() },
+        startDate: { gte: bookingWindowStart() },
         client: { email: { not: null } },
         NOT: { title: { contains: '(seed)' } }
     };
@@ -761,22 +761,25 @@ async function pipelineStatus(id, args) {
     const factletLine = unprocessedFactlets == null
         ? `${totalFactlets} total`
         : `${totalFactlets} total  ·  ${unprocessedFactlets} unprocessed (of ${liveFactlets} live; discovery pauses at ${factletPause})`;
+    // THE REPORT SHOWS WHAT PRECRIME DID, NOT WHAT THE BUSINESS DID (2026-10-22).
+    // Removed the `BOOKED <- gigs WON (the goal)` headline and the LATEST WON GIGS
+    // section. PRECRIME has NO live path that learns a gig was won or paid -- every
+    // 'booked' row is imported Square/Gmail/Calendar history. Printing it as the goal
+    // claimed credit for the user's own past work and buried the only actionable list
+    // under three sections of archive. Actionable first, archive last, one line.
     const report = [
-        'BOOKINGS',
-        `  BOOKED     ${bookingsBooked}   <- gigs WON (the goal)`,
-        `  CONTACTED  ${bookingsContacted}`,
-        `  HOT        ${bookingsHot}`,
-        `  BREWING    ${bookingsBrewing}   (${bookingsBrewing - brewingSeedStubs} real · ${brewingSeedStubs} seed stubs awaiting a real event)`,
-        `  COLD       ${bookingsCold}`,
-        '',
-        'LATEST WON GIGS  (client · location · date)',
-        bookingLines,
-        '',
-        `OUTREACH-READY  ${outreachReadyCount}  (client · event · date · bookingId -- say "draft outreach for <bookingId>" to queue one)`,
+        `OUTREACH-READY  ${outreachReadyCount}   <- ACT ON THESE   (say "draft outreach for <bookingId>")`,
         outreachLines,
         '',
-        `FACTLETS  ${factletLine}`,
-        `CLIENTS   ${totalClients}  ·  drafts: ${brewing} brewing / ${ready} ready / ${sent} sent`
+        'LEEDZ PIPELINE',
+        `  live / workable    ${bookingsBrewing - brewingSeedStubs}`,
+        `  at the rim (hot)   ${bookingsHot}   <- share-ready on Leedz`,
+        `  cold / acted-on    ${bookingsCold}`,
+        `  placeholder stubs  ${brewingSeedStubs}   (client saved, no real event yet)`,
+        '',
+        `EVIDENCE  ${factletLine}${totalFactlets === 0 ? '   <<< ZERO -- nothing is feeding the pipeline' : ''}`,
+        `CLIENTS   ${totalClients}  ·  ${sent} already contacted`,
+        `ARCHIVE   ${bookingsBooked} past gigs imported from Square/Gmail/Calendar -- history, NOT pipeline`
     ].join('\n');
 
     // REPORT-ONLY mode (2026-08-06): report=true returns the pre-formatted text and
@@ -1670,6 +1673,9 @@ async function pipelineEnqueue(id, args) {
             include: { client: { select: { company: true, name: true } } }
         });
         if (!booking) return createErrorResponse(id, -32602, `enqueue: no booking with id "${bookingId}".`);
+        if (booking.startDate && booking.startDate < bookingWindowStart()) {
+            return createErrorResponse(id, -32602, `enqueue: booking "${booking.title || bookingId}" (${booking.startDate.toISOString().slice(0, 10)}) is before the VALUE_PROP BOOKING WINDOW (${VALUE_PROP.earliestBookingDate || 'today'}). No outreach for it -- dismiss it instead.`);
+        }
         const bLabel = `${booking.title || bookingId} (${(booking.client && (booking.client.company || booking.client.name)) || 'no client'})`;
         const dup = await prisma.task.findFirst({
             where: { type, targetType: 'Booking', targetId: bookingId, status: { in: ['ready', 'claimed'] } }
@@ -3155,6 +3161,13 @@ async function pipelineGetTask(id, args) {
     return createSuccessResponse(id, JSON.stringify(taskRowToPacket(row), null, 2));
 }
 
+// Earliest event date worth outreach: the later of NOW and VALUE_PROP '## BOOKING WINDOW'.
+function bookingWindowStart() {
+    const now = new Date();
+    const e = VALUE_PROP.earliestBookingDate ? new Date(VALUE_PROP.earliestBookingDate) : null;
+    return e && e > now ? e : now;
+}
+
 // mark_sent -- DETERMINISTIC outreach record. Called by the gmail send tool itself the moment
 // an email goes out OR a Gmail draft is created for the recipient -- a draft counts as consumed
 // outreach (standing rule 2026-07-19) (NOT dependent on any LLM remembering to save). Given the recipient
@@ -3177,6 +3190,8 @@ async function pipelineMarkSent(id, args) {
         const withEmail = await prisma.client.findMany({ where: { email: { not: null } }, select: { id: true, email: true } });
         clients = withEmail.filter(c => String(c.email).trim().toLowerCase() === email);
     }
+    // probe: read-only lookup for the gmail_send client gate -- writes nothing.
+    if (args.probe) return createSuccessResponse(id, JSON.stringify({ matched: clients.length }));
     if (clients.length === 0) {
         // Not an error: the recipient may not be a tracked client (manual email, cc, etc.).
         return createSuccessResponse(id, JSON.stringify({ marked: 0, note: `no client matches ${email || clientId}` }, null, 2));
