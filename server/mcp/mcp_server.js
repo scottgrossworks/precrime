@@ -91,10 +91,12 @@ const dbPath = process.env.DATABASE_URL.replace(/^file:/, '');
         console.error(`[MCP]   Fill in apiKeys.${provider} and restart.`);
         process.exit(1);
     }
+    // Tavily is OPTIONAL since 2026-10-22. Search and extract both run through the
+    // user's own Chrome (chromeBridge -> DuckDuckGo HTML / page fetch) at zero credits;
+    // Tavily is only a fallback when the bridge is down. This used to be a FATAL exit,
+    // which meant blanking a dead key stopped PRECRIME from booting at all.
     if (!process.env.TAVILY_API_KEY) {
-        console.error('[MCP] FATAL: apiKeys.tavily is empty in precrime_config.json.');
-        console.error('[MCP]   Tavily is required for source discovery and URL scraping.');
-        process.exit(1);
+        console.error('[MCP] Tavily: no key -- search + extract run through Chrome only (bridge on :12306 must be up).');
     }
 })();
 
@@ -319,6 +321,17 @@ async function handlePipeline(id, params) {
             if (!r.ok) return createErrorResponse(id, -32603, `browse failed: ${r.error}`);
             return createSuccessResponse(id, JSON.stringify({ url: r.url, text: r.text }));
         }
+        case 'web_search': {
+            // Web search through the user's own Chrome (2026-10-22) -- the zero-credit
+            // replacement for Tavily search. Same bridge, queue, pacing and bot-block
+            // cooldown as `browse`. Results come back in Tavily's shape so the
+            // tavily_lean MCP wrapper can serve them to workers unchanged.
+            const query = args && args.query ? String(args.query).trim() : '';
+            if (!query) return createErrorResponse(id, -32602, 'web_search requires query.');
+            const r = await require('./chromeBridge').searchWeb(query, args.max_results);
+            if (!r.ok) return createErrorResponse(id, -32603, `web_search failed: ${r.error}`);
+            return createSuccessResponse(id, JSON.stringify({ query: r.query, results: r.results }));
+        }
         case 'signal': {
             // DEMAND SIGNAL -> DRILL_DOWN (2026-07-20, bird-dog rule). A scraper or the
             // orchestrator sensed demand it cannot attribute yet (an "ask" post with no
@@ -374,7 +387,7 @@ async function handlePipeline(id, params) {
         case 'mark_bounced':   return await pipelineMarkBounced(id, args);
         case 'bounce_sweep':   return await pipelineBounceSweep(id, args);
         default:
-            return createErrorResponse(id, -32602, `Unknown pipeline action: "${action}". Must be: status, configure, get_config, get_task, next, save, delete, rescore, resolve_dates, share_booking, dismiss_booking, ignore, mark_sent, mark_bounced, bounce_sweep, browse, signal, pause, resume, report_session, audit_session, next_source, mark_source, add_sources, import_sources, work_status, judge_affected, plan_tasks, claim_task, complete_task, tasks, recycler.`);
+            return createErrorResponse(id, -32602, `Unknown pipeline action: "${action}". Must be: status, configure, get_config, get_task, next, save, delete, rescore, resolve_dates, share_booking, dismiss_booking, ignore, mark_sent, mark_bounced, bounce_sweep, browse, web_search, signal, pause, resume, report_session, audit_session, next_source, mark_source, add_sources, import_sources, work_status, judge_affected, plan_tasks, claim_task, complete_task, tasks, recycler.`);
     }
 }
 

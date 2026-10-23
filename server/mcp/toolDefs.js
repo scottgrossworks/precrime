@@ -64,7 +64,7 @@ const TOOL_DEFS = [
                         properties: {
                             action: {
                                 type: 'string',
-                                enum: ['status', 'configure', 'get_config', 'get_task', 'next', 'save', 'delete', 'rescore', 'resolve_dates', 'share_booking', 'dismiss_booking', 'ignore', 'report_session', 'audit_session', 'next_source', 'mark_source', 'add_sources', 'import_sources', 'work_status', 'judge_affected', 'plan_tasks', 'enqueue', 'claim_task', 'complete_task', 'tasks', 'recycler', 'bounce_sweep', 'browse', 'signal', 'pause', 'resume', 'mark_sent', 'mark_bounced'],
+                                enum: ['status', 'configure', 'get_config', 'get_task', 'next', 'save', 'delete', 'rescore', 'resolve_dates', 'share_booking', 'dismiss_booking', 'ignore', 'report_session', 'audit_session', 'next_source', 'mark_source', 'add_sources', 'import_sources', 'work_status', 'judge_affected', 'plan_tasks', 'enqueue', 'claim_task', 'complete_task', 'tasks', 'recycler', 'bounce_sweep', 'browse', 'web_search', 'signal', 'pause', 'resume', 'mark_sent', 'mark_bounced'],
                                 description: 'Which pipeline operation to run.'
                             },
                             term: {
@@ -172,6 +172,14 @@ const TOOL_DEFS = [
                             url: {
                                 type: 'string',
                                 description: 'For action=mark_source: the URL returned by next_source. For action=browse / action=signal: the page or post URL.'
+                            },
+                            query: {
+                                type: 'string',
+                                description: 'For action=web_search: the search query. Runs in the user\'s own Chrome (zero credits).'
+                            },
+                            max_results: {
+                                type: 'number',
+                                description: 'For action=web_search: hits to return, 1-10 (default 5).'
                             },
                             note: {
                                 type: 'string',

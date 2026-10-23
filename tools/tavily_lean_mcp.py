@@ -32,7 +32,7 @@ from pathlib import Path
 THIS_DIR = Path(__file__).resolve().parent
 sys.path.insert(0, str(THIS_DIR))
 
-from tavily_lean import search_lean, extract_lean, lean_from_page_text  # noqa: E402
+from tavily_lean import search_lean, extract_lean, lean_from_page_text, pick_relevant_snippets, EMAIL_RE, PHONE_RE  # noqa: E402
 
 # Append-only call log so you can tail and confirm the wrapper is active.
 CALL_LOG = THIS_DIR.parent / "logs" / "tavily_lean.log"
@@ -72,16 +72,15 @@ _BROWSE_TIMEOUT_S = 120
 _srv_down_until = 0.0
 
 
-def _browse_via_chrome(url: str):
-    """Fetch a URL through the pipeline `browse` action (user's logged-in Chrome).
-    Returns page text on success, or None for ANY failure -- caller falls back to
-    a real (billed) tavily_extract. Never raises."""
+def _pipeline_rpc(arguments: dict, tag: str):
+    """POST one pipeline action to the local server (which owns the Chrome bridge).
+    Returns the parsed inner JSON dict, or None on ANY failure. Never raises."""
     global _srv_down_until
     if time.time() < _srv_down_until:
         return None
     payload = {
         "jsonrpc": "2.0", "id": 1, "method": "tools/call",
-        "params": {"name": "pipeline", "arguments": {"action": "browse", "url": url}},
+        "params": {"name": "pipeline", "arguments": arguments},
     }
     req = urllib.request.Request(
         _PIPELINE_URL,
@@ -94,28 +93,59 @@ def _browse_via_chrome(url: str):
             rpc = json.loads(res.read().decode("utf-8"))
     except (urllib.error.URLError, OSError) as e:
         _srv_down_until = time.time() + 60
-        log(f"browse-first: pipeline server unreachable ({e}); tavily fallback (60s backoff)")
+        log(f"{tag}: pipeline server unreachable ({e}) (60s backoff)")
         return None
     except Exception as e:
-        log(f"browse-first: {e}; tavily fallback")
+        log(f"{tag}: {e}")
         return None
     if not isinstance(rpc, dict) or rpc.get("error"):
         msg = (rpc.get("error") or {}).get("message", "bad response") if isinstance(rpc, dict) else "bad response"
-        # Expected fallbacks: bridge not running (Chrome closed), bridge busy,
-        # domain cooling after a bot-block. All mean "let Tavily take this one".
-        log(f"browse-first: {str(msg)[:160]} -> tavily fallback")
+        # Expected: bridge not running (Chrome closed), bridge busy, domain cooling.
+        log(f"{tag}: {str(msg)[:160]}")
         return None
     try:
-        inner = json.loads(rpc["result"]["content"][0]["text"])
-        text = inner.get("text") or ""
+        return json.loads(rpc["result"]["content"][0]["text"])
     except Exception as e:
-        log(f"browse-first: unparseable browse result ({e}); tavily fallback")
+        log(f"{tag}: unparseable result ({e})")
         return None
+
+
+def _browse_via_chrome(url: str):
+    """Fetch a URL through the pipeline `browse` action (user's logged-in Chrome).
+    Returns page text on success, or None for ANY failure -- caller falls back to
+    a real (billed) tavily_extract. Never raises."""
+    inner = _pipeline_rpc({"action": "browse", "url": url}, "browse-first")
+    if inner is None:
+        return None
+    text = inner.get("text") or ""
     if len(text.strip()) < 200:
         # Near-empty render (JS wall, interstitial). Tavily's fetcher may do better.
         log(f"browse-first: thin render ({len(text.strip())} chars); tavily fallback | {url[:120]}")
         return None
     return text
+
+
+def _search_via_chrome(query: str, max_results: int):
+    """Web search through the user's own Chrome (pipeline `web_search` -> DuckDuckGo
+    HTML), returned in search_lean's shape. None on any failure. Never raises.
+    2026-10-22: Tavily credits are exhausted and will not be renewed (~$20/hr burn).
+    This is now the PRIMARY search path; Tavily is only the fallback."""
+    inner = _pipeline_rpc({"action": "web_search", "query": query, "max_results": max_results}, "chrome-search")
+    if inner is None:
+        return None
+    hits = []
+    for r in (inner.get("results") or [])[:max_results]:
+        content = r.get("content") or ""
+        hits.append({
+            "url": r.get("url"),
+            "title": r.get("title"),
+            "score": None,
+            "snippet": pick_relevant_snippets(content, query),
+            "emails": list(dict.fromkeys(EMAIL_RE.findall(content)))[:5],
+            "phones": list(dict.fromkeys(PHONE_RE.findall(content)))[:3],
+        })
+    return {"query": query, "answer": None, "hits": hits,
+            "stats": {"source": "chrome_duckduckgo", "credits": 0, "hits": len(hits)}}
 
 
 # ---- JSON-RPC helpers ----
@@ -288,6 +318,13 @@ def handle_tools_call(req_id, params):
                     "reason": "query_contains_database_id",
                     "hint": "That token is a PRECRIME database id, not a searchable term. Look the record up via the pipeline (find/get_task), or search the client/event NAME instead.",
                 }, ensure_ascii=False, separators=(",", ":"))}]})
+            # CHROME FIRST (2026-10-22): zero credits through the user's own browser.
+            max_r = min(5, max(1, int(args.get("max_results", 5))))
+            result = _search_via_chrome(query, max_r)
+            if result is not None:
+                call_log("chrome_search", query, result.get("stats", {}))
+                return ok(req_id, {"content": [{"type": "text", "text": json.dumps(result, ensure_ascii=False, separators=(",", ":"))}]})
+            log(f"chrome-search unavailable -> tavily fallback | {query[:120]}")
             result = search_lean(
                 query=query,
                 # Clamp: a worker asking for 10-20 hits multiplies the payload (re-billed on

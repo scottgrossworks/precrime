@@ -11,34 +11,26 @@
 'use strict';
 
 const { prisma } = require('../db');
-const { PRECRIME_CONFIG, VALUE_PROP } = require('../runtime');
+const { VALUE_PROP } = require('../runtime');
 
-const TAVILY_URL = 'https://api.tavily.com/search';
+// 2026-10-22: Tavily is gone (credits exhausted, ~$20/hr burn, not renewing).
+// Searches run through the user's own Chrome (chromeBridge.searchWeb ->
+// DuckDuckGo HTML), paced and bot-block-guarded like every other browse. Zero credits.
+const { searchWeb } = require('../chromeBridge');
 const MAX_HITS = 4;
 // Login-walled / social hosts produce junk snippets; the skill said skip them.
 const SKIP_HOSTS = /facebook\.com|instagram\.com|linkedin\.com|tiktok\.com|(^|\.)x\.com|twitter\.com/i;
 
-async function tavilySearch(query, apiKey) {
-    const res = await fetch(TAVILY_URL, {
-        method: 'POST',
-        headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ api_key: apiKey, query, search_depth: 'basic', max_results: 5 }),
-        signal: AbortSignal.timeout(15000)
-    });
-    if (!res.ok) throw new Error(`tavily http ${res.status}`);
-    const j = await res.json();
-    return Array.isArray(j.results) ? j.results : [];
+async function chromeSearch(query) {
+    const r = await searchWeb(query, 5);
+    if (!r.ok) throw new Error(r.error || 'chrome search failed');
+    return r.results;   // [{ url, title, content }] -- Tavily's shape, so nothing below changes
 }
 
 async function run(task, deps) {
     const clientId = task.targetId;
     const out = (summary, ids) => ({ clientIds: [clientId], bookingIds: [], factletIds: [], sourceIds: [], summary, needsJudge: false });
 
-    const apiKey = PRECRIME_CONFIG && PRECRIME_CONFIG.apiKeys && PRECRIME_CONFIG.apiKeys.tavily;
-    if (!apiKey) {
-        return { status: 'cancelled', error: 'tavily_unavailable',
-                 output: out('no tavily key'), summary: `find-sources ${clientId}: no tavily key` };
-    }
     const client = await prisma.client.findUnique({ where: { id: clientId } });
     if (!client) {
         return { status: 'failed', error: 'client_missing',
@@ -60,11 +52,11 @@ async function run(task, deps) {
 
     let hits = [];
     for (const q of queries) {
-        try { hits.push(...await tavilySearch(q, apiKey)); }
+        try { hits.push(...await chromeSearch(q)); }
         catch (e) {
             if (hits.length) break;   // partial results are fine
-            return { status: 'cancelled', error: 'tavily_unavailable',
-                     output: out(`tavily failed: ${e.message}`), summary: `find-sources "${label}": tavily failed (${e.message})` };
+            return { status: 'cancelled', error: 'search_unavailable',
+                     output: out(`chrome search failed: ${e.message}`), summary: `find-sources "${label}": chrome search failed (${e.message})` };
         }
     }
 

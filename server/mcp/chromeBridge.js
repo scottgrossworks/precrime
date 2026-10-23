@@ -86,7 +86,7 @@ function toolText(rpc) {
 // One browse at a time: chain every call onto this promise.
 let _queue = Promise.resolve();
 
-async function _browse(url) {
+async function _browse(url, contentArgs) {
     let sid = null;
     try {
         const init = await bridgePost(null, {
@@ -105,10 +105,12 @@ async function _browse(url) {
         await new Promise(r => setTimeout(r, 2000));
         const content = await bridgePost(sid, {
             jsonrpc: '2.0', id: 3, method: 'tools/call',
-            params: { name: 'chrome_get_web_content', arguments: { textContent: true } }
+            params: { name: 'chrome_get_web_content', arguments: contentArgs || { textContent: true } }
         });
         if (content.json && content.json.error) throw new Error(`get_content: ${content.json.error.message}`);
-        const text = toolText(content.json).slice(0, MAX_TEXT_CHARS);
+        // HTML mode (web search) needs the whole page to parse result links; text mode stays capped.
+        const raw = toolText(content.json);
+        const text = contentArgs && contentArgs.htmlContent ? raw : raw.slice(0, MAX_TEXT_CHARS);
         return { ok: true, url, text };
     } finally {
         // Always release the bridge session so background workers can connect.
@@ -121,7 +123,7 @@ async function _browse(url) {
 }
 
 // Pacing wrapper: cooldown check -> jittered same-domain gap -> fetch -> block scan.
-async function _pacedBrowse(url) {
+async function _pacedBrowse(url, contentArgs) {
     const domain = _domainOf(url);
     const st = _domainState.get(domain) || { lastHitAt: 0, coolUntil: 0 };
     _domainState.set(domain, st);
@@ -133,7 +135,7 @@ async function _pacedBrowse(url) {
     const wait = st.lastHitAt + gap - Date.now();
     if (wait > 0) await new Promise(r => setTimeout(r, wait));
     st.lastHitAt = Date.now();
-    const r = await _browse(url);
+    const r = await _browse(url, contentArgs);
     if (r.ok && BLOCK_RE.test(r.text)) {
         st.coolUntil = Date.now() + BLOCK_COOLDOWN_MS;
         console.error(`[browse] BOT-BLOCK detected on ${domain} -- cooling ${Math.round(BLOCK_COOLDOWN_MS / 60000)}min`);
@@ -145,7 +147,50 @@ async function _pacedBrowse(url) {
 // Public API. Never rejects: returns { ok:false, error } so the pipeline action
 // can hand the model a plain, retryable message ("bridge busy / not running").
 function browseUrl(url) {
-    const run = _queue.then(() => _pacedBrowse(url)).catch(e => ({
+    return browseUrlWith(url);
+}
+
+// WEB SEARCH THROUGH THE USER'S OWN CHROME (2026-10-22). Tavily credits are gone
+// and will not be bought again -- it burned ~$20/hr. Searches now run as a DuckDuckGo
+// HTML results page in the logged-in Chrome: zero credits, same queue, same per-domain
+// pacing (browsePacingMs, +/-30% jitter) and same bot-block cooldown as every browse.
+// DuckDuckGo, NOT Google: the html endpoint is JS-free and tolerant, and hammering
+// Google from the user's real IP is how an account gets flagged.
+// Returns hits in Tavily's result shape ({ url, title, content }) so every existing
+// caller keeps working unchanged. Never rejects.
+const SEARCH_URL = 'https://html.duckduckgo.com/html/?q=';
+function _decode(s) {
+    return String(s || '').replace(/<[^>]+>/g, '').replace(/&amp;/g, '&').replace(/&quot;/g, '"')
+        .replace(/&#x27;|&#39;/g, "'").replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/\s+/g, ' ').trim();
+}
+function parseDdg(html, max) {
+    let page = html;
+    try { const j = JSON.parse(html); page = j.htmlContent || j.content || (j.data && j.data.htmlContent) || html; } catch (_) {}
+    const hits = [];
+    const blocks = String(page).split(/class="result results_links/).slice(1);
+    for (const b of blocks) {
+        if (hits.length >= max) break;
+        const a = b.match(/class="result__a"[^>]*href="([^"]+)"[^>]*>([\s\S]*?)<\/a>/);
+        if (!a) continue;
+        let url = a[1];
+        const m = url.match(/uddg=([^&]+)/);
+        if (m) url = decodeURIComponent(m[1]);
+        if (url.startsWith('//')) url = 'https:' + url;
+        if (/duckduckgo\.com\/y\.js|ad_provider|ad_domain/.test(url)) continue;   // sponsored
+        const sn = b.match(/class="result__snippet"[^>]*>([\s\S]*?)<\/a>/);
+        hits.push({ url, title: _decode(a[2]), content: _decode(sn ? sn[1] : '') });
+    }
+    return hits;
+}
+async function searchWeb(query, max) {
+    const n = Math.min(10, Math.max(1, Number(max) || 5));
+    const r = await browseUrlWith(SEARCH_URL + encodeURIComponent(String(query || '')), { htmlContent: true });
+    if (!r.ok) return { ok: false, query, error: r.error, results: [] };
+    return { ok: true, query, results: parseDdg(r.text, n) };
+}
+
+function browseUrlWith(url, contentArgs) {
+    const run = _queue.then(() => _pacedBrowse(url, contentArgs)).catch(e => ({
         ok: false, url,
         error: /ECONNREFUSED|fetch failed/i.test(e.message)
             ? 'mcp-chrome bridge not running (start Chrome with the mcp-chrome extension + mcp-chrome-bridge)'
@@ -157,4 +202,4 @@ function browseUrl(url) {
     return run;
 }
 
-module.exports = { browseUrl };
+module.exports = { browseUrl, searchWeb, parseDdg };
