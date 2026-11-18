@@ -52,6 +52,24 @@ async function createGmailDraft(to, subject, bodyText) {
     }
 }
 
+// The model is told not to sign off and sometimes does anyway ("Looking forward to
+// drawing for the team again,\nScott"), so with the code-appended signature the email
+// was signed twice. Enforced here, not in the prompt: drop trailing closing lines --
+// a short sign-off phrase ending in a comma, or the seller's first name on its own.
+function stripSignoff(body, sig) {
+    const first = String(sig || '').trim().split(/\s+/)[0] || '';
+    const lines = String(body).replace(/\s+$/, '').split('\n');
+    const isClose = (l) => {
+        const t = l.trim();
+        if (!t) return true;
+        if (first && t.replace(/[,.!]$/, '').toLowerCase() === first.toLowerCase()) return true;
+        return t.length <= 60 && /,$/.test(t) &&
+            /^(best|thanks|thank you|cheers|warmly|sincerely|regards|all the best|looking forward|talk soon|hope to|see you)/i.test(t);
+    };
+    while (lines.length > 1 && isClose(lines[lines.length - 1])) lines.pop();
+    return lines.join('\n');
+}
+
 function stripDashes(s) {
     // Em dash, en dash, and " -- " all become commas (mail path decodes UTF-8
     // dashes as mojibake; standing rule 2026-07-13).
@@ -143,10 +161,23 @@ async function run(task, deps) {
                    : '',
         bookerLine:  isBooker ? DRAFT_PROMPT.bookerRule : '',
         sampleEmail: tpl,
+        // Synthesis inputs (2026-11-18): the drafter used to see only the sample email and
+        // a record title, so it could only fill in blanks. It now gets today's date (the
+        // "why now"), what the seller actually offers, and the real past job.
+        today:       new Date().toISOString().slice(0, 10),
+        sellerFacts: JSON.stringify({
+            pitch: String((VALUE_PROP && VALUE_PROP.pitch) || '').replace(/\*\*/g, '').slice(0, 500),
+            whyUs: ((VALUE_PROP && VALUE_PROP.whyUs) || []).slice(0, 5),
+            rate:  (VALUE_PROP && VALUE_PROP.rate) || ''
+        }),
         leadData:    JSON.stringify({
             contactName: client.name, company: client.company, email: client.email,
             clientClass: client.clientClass || 'host',
             event: booking.title, date: isoDate, location: booking.location,
+            // A forward re-engagement booking is OUR GUESS from their history, not a gig.
+            eventIsPrediction: /^\s*PREDICTED\b/i.test(booking.description || '') || /^square:forward/.test(booking.source || ''),
+            lastJob: lastJob ? { title: lastJob.title, date: new Date(lastJob.startDate).toISOString().slice(0, 10),
+                                 paid: Number(lastJob.totalAmount || 0) } : null,
             dossierTail: String(client.dossier || '').slice(-1200)
         })
     });
@@ -167,7 +198,7 @@ async function run(task, deps) {
 
     // Assemble: dash-filtered body + VERBATIM signature (code appends it, so the
     // model can neither reword it nor forget it).
-    const draft = `${stripDashes(text)}\n\n${sig}`;
+    const draft = `${stripSignoff(stripDashes(text), sig)}\n\n${sig}`;
     const resp = await deps.pipelineSave('inproc-draft', clientId,
         { draft, draftStatus: 'ready' }, task.sessionId || null, false);
     let body = {};
