@@ -343,6 +343,17 @@ if (fs.existsSync(bootSrc)) {
   console.warn(`  ⚠ scripts/bootstrap_config.js missing`);
 }
 
+// 2d.2b Copy scripts/preflight.js -- goose.bat runs it before launch (Chrome bridge, Gmail, LLM credit).
+// FATAL if missing: a launcher that calls a script the build did not ship fails on every start.
+const pfSrc = path.join(PRECRIME, 'scripts', 'preflight.js');
+const pfDst = path.join(outputDir, 'scripts', 'preflight.js');
+if (fs.existsSync(pfSrc)) {
+  copyFile(pfSrc, pfDst);
+} else {
+  console.error(`  ✗ FATAL: scripts/preflight.js missing — goose.bat calls it and will fail on every launch`);
+  process.exit(1);
+}
+
 // 2d.3 Ship precrime_config.json (starter with empty apiKey strings — user fills locally)
 const cfgSampleSrc = path.join(PRECRIME, 'precrime_config.sample.json');
 const cfgDst       = path.join(outputDir, 'precrime_config.json');

@@ -173,11 +173,11 @@ if /i "%LLM_PROVIDER%"=="openai" (
   pause & exit /b 1
 )
 
-if "%TAVILY_API_KEY%"=="" (
-  echo.
-  echo  TAVILY_API_KEY missing. Set apiKeys.tavily in precrime_config.json.
-  echo  Tavily is required for url-loop / source discovery scraping.
-  echo.
+:: --- Preflight (2026-11-18). Tavily is gone: search + page fetch run through the user's
+:: own Chrome (:12306), outreach through Gmail (:7000). Check them NOW and stop loudly --
+:: not two hours into a run that quietly produces nothing.
+node "%~dp0scripts\preflight.js"
+if errorlevel 1 (
   pause & exit /b 1
 )
 
