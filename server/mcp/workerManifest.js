@@ -31,7 +31,12 @@ const WORKER_MANIFEST = {
         // rules were silently unreachable.
         browser: {
             skills: { fb: 'fb-factlet-harvester/SKILL.md', ig: 'ig-factlet-harvester/SKILL.md' },
-            extensions: ['chrome', 'developer']
+            // NO 'chrome' extension (2026-11-18). Raw chrome_navigate ACTIVATES the tab and
+            // focuses the window, so every fb/ig scrape yanked the cursor out of whatever the
+            // user was typing, and the single-client bridge made workers fight the server
+            // for it ("Already connected" orphans). Workers now read pages through the
+            // pipeline `browse` action: server-side, ONE background tab, paced, serialized.
+            extensions: ['developer']
         }
     },
     DRILL_DOWN:          { skill: 'drill-down.md',          extensions: ['tavily'], actions: [...SAVE_COMPLETE, 'browse'], tools: ['pipeline', 'find'] },

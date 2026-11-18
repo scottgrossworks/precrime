@@ -1,5 +1,5 @@
 ---
-name: {{DEPLOYMENT_NAME}}-fb-factlet-harvester
+name: MyProject-fb-factlet-harvester
 description: One-Task SCRAPE_SOURCE worker for channel="fb". Render one claimed Facebook page/group via the browser MCP, save discoveries with judge:false, recurse via add_sources, complete the Task, stop.
 triggers:
   - harvest facebook
@@ -23,11 +23,10 @@ Facebook requires a rendered browser session. This worker is dispatched only whe
 ## Step 2 -- Render
 
 ```
-chrome__chrome_navigate({ url })
-chrome__chrome_get_web_content({ textContent: true })   // reads the rendered, logged-in page
+precrime__pipeline({ action: "browse", url })   // returns { url, text } -- the rendered, logged-in page
 ```
 
-For more posts on an infinite-scroll feed, re-call `chrome__chrome_get_web_content` after the page has loaded further (mcp-chrome reads the live DOM of the tab). From the returned text, extract only posts within the last 30 days that are relevant to `DOCS/VALUE_PROP.md`:
+`browse` runs in a background Chrome tab (it never takes focus) and is paced for you: one page per call, do not loop on the same URL. If it returns an error (bridge busy, domain cooling after a bot-block), complete `failed` and move on. From the returned text, extract only posts within the last 30 days that are relevant to `DOCS/VALUE_PROP.md`:
 
 - Clients: savable business/person records (sparse company-only allowed).
 - Factlets: reusable demand evidence (event date, buying occasion, venue, budget clue, market trend). Use `skills/shared/factlet-rules.md`. BROAD post -> factlet; SPECIFIC contact -> `skills/shared/classify-contact.md`.

@@ -85,6 +85,8 @@ function toolText(rpc) {
 
 // One browse at a time: chain every call onto this promise.
 let _queue = Promise.resolve();
+// The ONE tab PRECRIME works in (opened in the background on first use, reused after).
+let _workTab = null;
 
 async function _browse(url, contentArgs) {
     let sid = null;
@@ -96,16 +98,39 @@ async function _browse(url, contentArgs) {
         sid = init.sessionId;
         if (!sid) throw new Error('bridge gave no session id');
         await bridgePost(sid, { jsonrpc: '2.0', method: 'notifications/initialized' });
-        const nav = await bridgePost(sid, {
-            jsonrpc: '2.0', id: 2, method: 'tools/call',
-            params: { name: 'chrome_navigate', arguments: { url } }
-        });
-        if (nav.json && nav.json.error) throw new Error(`navigate: ${nav.json.error.message}`);
+        // BACKGROUND TAB (2026-11-18). Every navigate used to ACTIVATE the tab and focus the
+        // window, so each PRECRIME fetch yanked the cursor out of whatever the user was
+        // typing -- and it navigated the user's ACTIVE tab, replacing their page. Now PRECRIME
+        // opens ONE dedicated window the first time (background: true = never focused) and
+        // reuses that tab for every fetch. The user's own tabs are never touched.
+        const navTo = async (args) => {
+            const r = await bridgePost(sid, {
+                jsonrpc: '2.0', id: 2, method: 'tools/call',
+                params: { name: 'chrome_navigate', arguments: { ...args, url, background: true } }
+            });
+            if (r.json && r.json.error) throw new Error(`navigate: ${r.json.error.message}`);
+            let info = {};
+            try { info = JSON.parse(toolText(r.json)); } catch (_) { /* non-JSON reply: treat as failure below */ }
+            if (info.success === false || (r.json && r.json.result && r.json.result.isError)) {
+                throw new Error(`navigate: ${info.message || toolText(r.json).slice(0, 160) || 'failed'}`);
+            }
+            return info;
+        };
+        let info;
+        if (_workTab) {
+            try { info = await navTo({ tabId: _workTab }); }
+            catch (_) { _workTab = null; }   // user closed the PRECRIME window -- open a fresh one
+        }
+        if (!_workTab) {
+            info = await navTo({ newWindow: true });
+            _workTab = info.tabs && info.tabs[0] && info.tabs[0].tabId;
+            if (!_workTab) throw new Error('navigate: bridge did not return a tab id');
+        }
         // Give the page a moment to render before extracting text.
         await new Promise(r => setTimeout(r, 2000));
         const content = await bridgePost(sid, {
             jsonrpc: '2.0', id: 3, method: 'tools/call',
-            params: { name: 'chrome_get_web_content', arguments: contentArgs || { textContent: true } }
+            params: { name: 'chrome_get_web_content', arguments: { ...(contentArgs || { textContent: true }), tabId: _workTab, background: true } }
         });
         if (content.json && content.json.error) throw new Error(`get_content: ${content.json.error.message}`);
         // HTML mode (web search) needs the whole page to parse result links; text mode stays capped.

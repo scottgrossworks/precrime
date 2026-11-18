@@ -1,5 +1,5 @@
 ---
-name: {{DEPLOYMENT_NAME}}-ig-factlet-harvester
+name: MyProject-ig-factlet-harvester
 description: One-Task SCRAPE_SOURCE worker for channel="ig". Render one claimed Instagram account/hashtag via the browser MCP, save discoveries with judge:false, recurse via add_sources, complete the Task, stop.
 triggers:
   - harvest instagram
@@ -20,8 +20,10 @@ Instagram requires a rendered browser session. Dispatched only when the deployme
 
 ## Step 2 -- Render
 
-- `account` -> `chrome__chrome_navigate({ url: "https://instagram.com/<handle>" })` then `chrome__chrome_get_web_content({ textContent: true })`; read recent post captions.
-- `hashtag` -> `chrome__chrome_navigate({ url: "https://instagram.com/explore/tags/<tag>" })` then `chrome__chrome_get_web_content({ textContent: true })`; read top post captions.
+- `account` -> `precrime__pipeline({ action: "browse", url: "https://instagram.com/<handle>" })`; read recent post captions from the returned `text`.
+- `hashtag` -> `precrime__pipeline({ action: "browse", url: "https://instagram.com/explore/tags/<tag>" })`; read top post captions from the returned `text`.
+
+`browse` runs in a background Chrome tab (never takes focus) and is paced for you. One page per call; if it returns an error (bridge busy, domain cooling), complete `failed` and move on.
 
 Extract only captions within the last 30 days relevant to `DOCS/VALUE_PROP.md`:
 
