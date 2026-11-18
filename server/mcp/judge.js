@@ -193,6 +193,27 @@ async function pipelineDismissBooking(id, args) {
     if (ids.length === 0) {
         return createErrorResponse(id, -32602, 'dismiss_booking requires bookingId (string) or bookingIds (array of Booking.id).');
     }
+    // HISTORY IS NOT DISMISSABLE (2026-11-18). A past or terminal booking ('booked' = a paid
+    // gig, 'contacted' = outreach already out) is a record of what happened, not a leed. It
+    // is already dead -- expiry owns it -- so there is nothing to dismiss, and dismissing it
+    // erases the record and zeroes the client's scores. An old guard message told the chat
+    // model "dismiss it instead", the model obeyed, and Abigail Munson's real $500 2025 gig
+    // was wiped when the user had only asked for a sample email. Skip those rows, say so.
+    const now = new Date();
+    const candidates = await prisma.booking.findMany({
+        where: { id: { in: ids } },
+        select: { id: true, status: true, startDate: true }
+    });
+    const protectedIds = new Set(candidates
+        .filter(b => b.status === 'booked' || b.status === 'contacted' || (b.startDate && b.startDate < now))
+        .map(b => b.id));
+    if (protectedIds.size) ids = ids.filter(x => !protectedIds.has(x));
+    if (ids.length === 0) {
+        return createSuccessResponse(id, JSON.stringify({
+            dismissed: 0, requested: candidates.length, skippedHistory: protectedIds.size,
+            note: 'Nothing dismissed: those bookings are past or already paid/contacted history, not live leedz. No change made.'
+        }, null, 2));
+    }
     // Resolve the affected clients BEFORE the write (clientId is untouched by it).
     const affected = await prisma.booking.findMany({
         where: { id: { in: ids } },

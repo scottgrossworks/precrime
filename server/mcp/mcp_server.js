@@ -1679,15 +1679,33 @@ async function pipelineEnqueue(id, args) {
     // Email from the dossier on the config `draft` model and puts the result in
     // the user's Gmail Drafts folder. The chat model composes NOTHING.
     if (type === 'DRAFT_OUTREACH') {
-        const bookingId = String(args.bookingId || '').trim();
+        let bookingId = String(args.bookingId || '').trim();
         if (!bookingId) return createErrorResponse(id, -32602, 'enqueue DRAFT_OUTREACH requires bookingId.');
-        const booking = await prisma.booking.findUnique({
+        let booking = await prisma.booking.findUnique({
             where: { id: bookingId },
             include: { client: { select: { company: true, name: true } } }
         });
         if (!booking) return createErrorResponse(id, -32602, `enqueue: no booking with id "${bookingId}".`);
+        // RESOLVE, DON'T REFUSE (2026-11-18). A client has several bookings: the past gig they
+        // paid for, and the upcoming one outreach is about. The chat model routinely grabs
+        // the past one (a lookup by client returns it first). The old guard refused and said
+        // "dismiss it instead" -- and the model OBEYED, dismissing Abigail Munson's real $500
+        // 2025 gig (and zeroing her scores) when the user only asked for a sample email.
+        // Now: if the given booking is before the window, draft for this client's own
+        // upcoming in-window booking. If there is none, say so and tell the model to change nothing.
         if (booking.startDate && booking.startDate < bookingWindowStart()) {
-            return createErrorResponse(id, -32602, `enqueue: booking "${booking.title || bookingId}" (${booking.startDate.toISOString().slice(0, 10)}) is before the VALUE_PROP BOOKING WINDOW (${VALUE_PROP.earliestBookingDate || 'today'}). No outreach for it -- dismiss it instead.`);
+            const live = await prisma.booking.findFirst({
+                where: { clientId: booking.clientId, shared: false, status: { in: ['hot', 'brewing'] },
+                         startDate: { gte: bookingWindowStart() } },
+                orderBy: { startDate: 'asc' },
+                include: { client: { select: { company: true, name: true } } }
+            });
+            if (!live) {
+                return createErrorResponse(id, -32602, `enqueue: "${booking.title || bookingId}" (${booking.startDate.toISOString().slice(0, 10)}) is past or before the BOOKING WINDOW (${VALUE_PROP.earliestBookingDate || 'today'}), and this client has no upcoming booking to draft for. Nothing to do. Do NOT dismiss, delete or change any booking -- just tell the user.`);
+            }
+            logInfo(`enqueue: "${booking.title}" is past; drafting for this client's upcoming "${live.title}" (${live.startDate.toISOString().slice(0, 10)}) instead.`);
+            booking = live;
+            bookingId = live.id;
         }
         const bLabel = `${booking.title || bookingId} (${(booking.client && (booking.client.company || booking.client.name)) || 'no client'})`;
         const dup = await prisma.task.findFirst({
