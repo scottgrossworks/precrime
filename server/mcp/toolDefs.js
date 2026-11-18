@@ -135,10 +135,29 @@ const TOOL_DEFS = [
                                 type: 'string',
                                 description: 'For action=share_booking: Booking.id to share. For action=dismiss_booking: a single Booking.id to permanently skip (or use bookingIds[] to dismiss many in ONE call). For action=enqueue type=DRAFT_OUTREACH: the Booking.id to draft outreach for.'
                             },
+                            // NO enum (2026-11-18). This was enum ['draft','post'] for share_booking,
+                            // but plan_tasks reads the SAME property as 'workflow' | 'hot_only' |
+                            // 'headless'. Groq validates tool calls strictly, so every plan_tasks
+                            // call with mode:"hot_only" was rejected before reaching the server and
+                            // the session died on its first command. One property, two actions:
+                            // describe both, constrain neither (the handlers validate).
                             mode: {
                                 type: 'string',
-                                enum: ['draft', 'post'],
-                                description: 'For action=share_booking: "draft" returns the payload + humanReadable; "post" posts to Leedz.'
+                                description: 'For action=share_booking: "draft" returns the payload + humanReadable; "post" posts to Leedz. For action=plan_tasks: "workflow" (default) | "hot_only" | "headless".'
+                            },
+                            // plan_tasks arguments the handler reads (mcp_server.js pipelinePlanTasks)
+                            // that were never declared -- strict validation refuses undeclared args.
+                            targetHot: {
+                                type: 'number',
+                                description: 'For action=plan_tasks: stop after this many NEW hot leedz (the conductor counts them). Omit for the default.'
+                            },
+                            objective: {
+                                type: 'string',
+                                description: 'For action=plan_tasks: "marketplace" | "share" | "outreach" | "hybrid". Omit to let the mode pick the default.'
+                            },
+                            focus: {
+                                type: 'string',
+                                description: 'For action=plan_tasks: optional steering directive (e.g. "factlets", "one_leed"). Omit for none.'
                             },
                             titleDraft: {
                                 type: 'string',
@@ -181,6 +200,20 @@ const TOOL_DEFS = [
                                 type: 'number',
                                 description: 'For action=web_search: hits to return, 1-10 (default 5).'
                             },
+                            // Arguments the handlers read that were never declared (audited 2026-11-18
+                            // by diffing every args.<x> in the server against this schema). Groq
+                            // validates tool calls strictly and refuses any undeclared property.
+                            email:      { type: 'string', description: 'For action=mark_sent / mark_bounced: the recipient email address.' },
+                            factletId:  { type: 'string', description: 'For action=save: the Factlet.id the structured values were drawn from (server verifies them against its text).' },
+                            judge:      { type: 'boolean', description: 'For action=save: false skips the reactive judge pass (batch saves).' },
+                            minutes:    { type: 'number', description: 'For action=pause: minutes to pause the conductor (default 10).' },
+                            probe:      { type: 'boolean', description: 'For action=mark_bounced: true only counts matching clients, changes nothing.' },
+                            full:       { type: 'boolean', description: 'For action=tasks: true returns full task packets instead of slim rows.' },
+                            sessionId:  { type: 'string', description: 'For action=tasks: filter to one session id.' },
+                            targetType: { type: 'string', description: 'For action=tasks: filter by target type (Booking | Client | Factlet | Source).' },
+                            targetId:   { type: 'string', description: 'For action=tasks: filter by target id.' },
+                            limit:      { type: 'number', description: 'For action=tasks: max rows (default 20, cap 500).' },
+                            name:       { type: 'string', description: 'For action=ignore: the company or person to blacklist (alias of term).' },
                             note: {
                                 type: 'string',
                                 description: 'For action=signal: the VERBATIM demand text seen on the page (who is asking, for what, any date/venue mentioned).'
