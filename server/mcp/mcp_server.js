@@ -3788,12 +3788,17 @@ async function startMcpServer() {
         startConductor(PRECRIME_CONFIG, { replan: conductorReplan, runInProcess: runInProcessTask });
     });
 
-    process.on('SIGINT', () => {
+    // Release the Chrome bridge before exiting (2026-11-18): it allows one connection and
+    // never expires a dead one, so exiting mid-fetch left it stuck and broke the next
+    // launch. SIGHUP is what Windows sends when the console window is closed.
+    const shutdown = async () => {
         logInfo('Shutting down MCP server...');
+        try { await require('./chromeBridge').releaseBridge(); } catch (_) {}
         prisma.$disconnect();
         server.close();
         process.exit(0);
-    });
+    };
+    for (const sig of ['SIGINT', 'SIGHUP', 'SIGTERM']) process.on(sig, shutdown);
 }
 
 startMcpServer().catch(err => {

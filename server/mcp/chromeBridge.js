@@ -96,6 +96,7 @@ async function _browse(url, contentArgs) {
             params: { protocolVersion: '2025-06-18', capabilities: {}, clientInfo: { name: 'precrime-browse', version: '1.0' } }
         });
         sid = init.sessionId;
+        _activeSid = sid;
         if (!sid) throw new Error('bridge gave no session id');
         await bridgePost(sid, { jsonrpc: '2.0', method: 'notifications/initialized' });
         // BACKGROUND TAB (2026-11-18). Every navigate used to ACTIVATE the tab and focus the
@@ -142,9 +143,25 @@ async function _browse(url, contentArgs) {
         if (sid) {
             try {
                 await fetch(BRIDGE_URL, { method: 'DELETE', headers: { 'mcp-session-id': sid }, signal: AbortSignal.timeout(4000) });
-            } catch (_) { /* session will expire on its own */ }
+            } catch (_) { /* best effort */ }
         }
+        _activeSid = null;
     }
+}
+
+// RELEASE ON SHUTDOWN (2026-11-18). The bridge allows ONE connection and does NOT expire a
+// dead one. If PRECRIME is closed mid-fetch, the session is never released and the bridge
+// stays "Already connected" forever -- the next launch fails until the user clicks
+// Disconnect/Connect in the extension. mcp_server calls this from its shutdown handler
+// (SIGINT, and SIGHUP = the console window being closed on Windows).
+let _activeSid = null;
+async function releaseBridge() {
+    const sid = _activeSid;
+    _activeSid = null;
+    if (!sid) return;
+    try {
+        await fetch(BRIDGE_URL, { method: 'DELETE', headers: { 'mcp-session-id': sid }, signal: AbortSignal.timeout(2000) });
+    } catch (_) { /* best effort */ }
 }
 
 // Pacing wrapper: cooldown check -> jittered same-domain gap -> fetch -> block scan.
@@ -227,4 +244,4 @@ function browseUrlWith(url, contentArgs) {
     return run;
 }
 
-module.exports = { browseUrl, searchWeb, parseDdg };
+module.exports = { browseUrl, searchWeb, parseDdg, releaseBridge };

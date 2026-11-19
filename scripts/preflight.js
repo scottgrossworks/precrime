@@ -36,7 +36,8 @@ async function bridge() {
         };
         const i = await post(null, { jsonrpc: '2.0', id: 1, method: 'initialize', params: { protocolVersion: '2025-06-18', capabilities: {}, clientInfo: { name: 'precrime-preflight', version: '1' } } });
         sid = i.sid;
-        if (!sid) throw new Error('bridge gave no session');
+        // No session = the bridge refused; its own message says why (usually "Already connected").
+        if (!sid) throw new Error((i.json && i.json.message) || 'bridge gave no session');
         await post(sid, { jsonrpc: '2.0', method: 'notifications/initialized' });
         // Read-only: proves the Chrome EXTENSION is attached, not just the native host.
         const w = await post(sid, { jsonrpc: '2.0', id: 2, method: 'tools/call', params: { name: 'get_windows_and_tabs', arguments: {} } });
@@ -45,7 +46,7 @@ async function bridge() {
         ok('Chrome bridge :12306 + extension connected (search and page fetch run here)');
     } catch (e) {
         const msg = /Already connected/i.test(e.message)
-            ? 'bridge is held by another client (close any other tool using the Chrome MCP, then retry)'
+            ? 'bridge is stuck holding a dead session from a previous run. Click the Chrome MCP Server extension -> Disconnect -> Connect, then relaunch'
             : /ECONNREFUSED|fetch failed|aborted|timeout/i.test(e.message)
                 ? 'bridge not running on :12306 (start Chrome, open the Chrome MCP Server extension, click Connect)'
                 : e.message;
