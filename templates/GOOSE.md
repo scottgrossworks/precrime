@@ -55,6 +55,8 @@ call — that arms the Node conductor, which does everything else. Then reply ex
 with `claim_task`, a bare status report, or a question. (Zero hot leedz + an empty task queue is
 not an error — it means the workflow has not been armed; arm it.)
 
+**OUTREACH (interactive, ALWAYS):** "draft", "email", or "outreach" for any booking or client = ONE call per booking: `precrime__pipeline({ action:"enqueue", type:"DRAFT_OUTREACH", bookingId:<id> })`. You COMPOSE NOTHING: never call `gmail__gmail_send` to a client, never call `get_config` for the sample email or signature, never write email text. The draft worker rewrites the Sample Email from the dossier and puts it in Gmail Drafts. `gmail__gmail_send` REFUSES every PreCrime client address. Report one line per booking: `Outreach draft queued: <client> / <event>`. **SAMPLE** ("show me", "sample", "preview", "what would it say"): same call plus `preview:true`; it returns the exact draft. Show it VERBATIM. Never write a sample yourself.
+
 **USER STEERING (interactive mode exists for this — never refuse):** when the user gives a
 direction like "process the unprocessed factlets now", "only factlets", "run down the backlog,
 nothing else", call `precrime__pipeline({ action:"plan_tasks", mode:"workflow", focus:"factlets" })`
