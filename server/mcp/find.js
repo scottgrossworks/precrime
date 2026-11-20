@@ -171,6 +171,14 @@ function createFindHandlers(deps) {
         // Not combinable with filters.id (a single-record lookup); calendar filters
         // are list queries by nature.
         if (!filters.id && ((Array.isArray(filters.monthIn) && filters.monthIn.length) || filters.anniversaryWithinDays != null)) {
+            // CALENDAR QUERIES MEAN GIGS ACTUALLY WORKED (2026-11-20). These filters exist to
+            // answer "which clients hired me in Nov/Dec" / "whose anniversary is coming up" --
+            // the user's own history (and MINE_REASON's hunt for past buyers). Without a status
+            // they returned every row in those months: asked for past Nov/Dec clients, the user
+            // got 675 rows of which only 80 were gigs he worked; the rest were scraped
+            // prospects (out-of-state comic-cons, expo exhibitors) presented as people who
+            // hired him. Default to status 'booked' (a paid gig). Pass status to override.
+            if (!filters.status) where.status = 'booked';
             const leanWhere = { ...where, startDate: { not: null } };
             const rows = await prisma.booking.findMany({ where: leanWhere, select: { id: true, startDate: true } });
             const wantMonths = new Set((filters.monthIn || []).map(m => parseInt(m, 10)));
