@@ -1712,7 +1712,7 @@ async function pipelineEnqueue(id, args) {
         // draft instead of saving it / putting it in Gmail / marking contacted.
         if (args.preview) {
             const { run } = require('./workers/DraftOutreachWorker');
-            const r = await run({ targetId: bookingId }, { preview: true });
+            const r = await run({ targetId: bookingId, input: JSON.stringify({ instructions: args.instructions || '' }) }, { preview: true });
             const p = r.preview;
             return createSuccessResponse(id, p
                 ? `SAMPLE DRAFT (nothing saved, nothing in Gmail). Show it to the user EXACTLY as written, do not edit it:\n\nTo: ${p.to}\nSubject: ${p.subject}\n\n${p.body}`
@@ -1721,9 +1721,10 @@ async function pipelineEnqueue(id, args) {
         const dup = await prisma.task.findFirst({
             where: { type, targetType: 'Booking', targetId: bookingId, status: { in: ['ready', 'claimed'] } }
         });
-        const row = dup || await prisma.task.create({
-            data: { type, status: 'ready', targetType: 'Booking', targetId: bookingId, input: JSON.stringify({ userOrdered: true }) }
-        });
+        const input = JSON.stringify({ userOrdered: true, instructions: args.instructions || '' });
+        const row = dup
+            ? await prisma.task.update({ where: { id: dup.id }, data: { input } })
+            : await prisma.task.create({ data: { type, status: 'ready', targetType: 'Booking', targetId: bookingId, input } });
         const cond = conductorStatus();
         if (!(cond && cond.armed)) armConductor({ targetHot: 1 });
         logInfo(`enqueue: user-ordered DRAFT_OUTREACH for ${bLabel} -> ${dup ? 'already queued' : 'queued'} [${row.id}].`);

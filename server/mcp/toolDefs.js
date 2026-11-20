@@ -135,6 +135,10 @@ const TOOL_DEFS = [
                                 type: 'string',
                                 description: 'For action=share_booking: Booking.id to share. For action=dismiss_booking: a single Booking.id to permanently skip (or use bookingIds[] to dismiss many in ONE call). For action=enqueue type=DRAFT_OUTREACH: the Booking.id to draft outreach for.'
                             },
+                            instructions: {
+                                type: 'string',
+                                description: 'For action=enqueue type=DRAFT_OUTREACH: EVERY instruction the user has given this session about drafts, verbatim (e.g. "Include: No additional travel fee. Repeat clients get the rate they paid before."). The drafter follows them exactly.'
+                            },
                             preview: {
                                 type: 'boolean',
                                 description: 'For action=enqueue type=DRAFT_OUTREACH: true = SAMPLE. Runs the real drafter now and returns the exact email it would put in Gmail Drafts; saves nothing, sends nothing, marks nothing.'

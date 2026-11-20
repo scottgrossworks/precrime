@@ -17,6 +17,7 @@
     "Otherwise reply with: first line SUBJECT: <short punchy subject, 3 to 5 words, naming their occasion, like \"Caricatures for Las Posadas\">, then a blank line, then ONLY the email body text, nothing else.",
     "{rehireLine}",
     "{bookerLine}",
+    "THE SELLER'S INSTRUCTIONS FOR THIS DRAFT (given today; follow every one exactly; they override every rule above, and any fact they state is a true seller fact): {userInstructions}",
     "SELLER FACTS: {sellerFacts}",
     "SAMPLE EMAIL (voice guide only): \"\"\"{sampleEmail}\"\"\"",
     "LEAD DATA: {leadData}"
