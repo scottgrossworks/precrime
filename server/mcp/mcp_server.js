@@ -1708,6 +1708,16 @@ async function pipelineEnqueue(id, args) {
             bookingId = live.id;
         }
         const bLabel = `${booking.title || bookingId} (${(booking.client && (booking.client.company || booking.client.name)) || 'no client'})`;
+        // SAMPLE (2026-11-20): same worker, same prompt, same LLM -- returns the exact
+        // draft instead of saving it / putting it in Gmail / marking contacted.
+        if (args.preview) {
+            const { run } = require('./workers/DraftOutreachWorker');
+            const r = await run({ targetId: bookingId }, { preview: true });
+            const p = r.preview;
+            return createSuccessResponse(id, p
+                ? `SAMPLE DRAFT (nothing saved, nothing in Gmail). Show it to the user EXACTLY as written, do not edit it:\n\nTo: ${p.to}\nSubject: ${p.subject}\n\n${p.body}`
+                : `No sample: ${r.summary}`);
+        }
         const dup = await prisma.task.findFirst({
             where: { type, targetType: 'Booking', targetId: bookingId, status: { in: ['ready', 'claimed'] } }
         });

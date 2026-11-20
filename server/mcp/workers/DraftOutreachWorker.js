@@ -188,7 +188,11 @@ async function run(task, deps) {
         return { status: 'failed', error: 'llm_unavailable', output: out('LLM did not answer', clientId),
                  summary: `draft "${label}": the LLM did not answer -- will retry later` };
     }
-    const text = raw.trim();
+    // The LLM writes the subject too (first line "SUBJECT: ..."), short and punchy.
+    const subjM = raw.trim().match(/^SUBJECT:\s*(.+)\r?\n/i);
+    const subject = stripDashes(subjM ? subjM[1].trim().replace(/^["']|["']$/g, '')
+                                      : `Caricatures for your ${isBooker ? 'clients' : 'party'}`);
+    const text = subjM ? raw.trim().slice(subjM[0].length).trim() : raw.trim();
     if (/^skip\s*:/i.test(text)) {
         return { status: 'done', output: out(text.slice(0, 160), clientId), summary: `draft "${label}": ${text.slice(0, 120)}` };
     }
@@ -200,6 +204,11 @@ async function run(task, deps) {
     // Assemble: dash-filtered body + VERBATIM signature (code appends it, so the
     // model can neither reword it nor forget it).
     const draft = `${stripSignoff(stripDashes(text), sig)}\n\n${sig}`;
+    // Sample request: the SAME draft that would go to Gmail Drafts, returned instead of saved.
+    if (deps.preview) {
+        return { status: 'done', output: out('preview', clientId), summary: `draft "${label}": preview`,
+                 preview: { to: client.email, subject, body: draft } };
+    }
     const resp = await deps.pipelineSave('inproc-draft', clientId,
         { draft, draftStatus: 'ready' }, task.sessionId || null, false);
     let body = {};
@@ -213,7 +222,6 @@ async function run(task, deps) {
     // contacted RIGHT NOW (drafting IS contacting -- same rule as mcp_gmail's
     // synchronous mark_sent). On Gmail failure the DB draft survives and the
     // summary says loudly what to do.
-    const subject = stripDashes(`Live ${(VALUE_PROP && VALUE_PROP.trade) || 'entertainment'} for ${booking.title || 'your event'}`);
     const g = await createGmailDraft(client.email, subject, draft);
     if (g.ok && deps.pipelineMarkSent) {
         await deps.pipelineMarkSent('inproc-draft', { clientId });

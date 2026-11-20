@@ -135,6 +135,10 @@ const TOOL_DEFS = [
                                 type: 'string',
                                 description: 'For action=share_booking: Booking.id to share. For action=dismiss_booking: a single Booking.id to permanently skip (or use bookingIds[] to dismiss many in ONE call). For action=enqueue type=DRAFT_OUTREACH: the Booking.id to draft outreach for.'
                             },
+                            preview: {
+                                type: 'boolean',
+                                description: 'For action=enqueue type=DRAFT_OUTREACH: true = SAMPLE. Runs the real drafter now and returns the exact email it would put in Gmail Drafts; saves nothing, sends nothing, marks nothing.'
+                            },
                             // NO enum (2026-11-18). This was enum ['draft','post'] for share_booking,
                             // but plan_tasks reads the SAME property as 'workflow' | 'hot_only' |
                             // 'headless'. Groq validates tool calls strictly, so every plan_tasks
