@@ -361,6 +361,16 @@ YouTube: https://www.youtube.com/@thatdrawingshow
 
 
 
+### Style Rules
+
+- The email is about THEM, not me. The client does not care about me; they care about their event and their guests.
+- Keep "I" to a minimum. No "I'd love", "I want", "I'd be delighted". Say what the caricatures DO for them instead.
+- Show how caricatures make THEIR event better: guests laughing, a line of people watching, the party everyone talks about.
+- Make everyone feel appreciated: every guest gets their own drawing, every guest feels special.
+- Every guest takes home a keepsake to remember the party.
+- Never invent a service, prop, or setup that is not in this file.
+- No emojis. No dashes. No "Best regards" or other sign-off; the signature is added automatically.
+
 ### Sample Email
 
 Dear Esperanza,

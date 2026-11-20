@@ -74,6 +74,13 @@ function parse(md) {
         ...(areaText.match(/\b\d{3}(?=xx\b)/gi) || []),
         ...serviceZips.map(z => z.slice(0, 3))
     ]));
+    // BOOKING WINDOW (2026-10-14): the first ISO date in '## BOOKING WINDOW' is the
+    // earliest acceptable event date. Consumed by classify (cold 'before_booking_window'),
+    // the OUTREACH-READY list, and the DRAFT_OUTREACH enqueue gate. '' = no window.
+    const windowSec = sec['BOOKING WINDOW'] || { intro: [], sub: {} };
+    const windowMatch = [].concat(windowSec.intro, Object.values(windowSec.sub).flat())
+        .join('\n').match(/\b\d{4}-\d{2}-\d{2}\b/);
+    const earliestBookingDate = windowMatch ? windowMatch[0] : '';
 
     return {
         trade:            product['trade'] || '',
@@ -87,6 +94,7 @@ function parse(md) {
         rate:             product['rate'] || '',
         serviceZips,
         serviceZipPrefixes,
+        earliestBookingDate,
         pitch:            _prose((sec['THE PITCH'] || {}).intro),
         whyUs:            _bullets((sec['WHY US'] || {}).intro),
         buyerRoles:       _bullets(who['Buyer Roles']),
@@ -113,7 +121,9 @@ function parse(md) {
         bannedTerms: _bullets(((sec['RELEVANCE SIGNALS'] || { sub: {} }).sub || {})['Banned Terms']),
         forbiddenPhrases: _bullets((sec['FORBIDDEN PHRASES'] || {}).intro),
         signature:        _joinNonEmpty(outreach['Signature']),
-        sampleEmail:      _joinNonEmpty(outreach['Sample Email'])
+        sampleEmail:      _joinNonEmpty(outreach['Sample Email']),
+        // '### Style Rules' (2026-11-20): the user's own drafting rubric, injected verbatim into DRAFT_PROMPT.
+        styleRules:       _joinNonEmpty(outreach['Style Rules'])
     };
 }
 

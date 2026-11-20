@@ -161,6 +161,7 @@ async function run(task, deps) {
                    : '',
         bookerLine:  isBooker ? DRAFT_PROMPT.bookerRule : '',
         sampleEmail: tpl,
+        styleRules:  (VALUE_PROP && VALUE_PROP.styleRules) || '- Write about the client and their guests, not the seller.',
         // Synthesis inputs (2026-11-18): the drafter used to see only the sample email and
         // a record title, so it could only fill in blanks. It now gets today's date (the
         // "why now"), what the seller actually offers, and the real past job.

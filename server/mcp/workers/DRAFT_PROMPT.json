@@ -12,6 +12,7 @@
     "5. Salutation: first name only. One clear, easy ask at the end. Roughly the sample's length.",
     "6. NO em dash, en dash, or double hyphen anywhere; use commas.",
     "7. Do NOT include a signature block; it is appended separately.",
+    "SELLER'S STYLE RULES (follow every one; they override the sample's wording):\n{styleRules}",
     "FIRST decide the gate: is this a plausible buyer for this seller (product-market fit, contact looks like a decision-maker)? If NOT, reply with exactly: SKIP: <short reason>",
     "Otherwise reply with ONLY the email body text, nothing else.",
     "{rehireLine}",
